@@ -1,0 +1,3 @@
+[env]
+FFMPEG_DIR = { value = ".deps/ffmpeg-n9.0.1-84-g946fcce07b-win64-lgpl-shared-9.0", relative = true }
+LIBCLANG_PATH = { value = ".deps/libclang", relative = true }

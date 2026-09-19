@@ -1,0 +1,6 @@
+/target
+/.deps
+/data
+/.env
+/.env.*
+!/.env.example
