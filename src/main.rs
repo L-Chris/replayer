@@ -61,7 +61,7 @@ fn subtitle_cli(input: &str, output: &str, args: &[String]) -> anyhow::Result<()
     };
     let mut duration = None;
     anyhow::ensure!(args.len().is_multiple_of(2), "subtitle options need values");
-    for pair in args.chunks_exact(2) {
+    for pair in args.as_chunks::<2>().0 {
         match pair[0].as_str() {
             "--language" => options.language = settings::Language::parse(&pair[1])?,
             "--concurrency" => options.concurrency = pair[1].parse()?,

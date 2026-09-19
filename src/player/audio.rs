@@ -288,7 +288,7 @@ impl AudioPipeline {
         let bytes = &output.data(0)[..n * 8];
         let pcm: &[f32] = bytemuck::cast_slice(bytes);
         let skip = ((target - pts).max(0.0) * self.rate as f64).ceil() as usize;
-        for (i, pair) in pcm.chunks_exact(2).enumerate().skip(skip) {
+        for (i, pair) in pcm.as_chunks::<2>().0.iter().enumerate().skip(skip) {
             self.pending.push_back(Sample {
                 epoch,
                 pts: pts + i as f64 / self.rate as f64,

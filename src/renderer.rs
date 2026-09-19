@@ -404,7 +404,7 @@ mod tests {
             let mut frame = frame::Video::new(format, 7, 5);
             frame.data_mut(0).fill(y);
             if format == Pixel::NV12 {
-                for pair in frame.data_mut(1).chunks_exact_mut(2) {
+                for pair in frame.data_mut(1).as_chunks_mut::<2>().0 {
                     pair.copy_from_slice(&[u, v]);
                 }
             } else {
