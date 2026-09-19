@@ -13,6 +13,7 @@ use crate::player::{Event, PlaybackState, Player};
 use crate::renderer::VideoRenderer;
 use crate::settings::{Language, Settings};
 use crate::subtitles::{self, Cue, Job};
+mod about;
 mod design;
 mod preferences;
 use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
@@ -37,6 +38,8 @@ enum Act {
 pub struct App {
     settings: Settings,
     settings_open: bool,
+    preferences_about: bool,
+    updater: crate::updater::Updater,
     llm_draft: crate::settings::LlmSettings,
     llm_defaults: crate::settings::LlmSettings,
     env_key_available: bool,
@@ -81,6 +84,8 @@ impl App {
         let (open_tx, open_rx) = unbounded();
         let (subtitle_save_tx, subtitle_save_rx) = unbounded();
         let mut app = Self {
+            updater: crate::updater::Updater::new(settings.auto_check_updates),
+            preferences_about: false,
             llm_draft: settings.llm.clone(),
             settings,
             settings_open: false,
@@ -179,6 +184,7 @@ impl eframe::App for App {
         let painter = root.painter().clone();
         let language = self.settings.language;
         let previous_concurrency = self.settings.subtitle_concurrency;
+        self.updater.poll();
         if let Some(path) = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -453,7 +459,15 @@ impl eframe::App for App {
                     {
                         act = Act::Open;
                     }
-                    if ui.button(language.text("设置", "Settings")).clicked() {
+                    let settings_label = if matches!(
+                        self.updater.status,
+                        crate::updater::Status::Available | crate::updater::Status::Ready
+                    ) {
+                        language.text("设置 · 有更新", "Settings · Update available")
+                    } else {
+                        language.text("设置", "Settings")
+                    };
+                    if ui.button(settings_label).clicked() {
                         self.settings_open = true;
                         self.llm_draft = self.settings.llm.clone();
                         self.config_message.clear();

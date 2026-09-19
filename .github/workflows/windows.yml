@@ -1,0 +1,107 @@
+name: Windows build and release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: '0'
+      # Bundle the MSVC runtime in the application, avoiding an extra install step.
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            .deps/ffmpeg-ci.zip
+          key: windows-x64-${{ hashFiles('Cargo.lock', 'scripts/setup-windows.ps1') }}
+      - name: Set up verified FFmpeg and LLVM
+        shell: pwsh
+        run: ./scripts/setup-windows.ps1
+      - name: Validate release version
+        shell: pwsh
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object name -eq replayer).version
+          if ($env:RELEASE_REF.StartsWith('refs/tags/') -and $env:RELEASE_TAG -cne "v$version") {
+            throw "Tag must be v$version to match Cargo.toml"
+          }
+          "APP_VERSION=$version" >> $env:GITHUB_ENV
+      - name: Check formatting, lint and tests
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build Windows x64
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc
+      - name: Build installer and portable package
+        shell: pwsh
+        run: |
+          ./scripts/package-windows.ps1 -Binary target/x86_64-pc-windows-msvc/release/replayer.exe
+      - name: Smoke test installed package
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP 'replayer-smoke'
+          $setup = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
+          $process = Start-Process -FilePath $setup.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR="' + $installDir + '"')) -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          $media = Join-Path $env:RUNNER_TEMP 'replayer-smoke.mp4'
+          & "$env:FFMPEG_DIR/bin/ffmpeg.exe" -v error -y -f lavfi -i 'testsrc2=size=320x180:rate=24:duration=4' -c:v mpeg4 $media
+          if ($LASTEXITCODE -ne 0) { throw 'Smoke media creation failed.' }
+          $env:REPLAYER_SOFTWARE = '1'
+          $process = Start-Process -FilePath (Join-Path $installDir 'replayer.exe') -ArgumentList @('--selftest', ('"' + $media + '"')) -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installed player selftest failed: $($process.ExitCode)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replayer-${{ env.APP_VERSION }}-windows-x86_64
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: replayer-*-windows-x86_64
+          path: dist
+          merge-multiple: true
+      - name: Publish stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" dist/*.exe dist/*.zip dist/SHA256SUMS.txt --verify-tag --title "$RELEASE_TAG" --generate-notes

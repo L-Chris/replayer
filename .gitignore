@@ -1,4 +1,5 @@
 /target
+/dist
 /.deps
 /data
 /.env

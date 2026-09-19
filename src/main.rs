@@ -6,6 +6,7 @@ mod renderer;
 mod selftest;
 mod settings;
 mod subtitles;
+mod updater;
 
 use app::App;
 use eframe::egui;

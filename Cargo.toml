@@ -21,6 +21,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt", "time", "net", "macros", "sync"] }
 unicode-segmentation = "1"
 unicode-width = "0.2"
+sha2 = "0.10"
+semver = "1"
 
 [profile.release]
 lto = true

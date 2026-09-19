@@ -10,8 +10,11 @@
 - 中英文界面；语言设置同时控制 AI 字幕的目标语言。
 - 兼容 OpenAI Chat Completions 音频输入的字幕生成：默认 MP3、120 秒分段、2 路并发，支持播放位置优先调度、取消、进度显示和 SRT 导出。
 - 语言相关的字幕标点、两行排版、阅读速度检查和白字黑描边。
+- Windows 安装包与便携版；设置中的“关于”支持版本检查、下载更新、校验并安装重启。
 
 ## 构建
+
+GitHub Actions 自动构建 Windows x64 安装包与便携 ZIP。推送与 Cargo 版本一致的 `v*` 标签会发布正式版本；普通分支构建仅上传构建产物。流程和自动更新说明见 [RELEASING.md](RELEASING.md)。
 
 需要 Rust 工具链、Windows C++ Build Tools / SDK、FFmpeg 9 共享库开发包，以及 libclang。
 

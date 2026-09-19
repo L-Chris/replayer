@@ -144,6 +144,7 @@ pub struct LlmSettings {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub auto_check_updates: bool,
     pub language: Language,
     pub subtitle_concurrency: usize,
     pub llm: LlmSettings,
@@ -151,6 +152,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            auto_check_updates: true,
             language: Language::Chinese,
             subtitle_concurrency: 2,
             llm: LlmSettings::default(),
@@ -197,6 +199,7 @@ mod tests {
     #[test]
     fn language_and_parallelism_roundtrip_without_credentials() {
         let s = Settings {
+            auto_check_updates: true,
             language: Language::English,
             subtitle_concurrency: 4,
             llm: LlmSettings {

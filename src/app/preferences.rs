@@ -17,6 +17,23 @@ impl App {
             .default_height((ctx.content_rect().height() - 100.0).clamp(200.0, 580.0))
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(
+                        &mut self.preferences_about,
+                        false,
+                        language.text("偏好设置", "Preferences"),
+                    );
+                    ui.selectable_value(
+                        &mut self.preferences_about,
+                        true,
+                        language.text("关于", "About"),
+                    );
+                });
+                ui.separator();
+                if self.preferences_about {
+                    self.about(ui, ctx);
+                    return;
+                }
                 egui::ScrollArea::vertical()
                     .max_height((ctx.content_rect().height() - 240.0).max(90.0))
                     .show(ui, |ui| {
