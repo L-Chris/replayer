@@ -12,7 +12,8 @@ To release:
 3. The workflow rejects mismatched tags, runs tests, builds packages, installs the
    installer in the disposable runner, and runs the installed player's self-test.
 4. Only after the build passes does it create the GitHub Release and upload assets.
-   The release title is the tag. A branch push never publishes a release.
+   The release title is the tag. If a release already exists, it uploads the
+   packages and preserves the existing notes. A branch push never publishes a release.
 
 Update discovery uses GitHub's latest stable release API. Each installer must be
 named `replayer-VERSION-windows-x86_64-setup.exe` and have a GitHub SHA-256 asset
