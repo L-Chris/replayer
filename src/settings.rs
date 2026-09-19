@@ -33,6 +33,11 @@ impl Language {
         }
         let mut output = message.to_owned();
         for (zh, en) in [
+            (
+                "请在设置或 .env 中配置 API Key",
+                "Set an API key in Settings or .env",
+            ),
+            ("模型名称不能为空", "Model name cannot be empty"),
             ("无法读取 .env 配置", "Cannot read .env configuration"),
             (
                 "无法解析 .env，请检查 KEY=VALUE 格式",
@@ -111,8 +116,8 @@ impl Language {
                 "LLM_SUBTITLE_CHUNK_SECONDS must be an integer",
             ),
             (
-                "字幕音频分段长度必须在 5..30 秒之间",
-                "Chunk duration must be between 5 and 30 seconds",
+                "字幕音频分段长度必须在 5..120 秒之间",
+                "Chunk duration must be between 5 and 120 seconds",
             ),
         ] {
             output = output.replace(zh, en);
@@ -121,17 +126,34 @@ impl Language {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Empty fields inherit the environment. Credentials are session-only.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LlmSettings {
+    pub base_url: String,
+    pub model: String,
+    #[serde(skip)]
+    pub api_key: String,
+    pub audio_encoding: String,
+    pub audio_format: String,
+    pub bilingual: Option<bool>,
+    pub reasoning_effort: String,
+    pub chunk_seconds: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub language: Language,
     pub subtitle_concurrency: usize,
+    pub llm: LlmSettings,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             language: Language::Chinese,
-            subtitle_concurrency: 3,
+            subtitle_concurrency: 2,
+            llm: LlmSettings::default(),
         }
     }
 }
@@ -177,11 +199,19 @@ mod tests {
         let s = Settings {
             language: Language::English,
             subtitle_concurrency: 4,
+            llm: LlmSettings {
+                api_key: "session-secret".into(),
+                model: "custom-model".into(),
+                ..Default::default()
+            },
         };
         let bytes = serde_json::to_vec(&s).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("session-secret"));
         let loaded: Settings = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(loaded.language, Language::English);
         assert_eq!(loaded.subtitle_concurrency, 4);
+        assert!(loaded.llm.api_key.is_empty());
+        assert_eq!(loaded.llm.model, "custom-model");
         assert_eq!(
             serde_json::from_str::<Settings>("{}").unwrap().language,
             Language::Chinese

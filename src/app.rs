@@ -13,9 +13,12 @@ use crate::player::{Event, PlaybackState, Player};
 use crate::renderer::VideoRenderer;
 use crate::settings::{Language, Settings};
 use crate::subtitles::{self, Cue, Job};
+mod design;
+mod preferences;
+use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
 
-const BAR_BOTTOM: f32 = 54.0;
-const BAR_TOP: f32 = 44.0;
+const BAR_BOTTOM: f32 = 68.0;
+const BAR_TOP: f32 = 60.0;
 const TOOLBAR_HIDE_DELAY: Duration = Duration::from_millis(400);
 
 enum Act {
@@ -33,6 +36,11 @@ enum Act {
 
 pub struct App {
     settings: Settings,
+    settings_open: bool,
+    llm_draft: crate::settings::LlmSettings,
+    llm_defaults: crate::settings::LlmSettings,
+    env_key_available: bool,
+    config_message: String,
     player: Option<Player>,
     video: VideoRenderer,
     title: String,
@@ -41,6 +49,7 @@ pub struct App {
     subtitles: Vec<Cue>,
     subtitles_visible: bool,
     subtitle_status: String,
+    subtitle_skipped: Vec<(f64, f64, String)>,
     subtitle_save_tx: Sender<Result<PathBuf, String>>,
     subtitle_save_rx: Receiver<Result<PathBuf, String>>,
     subtitle_metrics: String,
@@ -49,6 +58,7 @@ pub struct App {
     dialog_open: bool,
     scrubbing: bool,
     scrub: f64,
+    pending_seek: Option<(u64, f64)>,
     vol: f32,
     muted: bool,
     fullscreen: bool,
@@ -63,10 +73,20 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<String>) -> Self {
         setup_fonts(&cc.egui_ctx);
+        design::apply(&cc.egui_ctx);
+        let settings = Settings::load();
+        let mut defaults = subtitles::LlmConfig::defaults().unwrap_or_default();
+        let env_key_available = !defaults.api_key.is_empty();
+        defaults.api_key.clear();
         let (open_tx, open_rx) = unbounded();
         let (subtitle_save_tx, subtitle_save_rx) = unbounded();
         let mut app = Self {
-            settings: Settings::load(),
+            llm_draft: settings.llm.clone(),
+            settings,
+            settings_open: false,
+            llm_defaults: defaults,
+            env_key_available,
+            config_message: String::new(),
             player: None,
             video: VideoRenderer::new(cc.wgpu_render_state.clone()),
             title: String::new(),
@@ -75,6 +95,7 @@ impl App {
             subtitles: Vec::new(),
             subtitles_visible: true,
             subtitle_status: String::new(),
+            subtitle_skipped: Vec::new(),
             subtitle_metrics: String::new(),
             subtitle_save_tx,
             subtitle_save_rx,
@@ -83,6 +104,7 @@ impl App {
             dialog_open: false,
             scrubbing: false,
             scrub: 0.0,
+            pending_seek: None,
             vol: 1.0,
             muted: false,
             fullscreen: false,
@@ -103,11 +125,13 @@ impl App {
         self.subtitle_job = None;
         self.subtitles.clear();
         self.subtitle_status.clear();
+        self.subtitle_skipped.clear();
         self.subtitle_metrics.clear();
         self.source = Some(PathBuf::from(&path));
         self.player = None;
         self.video.clear();
         self.scrub = 0.0;
+        self.pending_seek = None;
         self.scrubbing = false;
         self.ui_alpha = 0.0;
         self.last_toolbar_hover = None;
@@ -155,6 +179,14 @@ impl eframe::App for App {
         let painter = root.painter().clone();
         let language = self.settings.language;
         let previous_concurrency = self.settings.subtitle_concurrency;
+        if let Some(path) = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .first()
+                .map(|file| file.path().to_path_buf())
+        }) {
+            self.load(path.to_string_lossy().into_owned());
+        }
 
         if let Ok(picked) = self.open_rx.try_recv() {
             self.dialog_open = false;
@@ -166,6 +198,11 @@ impl eframe::App for App {
         if let Some(player) = &self.player {
             while let Some(event) = player.poll_event() {
                 match event {
+                    Event::SeekCompleted { id, .. } => {
+                        if self.pending_seek.is_some_and(|(pending, _)| pending == id) {
+                            self.pending_seek = None;
+                        }
+                    }
                     Event::Error(error) | Event::Warning(error) => self.error = Some(error),
                     _ => {}
                 }
@@ -204,7 +241,18 @@ impl eframe::App for App {
                                 self.subtitles.len()
                             )
                         };
+                        if !self.subtitle_skipped.is_empty() {
+                            self.subtitle_status = format!(
+                                "{} · {} {}",
+                                language.text("生成结束", "Generation finished"),
+                                self.subtitle_skipped.len(),
+                                language.text("段失败已跳过", "failed segments skipped")
+                            );
+                        }
                         subtitle_done = true;
+                    }
+                    subtitles::Event::Skipped { start, end, error } => {
+                        self.subtitle_skipped.push((start, end, error));
                     }
                     subtitles::Event::Failed(error) => {
                         self.subtitle_status = language
@@ -266,6 +314,9 @@ impl eframe::App for App {
             Some(p) => (p.is_playing(), p.duration(), p.position()),
             None => (false, 0.0, 0.0),
         };
+        if let Some(job) = &self.subtitle_job {
+            job.prioritize(self.pending_seek.map_or(pos, |(_, target)| target));
+        }
         let in_bar = pointer
             .map(|p| {
                 self.player.is_some()
@@ -292,7 +343,15 @@ impl eframe::App for App {
         let a = self.ui_alpha;
 
         // ---- video background ----
-        painter.rect_filled(screen, CornerRadius::same(0), Color32::BLACK);
+        painter.rect_filled(
+            screen,
+            CornerRadius::same(0),
+            if self.player.is_some() {
+                Color32::BLACK
+            } else {
+                BACKGROUND
+            },
+        );
         let mut video_rect = screen;
         if let Some((texture, ar)) = self.video.current() {
             let mut w = screen.width();
@@ -327,7 +386,7 @@ impl eframe::App for App {
         let vresp = root.interact(click_rect, Id::new("video_click"), Sense::click());
 
         let mut act = Act::None;
-        if self.player.is_some() {
+        if self.player.is_some() && !self.settings_open {
             if vresp.double_clicked() {
                 act = Act::ToggleFullscreen;
             } else if vresp.clicked() {
@@ -337,10 +396,14 @@ impl eframe::App for App {
 
         // ---- keyboard ----
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            self.fullscreen = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            if self.settings_open {
+                self.settings_open = false;
+            } else {
+                self.fullscreen = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            }
         }
-        if self.player.is_some() {
+        if self.player.is_some() && !self.settings_open && !ctx.egui_wants_keyboard_input() {
             if ctx.input(|i| i.key_pressed(Key::Space)) {
                 act = Act::TogglePlay;
             }
@@ -367,49 +430,34 @@ impl eframe::App for App {
             painter.rect_filled(
                 top_rect,
                 CornerRadius::same(0),
-                Color32::from_black_alpha((160.0 * a) as u8),
+                SURFACE.gamma_multiply(a * 0.96),
             );
             let mut tui = root.new_child(
                 UiBuilder::new()
                     .id_salt("topbar")
-                    .max_rect(top_rect.shrink(10.0))
+                    .max_rect(top_rect.shrink2(vec2(20.0, 12.0)))
                     .layout(Layout::top_down(Align::Min)),
             );
-            let title = self.title.clone();
+            let title = if self.player.is_none() {
+                "replayer".into()
+            } else {
+                self.title.clone()
+            };
             tui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .add(open_button(a, language))
-                        .on_hover_text(language.text("打开视频文件", "Open a video"))
-                        .clicked()
+                    if self.player.is_some()
+                        && ui
+                            .add(open_button(a, language))
+                            .on_hover_text(language.text("打开视频文件", "Open a video"))
+                            .clicked()
                     {
                         act = Act::Open;
                     }
-                    ui.menu_button(language.text("设置", "Settings"), |ui| {
-                        ui.label(language.text(
-                            "语言（界面与生成字幕）",
-                            "Language (interface and subtitles)",
-                        ));
-                        ui.selectable_value(
-                            &mut self.settings.language,
-                            Language::Chinese,
-                            "简体中文",
-                        );
-                        ui.selectable_value(
-                            &mut self.settings.language,
-                            Language::English,
-                            "English",
-                        );
-                        ui.separator();
-                        ui.add(
-                            egui::Slider::new(&mut self.settings.subtitle_concurrency, 1..=6)
-                                .text(language.text("字幕请求并发数", "Parallel requests")),
-                        );
-                        ui.small(language.text(
-                            "并发设置用于下一次生成",
-                            "Concurrency applies to the next generation",
-                        ));
-                    });
+                    if ui.button(language.text("设置", "Settings")).clicked() {
+                        self.settings_open = true;
+                        self.llm_draft = self.settings.llm.clone();
+                        self.config_message.clear();
+                    }
                     if self.player.is_some() {
                         let caption = if self.subtitle_job.is_some() {
                             language.text("字幕 · 生成中", "Subtitles · generating")
@@ -427,6 +475,32 @@ impl eframe::App for App {
                                         ui.small(&self.subtitle_metrics);
                                     }
                                     ui.separator();
+                                }
+                                if !self.subtitle_skipped.is_empty() {
+                                    ui.collapsing(
+                                        format!(
+                                            "{} ({})",
+                                            language.text("已跳过的片段", "Skipped segments"),
+                                            self.subtitle_skipped.len()
+                                        ),
+                                        |ui| {
+                                            egui::ScrollArea::vertical().max_height(180.0).show(
+                                                ui,
+                                                |ui| {
+                                                    for (start, end, error) in
+                                                        &self.subtitle_skipped
+                                                    {
+                                                        ui.label(format!(
+                                                            "{}–{}",
+                                                            fmt_time(*start),
+                                                            fmt_time(*end)
+                                                        ));
+                                                        ui.small(language.error(error));
+                                                    }
+                                                },
+                                            );
+                                        },
+                                    );
                                 }
                                 ui.checkbox(
                                     &mut self.subtitles_visible,
@@ -499,12 +573,12 @@ impl eframe::App for App {
             painter.rect_filled(
                 bot_rect,
                 CornerRadius::same(0),
-                Color32::from_black_alpha((185.0 * a) as u8),
+                SURFACE.gamma_multiply(a * 0.96),
             );
             let mut bui = root.new_child(
                 UiBuilder::new()
                     .id_salt("bottombar")
-                    .max_rect(bot_rect.shrink(9.0))
+                    .max_rect(bot_rect.shrink2(vec2(20.0, 17.0)))
                     .layout(Layout::top_down(Align::Min)),
             );
             bui.horizontal(|ui| {
@@ -523,7 +597,14 @@ impl eframe::App for App {
                 let durmax = dur.max(0.0001);
                 let shown = if scrubbing { scrub } else { pos };
                 let frac = (shown / durmax).clamp(0.0, 1.0) as f32;
-                let sw = (ui.available_width() - 160.0).max(60.0);
+                let volume_slider = screen.width() >= 640.0;
+                let sw = (ui.available_width()
+                    - if has_audio {
+                        if volume_slider { 170.0 } else { 78.0 }
+                    } else {
+                        40.0
+                    })
+                .max(30.0);
                 let (srect, sresp) = hslider(ui, sw, 26.0, frac, 4.0, true, a);
                 if sresp.dragged()
                     && let Some(pp) = ui.input(|i| i.pointer.hover_pos())
@@ -547,14 +628,16 @@ impl eframe::App for App {
                     if vr.clicked() {
                         act = Act::ToggleMute;
                     }
-                    let (vrect, vresp) = hslider(ui, 80.0, 26.0, eff, 3.5, false, a);
-                    if (vresp.dragged() || vresp.clicked())
-                        && let Some(pp) = ui.input(|i| i.pointer.hover_pos())
-                    {
-                        let f = ((pp.x - vrect.min.x) / vrect.width()).clamp(0.0, 1.0);
-                        vol = f;
-                        muted = false;
-                        act = Act::Volume(f);
+                    if volume_slider {
+                        let (vrect, vresp) = hslider(ui, 80.0, 26.0, eff, 3.5, false, a);
+                        if (vresp.dragged() || vresp.clicked())
+                            && let Some(pp) = ui.input(|i| i.pointer.hover_pos())
+                        {
+                            let f = ((pp.x - vrect.min.x) / vrect.width()).clamp(0.0, 1.0);
+                            vol = f;
+                            muted = false;
+                            act = Act::Volume(f);
+                        }
                     }
                 }
                 let fr = icon_button(ui, 28.0, a, draw_fullscreen);
@@ -571,7 +654,10 @@ impl eframe::App for App {
 
         // ---- empty state ----
         if self.player.is_none() {
-            let e_rect = Rect::from_center_size(screen.center(), vec2(340.0, 90.0));
+            let e_rect = Rect::from_center_size(
+                screen.center() + vec2(0.0, 12.0),
+                vec2(screen.width().min(460.0) - 32.0, 270.0),
+            );
             let mut eui = root.new_child(
                 UiBuilder::new()
                     .id_salt("empty")
@@ -579,16 +665,36 @@ impl eframe::App for App {
                     .layout(Layout::top_down(Align::Center)),
             );
             eui.vertical_centered(|ui| {
-                if ui.add(open_button(1.0, language)).clicked() {
-                    act = Act::Open;
-                }
+                let (logo, _) = ui.allocate_exact_size(vec2(64.0, 64.0), Sense::hover());
+                ui.painter().rect_filled(logo, 20, SURFACE);
+                draw_play(ui.painter(), logo.shrink(19.0), ACCENT);
+                ui.add_space(20.0);
+                ui.label(
+                    RichText::new(language.text("让画面成为主角", "Make room for the picture"))
+                        .size(28.0)
+                        .strong(),
+                );
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(
-                        language.text("选择视频文件开始播放", "Choose a video to start playing"),
-                    )
-                    .color(Color32::from_white_alpha(180))
-                    .size(13.0),
+                    RichText::new(language.text(
+                        "本地播放 · AI 字幕 · 专注观看",
+                        "Local playback · AI subtitles · Just watch",
+                    ))
+                    .color(MUTED)
+                    .size(14.0),
+                );
+                ui.add_space(26.0);
+                if ui
+                    .add(open_button(1.0, language).min_size(vec2(160.0, 42.0)))
+                    .clicked()
+                {
+                    act = Act::Open;
+                }
+                ui.add_space(14.0);
+                ui.label(
+                    RichText::new(language.text("或将视频拖到这里", "Or drop a video here"))
+                        .color(MUTED)
+                        .size(13.0),
                 );
             });
         }
@@ -623,6 +729,8 @@ impl eframe::App for App {
             });
         }
 
+        self.preferences(&ctx);
+
         // ---- apply action ----
         if language != self.settings.language
             || previous_concurrency != self.settings.subtitle_concurrency
@@ -630,6 +738,7 @@ impl eframe::App for App {
             if language != self.settings.language {
                 self.subtitle_job = None;
                 self.subtitles.clear();
+                self.subtitle_skipped.clear();
                 self.subtitle_metrics.clear();
                 self.subtitle_status = self
                     .settings
@@ -657,8 +766,11 @@ impl eframe::App for App {
                 }
             }
             Act::Seek(t) => {
+                if let Some(job) = &self.subtitle_job {
+                    job.prioritize(t);
+                }
                 if let Some(p) = &self.player {
-                    p.seek(t);
+                    self.pending_seek = Some((p.seek(t), t));
                 }
             }
             Act::Volume(v) => {
@@ -681,17 +793,22 @@ impl eframe::App for App {
             Act::Open => self.open_dialog(),
             Act::GenerateSubtitles => {
                 if let Some(path) = &self.source {
-                    match Job::start(
-                        path.clone(),
-                        subtitles::Options {
-                            language: self.settings.language,
-                            concurrency: self.settings.subtitle_concurrency,
-                            ..Default::default()
-                        },
-                    ) {
+                    match subtitles::LlmConfig::load_with(&self.settings.llm).and_then(|config| {
+                        Job::start_at(
+                            path.clone(),
+                            subtitles::Options {
+                                language: self.settings.language,
+                                concurrency: self.settings.subtitle_concurrency,
+                                ..Default::default()
+                            },
+                            pos,
+                            config,
+                        )
+                    }) {
                         Ok(job) => {
                             self.subtitle_job = Some(job);
                             self.subtitles.clear();
+                            self.subtitle_skipped.clear();
                             self.subtitles_visible = true;
                             self.subtitle_status =
                                 language.text("正在准备音轨…", "Preparing audio…").into();
@@ -849,9 +966,9 @@ fn open_button(a: f32, language: Language) -> egui::Button<'static> {
             .color(Color32::from_white_alpha((235.0 * a) as u8))
             .size(13.0),
     )
-    .fill(Color32::from_white_alpha((40.0 * a) as u8))
-    .corner_radius(CornerRadius::same(6))
-    .min_size(vec2(0.0, 26.0))
+    .fill(ACCENT.gamma_multiply(a))
+    .corner_radius(CornerRadius::same(8))
+    .min_size(vec2(90.0, 34.0))
 }
 
 fn hslider(
@@ -882,7 +999,7 @@ fn hslider(
         Color32::from_white_alpha((70.0 * alpha) as u8),
     );
     let fx = rect.min.x + rect.width() * frac;
-    let fill = Color32::from_white_alpha((245.0 * alpha) as u8);
+    let fill = ACCENT.gamma_multiply(alpha);
     p.rect_filled(
         Rect::from_min_max(pos2(rect.min.x, cy - th * 0.5), pos2(fx, cy + th * 0.5)),
         cr,

@@ -1,5 +1,8 @@
 mod api;
 mod audio;
+mod mp3;
+mod scheduler;
+pub use api::Config as LlmConfig;
 pub mod style;
 use crate::settings::Language;
 use futures_util::StreamExt;
@@ -16,7 +19,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             language: Language::Chinese,
-            concurrency: 3,
+            concurrency: 2,
             start: 0.0,
             end: None,
         }
@@ -37,6 +40,8 @@ pub struct Cue {
     pub start: f64,
     pub end: f64,
     pub text: String,
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 pub enum Event {
@@ -46,6 +51,11 @@ pub enum Event {
     },
     Cues(Vec<Cue>),
     Finished,
+    Skipped {
+        start: f64,
+        end: f64,
+        error: String,
+    },
     Failed(String),
     Metrics {
         seconds: f64,
@@ -58,18 +68,39 @@ pub struct Job {
     pub events: Receiver<Event>,
     cancel: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    priority: Arc<std::sync::atomic::AtomicU64>,
 }
 impl Job {
-    pub fn start(path: PathBuf, options: Options) -> Result<Self> {
+    pub fn start_at(
+        path: PathBuf,
+        options: Options,
+        position: f64,
+        config: LlmConfig,
+    ) -> Result<Self> {
         let (tx, events) = unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = cancel.clone();
+        let priority = Arc::new(std::sync::atomic::AtomicU64::new(position.to_bits()));
+        let worker_priority = priority.clone();
         let thread = std::thread::Builder::new()
             .name("replayer-subtitles".into())
             .spawn(move || {
-                let result = generate(&path, &worker_cancel, options, |event| {
-                    let _ = tx.send(event);
-                });
+                let result = scheduler::run(
+                    &path,
+                    &worker_cancel,
+                    options,
+                    &worker_priority,
+                    match api::Client::new(config) {
+                        Ok(client) => client,
+                        Err(error) => {
+                            let _ = tx.send(Event::Failed(error.to_string()));
+                            return;
+                        }
+                    },
+                    |event| {
+                        let _ = tx.send(event);
+                    },
+                );
                 let _ = tx.send(match result {
                     Ok(()) => Event::Finished,
                     Err(e) => Event::Failed(format!("{e:#}")),
@@ -79,7 +110,13 @@ impl Job {
             events,
             cancel,
             thread: Some(thread),
+            priority,
         })
+    }
+    pub fn prioritize(&self, position: f64) {
+        if position.is_finite() && position >= 0.0 {
+            self.priority.store(position.to_bits(), Ordering::Release);
+        }
     }
 }
 impl Drop for Job {
@@ -171,18 +208,30 @@ fn generate_with_client(
                     let chunk = item?;
                     ensure!(!cancel.load(Ordering::Acquire), "字幕生成已取消");
                     let end = chunk.start + chunk.duration();
-                    let cues = if chunk.samples.iter().all(|s| s.abs() < 0.0001) {
-                        Vec::new()
+                    let result = if chunk.samples.iter().all(|s| s.abs() < 0.0001) {
+                        Ok(Vec::new())
                     } else {
-                        client.transcribe(&chunk, cancel, options.language).await?
+                        client.transcribe(&chunk, cancel, options.language).await
                     };
-                    Ok::<_, anyhow::Error>((end, style::prepare(cues, options.language, end)))
+                    ensure!(!cancel.load(Ordering::Acquire), "字幕生成已取消");
+                    Ok::<_, anyhow::Error>((chunk.start, end, result))
                 }
             })
             .buffered(options.concurrency);
         futures_util::pin_mut!(jobs);
         while let Some(result) = jobs.next().await {
-            let (end, cues) = result?;
+            let (start, end, result) = result?;
+            let cues = match result {
+                Ok(cues) => style::prepare(cues, options.language, end),
+                Err(error) => {
+                    report(Event::Skipped {
+                        start,
+                        end,
+                        error: error.to_string(),
+                    });
+                    Vec::new()
+                }
+            };
             let quality = style::quality(&cues, options.language);
             fast += quality.fast;
             short += quality.short;
@@ -242,17 +291,25 @@ fn timestamp(seconds: f64) -> String {
     )
 }
 
+#[cfg(test)]
 fn parse_cues(content: &str, start: f64, duration: f64) -> Result<Vec<Cue>> {
+    parse_cues_mode(content, start, duration, false)
+}
+fn parse_cues_mode(content: &str, start: f64, duration: f64, bilingual: bool) -> Result<Vec<Cue>> {
     #[derive(Deserialize)]
-    struct Segment {
-        #[serde(flatten)]
-        cue: Cue,
+    #[serde(deny_unknown_fields)]
+    struct Row {
+        s: f64,
+        e: f64,
+        t: String,
         #[serde(default)]
-        source: String,
+        o: Option<String>,
     }
     #[derive(Deserialize)]
-    struct Transcript {
-        segments: Vec<Segment>,
+    #[serde(untagged)]
+    enum Transcript {
+        Compact { c: Vec<Row> },
+        Legacy { segments: Vec<Cue> },
     }
     let text = content.trim();
     let text = if text.starts_with("```") {
@@ -264,17 +321,28 @@ fn parse_cues(content: &str, start: f64, duration: f64) -> Result<Vec<Cue>> {
     };
     let result: Transcript = serde_json::from_str(text)
         .context("模型没有返回有效的字幕 JSON，请重试或更换支持音频的模型")?;
-    ensure!(result.segments.len() <= 256, "模型返回了过多字幕片段");
-    let mut cues: Vec<Cue> = result
-        .segments
-        .into_iter()
-        .map(|segment| {
-            let mut cue = segment.cue;
-            if segment
-                .source
-                .trim_end_matches(['"', '”', ' '])
-                .ends_with('?')
-            {
+    let mut cues = match result {
+        Transcript::Compact { c: rows } => rows
+            .into_iter()
+            .map(|row| Cue {
+                start: row.s,
+                end: row.e,
+                text: row.t,
+                source: row.o,
+            })
+            .collect::<Vec<_>>(),
+        Transcript::Legacy { segments } => segments,
+    };
+    ensure!(cues.len() <= 256, "模型返回了过多字幕片段");
+    for cue in &mut cues {
+        if let Some(source) = &mut cue.source {
+            *source = source.trim().replace('\r', "");
+            ensure!(
+                source.chars().count() <= 1000,
+                "模型返回的字幕文本为空或过长"
+            );
+            // Compatibility with older responses that used the original as a question hint.
+            if source.trim_end_matches(['"', '”', ' ']).ends_with('?') {
                 let text = cue.text.trim();
                 let core = text.trim_end_matches(['"', '”', '’', '」', '』']);
                 if !core.ends_with(['？', '?']) {
@@ -285,9 +353,16 @@ fn parse_cues(content: &str, start: f64, duration: f64) -> Result<Vec<Cue>> {
                     );
                 }
             }
-            cue
-        })
-        .collect();
+        }
+        if !bilingual
+            || cue
+                .source
+                .as_ref()
+                .is_some_and(|s| s.is_empty() || s.trim() == cue.text.trim())
+        {
+            cue.source = None;
+        }
+    }
     for cue in &mut cues {
         ensure!(
             cue.start.is_finite()
@@ -319,6 +394,9 @@ pub fn run_cli(path: &Path, output: &Path, options: Options) -> Result<()> {
         options,
         |event| match event {
             Event::Cues(new) => cues.extend(new),
+            Event::Skipped { start, end, error } => {
+                eprintln!("Skipped {start:.1}–{end:.1}s: {error}")
+            }
             Event::Progress { through, total } => {
                 println!(
                     "{}: {through:.1} / {total:.1} s",
@@ -377,6 +455,159 @@ pub fn export_dialog(
 mod tests {
     use super::*;
     #[test]
+    fn compact_protocol_is_strict_and_bilingual_is_opt_in() {
+        let mono =
+            parse_cues_mode(r#"{"c":[{"s":0.25,"e":1.5,"t":"你好"}]}"#, 60.0, 2.0, false).unwrap();
+        assert_eq!(mono[0].start, 60.25);
+        assert_eq!(mono[0].text, "你好");
+        assert!(mono[0].source.is_none());
+        let dual = r#"{"c":[{"s":0,"e":1,"t":"你好","o":"Hello."}]}"#;
+        assert_eq!(
+            parse_cues_mode(dual, 0.0, 2.0, true).unwrap()[0]
+                .source
+                .as_deref(),
+            Some("Hello.")
+        );
+        assert!(
+            parse_cues_mode(dual, 0.0, 2.0, false).unwrap()[0]
+                .source
+                .is_none()
+        );
+        assert!(
+            parse_cues_mode(r#"{"c":[]}"#, 0.0, 2.0, false)
+                .unwrap()
+                .is_empty()
+        );
+        for invalid in [
+            r#"{"c":[{"s":0,"e":1}]}"#,
+            r#"{"c":[{"s":0,"e":1,"t":7}]}"#,
+            r#"{"c":[{"s":2,"e":3,"t":"late"}]}"#,
+            r#"{"c":[{"s":0,"e":1,"t":"ok","extra":1}]}"#,
+            r#"[[0,1]]"#,
+            r#"[[0,1,"ok","source","extra"]]"#,
+            r#"[[0,1,7]]"#,
+            r#"[[2,3,"late"]]"#,
+        ] {
+            assert!(parse_cues_mode(invalid, 0.0, 2.0, false).is_err());
+        }
+        assert!(
+            parse_cues_mode(
+                r#"{"c":[{"s":0,"e":1,"t":"Hello","o":"Hello"}]}"#,
+                0.0,
+                2.0,
+                true
+            )
+            .unwrap()[0]
+                .source
+                .is_none()
+        );
+    }
+    #[test]
+    fn exhausted_retries_skip_one_segment_and_continue_in_both_pipelines() {
+        use std::io::{Read, Write};
+        for prioritized in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let deadline = Instant::now() + std::time::Duration::from_secs(12);
+                for attempt in 0..4 {
+                    let (mut socket, _) = loop {
+                        match listener.accept() {
+                            Ok(connection) => break connection,
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                assert!(Instant::now() < deadline, "later segment never requested");
+                                std::thread::sleep(std::time::Duration::from_millis(5));
+                            }
+                            Err(error) => panic!("{error}"),
+                        }
+                    };
+                    socket.set_nonblocking(false).unwrap();
+                    socket
+                        .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    loop {
+                        let mut bytes = [0; 8192];
+                        let n = socket.read(&mut bytes).unwrap();
+                        assert!(n > 0);
+                        request.extend_from_slice(&bytes[..n]);
+                        if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let headers = String::from_utf8_lossy(&request[..end]).to_lowercase();
+                            let length: usize = headers
+                                .lines()
+                                .find_map(|line| line.strip_prefix("content-length:"))
+                                .unwrap()
+                                .trim()
+                                .parse()
+                                .unwrap();
+                            if request.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    let (status, body) = if attempt < 3 {
+                        (
+                            "500 Internal Server Error",
+                            r#"{"error":{"message":"persistent failure test-key"}}"#.to_owned(),
+                        )
+                    } else {
+                        ("200 OK", serde_json::json!({"choices":[{"message":{"content":"{\"segments\":[{\"start\":0,\"end\":0.5,\"text\":\"Later\"}]}"},"finish_reason":"stop"}]}).to_string())
+                    };
+                    write!(socket,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+                }
+            });
+            let path = std::env::temp_dir().join(format!(
+                "replayer-skip-{}-{prioritized}.wav",
+                std::process::id()
+            ));
+            std::fs::write(
+                &path,
+                audio::Chunk {
+                    start: 0.0,
+                    samples: vec![0.2; audio::RATE as usize * 6],
+                }
+                .wav(),
+            )
+            .unwrap();
+            let cancel = Arc::new(AtomicBool::new(false));
+            let options = Options {
+                concurrency: 1,
+                ..Default::default()
+            };
+            let client = api::Client::mock(format!("http://{address}/v1"));
+            let mut skipped = Vec::new();
+            let mut cues = Vec::new();
+            let mut through = 0.0;
+            let report = |event| match event {
+                Event::Skipped { start, end, error } => skipped.push((start, end, error)),
+                Event::Cues(new) => cues.extend(new),
+                Event::Progress { through: value, .. } => through = value,
+                _ => {}
+            };
+            let result = if prioritized {
+                scheduler::run(
+                    &path,
+                    &cancel,
+                    options,
+                    &std::sync::atomic::AtomicU64::new(0.0f64.to_bits()),
+                    client,
+                    report,
+                )
+            } else {
+                generate_with_client(&path, &cancel, options, client, report)
+            };
+            server.join().unwrap();
+            std::fs::remove_file(path).unwrap();
+            result.unwrap();
+            assert_eq!(skipped.len(), 1);
+            assert_eq!((skipped[0].0, skipped[0].1), (0.0, 5.0));
+            assert!(!skipped[0].2.contains("test-key"));
+            assert_eq!(cues[0].start, 5.0);
+            assert_eq!(through, 6.0);
+        }
+    }
+    #[test]
     fn timestamps_are_offset_clamped_and_seekable() {
         let cues = parse_cues(
             r#"{"segments":[{"start":0.2,"end":2.2,"text":"测试"}]}"#,
@@ -430,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_pipeline_is_bounded_and_delivers_in_media_order() {
+    fn priority_pipeline_is_bounded_and_preserves_all_timestamps() {
         use std::{
             io::{Read, Write},
             net::TcpListener,
@@ -506,7 +737,7 @@ mod tests {
         .unwrap();
         let mut starts = Vec::new();
         let mut peak = 0;
-        generate_with_client(
+        scheduler::run(
             &path,
             &Arc::new(AtomicBool::new(false)),
             Options {
@@ -514,6 +745,7 @@ mod tests {
                 concurrency: 3,
                 ..Default::default()
             },
+            &std::sync::atomic::AtomicU64::new(10.0f64.to_bits()),
             api::Client::mock(format!("http://{address}/v1")),
             |event| match event {
                 Event::Cues(cues) => starts.extend(cues.into_iter().map(|c| c.start)),
@@ -524,6 +756,7 @@ mod tests {
         .unwrap();
         server.join().unwrap();
         std::fs::remove_file(path).unwrap();
+        starts.sort_by(f64::total_cmp);
         assert_eq!(starts, vec![0.0, 5.0, 10.0]);
         assert_eq!(peak, 3);
         assert_eq!(accepted.load(Ordering::Relaxed), 3);

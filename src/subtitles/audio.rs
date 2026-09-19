@@ -43,7 +43,7 @@ impl Chunk {
         out
     }
 }
-/// Independent, bounded offline decoding. Playback/seek never changes this input.
+/// Independent, bounded offline decoding with reusable range seeking.
 pub struct AudioChunks {
     input: format::context::Input,
     dec: ffmpeg::decoder::Audio,
@@ -86,9 +86,10 @@ impl AudioChunks {
             .context("当前文件没有音轨，无法生成字幕")?;
         let index = track.index();
         let tb = f64::from(track.time_base());
-        let dec = codec::context::Context::from_parameters(track.parameters())?
+        let mut dec = codec::context::Context::from_parameters(track.parameters())?
             .decoder()
             .audio()?;
+        dec.set_packet_time_base(track.time_base());
         // Same timeline origin as the playback demuxer.
         let start = unsafe { (*input.as_ptr()).start_time };
         let origin = if start == ffmpeg::ffi::AV_NOPTS_VALUE {
@@ -129,7 +130,7 @@ impl AudioChunks {
         );
         self.range_start = start;
         self.range_end = end;
-        if start > 0.0 {
+        {
             self.deadline.store(
                 self.base.elapsed().as_millis() as u64 + 10_000,
                 Ordering::Relaxed,
@@ -142,6 +143,11 @@ impl AudioChunks {
             self.next_input = start;
             self.output_end = start;
             self.pending_start = start;
+            self.deferred = None;
+            self.boundary = false;
+            self.input_eof = false;
+            self.decoder_eof = false;
+            self.done = false;
         }
         Ok(())
     }
@@ -162,7 +168,10 @@ impl AudioChunks {
         }
         let mut count = self.pending.len().min(self.max_samples);
         // Prefer a quiet 40ms window in the last two seconds to avoid splitting a word.
-        if count == self.max_samples {
+        // Scheduled ranges already have a fixed boundary. Splitting them at a
+        // quiet point would create a second tiny request and delay publication
+        // of the entire interval until that request also finishes.
+        if count == self.max_samples && self.range_end.is_none() {
             let window = RATE as usize / 25;
             let lower = count.saturating_sub(2 * RATE as usize).max(window);
             for end in (lower..=count).rev().step_by(window) {
@@ -317,6 +326,29 @@ impl AudioChunks {
 mod tests {
     use super::*;
     #[test]
+    fn bounded_range_does_not_create_a_second_request_for_a_short_tail() {
+        let mut samples = vec![0.2; RATE as usize * 5];
+        samples[RATE as usize * 3..RATE as usize * 4].fill(0.0);
+        let path =
+            std::env::temp_dir().join(format!("replayer-bounded-audio-{}.wav", std::process::id()));
+        std::fs::write(
+            &path,
+            Chunk {
+                start: 0.0,
+                samples,
+            }
+            .wav(),
+        )
+        .unwrap();
+        let mut reader = AudioChunks::open(&path, Arc::new(AtomicBool::new(false)), 5).unwrap();
+        reader.set_range(0.0, Some(5.0)).unwrap();
+        let chunk = reader.next().unwrap().unwrap();
+        assert_eq!(chunk.samples.len(), RATE as usize * 5);
+        assert!(reader.next().unwrap().is_none());
+        drop(reader);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
     fn wave_roundtrip_is_bounded_and_has_no_lost_tail() {
         let input = Chunk {
             start: 0.0,
@@ -333,6 +365,16 @@ mod tests {
             total += chunk.samples.len();
         }
         assert_eq!(total, RATE as usize * 3);
+        // Reuse after EOF, seek backwards to zero, and recover after a clipped range.
+        for (start, end) in [(2.0, 3.0), (0.0, 1.0), (1.0, 2.0)] {
+            reader.set_range(start, Some(end)).unwrap();
+            let mut samples = 0;
+            while let Some(chunk) = reader.next().unwrap() {
+                assert!((chunk.start - start - samples as f64 / RATE as f64).abs() < 0.002);
+                samples += chunk.samples.len();
+            }
+            assert_eq!(samples, RATE as usize);
+        }
         drop(reader);
         std::fs::remove_file(path).unwrap();
     }

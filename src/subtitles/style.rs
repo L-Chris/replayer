@@ -190,6 +190,67 @@ fn pages(text: &str, language: Language) -> Vec<String> {
 }
 
 pub fn prepare(cues: Vec<Cue>, language: Language, boundary: f64) -> Vec<Cue> {
+    if cues.iter().any(|cue| cue.source.is_some()) {
+        let mut output = Vec::new();
+        for (index, cue) in cues.iter().enumerate() {
+            let end = cue
+                .end
+                .min(boundary)
+                .min(cues.get(index + 1).map_or(boundary, |next| next.start));
+            let mut target = cue.clone();
+            target.source = None;
+            target.end = end;
+            let Some(original) = &cue.source else {
+                output.extend(prepare(vec![target], language, end));
+                continue;
+            };
+            let text = normalize(&cue.text, language);
+            let original = normalize(original, Language::English);
+            if normalize(&original, language) == text {
+                output.extend(prepare(vec![target], language, end));
+                continue;
+            }
+            // Reserve one line per language. Paginate instead of flattening the
+            // original into the translation or allowing four-line subtitles.
+            let original_language = if original
+                .chars()
+                .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+            {
+                Language::Chinese
+            } else {
+                Language::English
+            };
+            let lines = |text: &str, language| {
+                pages(text, language)
+                    .into_iter()
+                    .flat_map(|page| page.lines().map(str::to_owned).collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+            };
+            let translated = lines(&text, language);
+            let original = lines(&original, original_language);
+            let count = translated.len().max(original.len());
+            if count == 0 || end <= cue.start {
+                continue;
+            }
+            let interval = (end - cue.start) / count as f64;
+            for i in 0..count {
+                let text = [original.get(i), translated.get(i)]
+                    .into_iter()
+                    .flatten()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let start = cue.start + interval * i as f64;
+                output.push(Cue {
+                    start,
+                    end: (start + interval.min(MAX_DURATION)).min(end),
+                    text,
+                    source: None,
+                });
+            }
+        }
+        return output;
+    }
     let mut merged: Vec<Cue> = Vec::new();
     for mut cue in cues {
         cue.text = normalize(&cue.text, language);
@@ -239,6 +300,7 @@ pub fn prepare(cues: Vec<Cue>, language: Language, boundary: f64) -> Vec<Cue> {
                     start: position,
                     end,
                     text,
+                    source: None,
                 });
             }
             position += allocation;
@@ -268,6 +330,31 @@ pub fn quality(cues: &[Cue], language: Language) -> Quality {
 mod tests {
     use super::*;
     #[test]
+    fn bilingual_display_and_export_keep_languages_on_separate_lines() {
+        let cues = prepare(
+            vec![Cue {
+                start: 2.0,
+                end: 4.0,
+                text: "你好，世界。".into(),
+                source: Some("Hello, world.".into()),
+            }],
+            Language::Chinese,
+            4.0,
+        );
+        assert_eq!(cues[0].text, "Hello, world.\n你好 世界");
+        assert!(super::super::to_srt(&cues).contains("Hello, world.\n你好 世界"));
+        let long = prepare(vec![Cue {start:0.0,end:7.0,text:"这是一段较长的中文翻译需要分成多页显示并且保留所有的文字内容".into(),source:Some("This is a longer original sentence which needs several lines while retaining every word in the bilingual subtitle.".into())}],Language::Chinese,7.0);
+        assert!(long.iter().all(|cue| cue.text.lines().count() <= 2));
+        assert!(long.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        let combined = long
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(combined.contains("subtitle."));
+        assert!(combined.contains("文字内容"));
+    }
+    #[test]
     fn punctuation_is_language_specific_and_preserves_numbers() {
         assert_eq!(
             normalize(
@@ -290,6 +377,7 @@ mod tests {
                     start: 0.0,
                     end: 6.0,
                     text: text.into(),
+                    source: None,
                 }],
                 language,
                 8.0,
@@ -318,11 +406,13 @@ mod tests {
                     start: 0.0,
                     end: 0.1,
                     text: "这是一个很短的片段".into(),
+                    source: None,
                 },
                 Cue {
                     start: 0.2,
                     end: 12.0,
                     text: "好".into(),
+                    source: None,
                 },
             ],
             Language::Chinese,
