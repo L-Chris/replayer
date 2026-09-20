@@ -1,6 +1,6 @@
 [package]
 name = "replayer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -23,6 +23,14 @@ unicode-segmentation = "1"
 unicode-width = "0.2"
 sha2 = "0.10"
 semver = "1"
+librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
+axum = "0.8"
+tokio-util = { version = "0.7", features = ["io"] }
+uuid = { version = "1", features = ["v4"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+tc_tea = { version = "0.2.1", default-features = false }
 
 [profile.release]
 lto = true

@@ -1,6 +1,72 @@
 use crate::player::{Event, PlaybackState, Player};
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use std::time::{Duration, Instant};
+pub fn music(path: String) -> Result<()> {
+    let mut player = Player::open(path)?;
+    player.set_volume(0.0);
+    let until = Instant::now() + Duration::from_secs(10);
+    while player.position() < 0.2 {
+        pump(&mut player, 10)?;
+        ensure!(Instant::now() < until, "music clock did not advance");
+    }
+    let info = player.snapshot().media.context("missing media metadata")?;
+    ensure!(
+        info.kind == crate::media::Kind::Music,
+        "not detected as music"
+    );
+    println!(
+        "music detected: title={:?}, artist={:?}, album={:?}, artwork={}",
+        info.title,
+        info.artist,
+        info.album,
+        info.artwork.is_some()
+    );
+    player.set_playing(false);
+    pump(&mut player, 80)?;
+    let position = player.position();
+    pump(&mut player, 100)?;
+    ensure!(
+        (player.position() - position).abs() < 0.03,
+        "pause moved clock"
+    );
+    player.seek(1.5);
+    let id = player.seek(0.3);
+    let until = Instant::now() + Duration::from_secs(5);
+    let mut done = false;
+    while Instant::now() < until {
+        while let Some(event) = player.poll_event() {
+            match event {
+                Event::Error(error) => bail!(error),
+                Event::SeekCompleted { id: current, .. } if current == id => done = true,
+                _ => {}
+            }
+        }
+        if done {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    ensure!(done && !player.is_playing(), "paused music seek failed");
+    ensure!(player.queued() == 0, "music produced video frames");
+    player.seek((player.duration() - 0.2).max(0.0));
+    player.set_playing(true);
+    let until = Instant::now() + Duration::from_secs(5);
+    while player.snapshot().state != PlaybackState::Ended {
+        pump(&mut player, 10)?;
+        ensure!(
+            Instant::now() < until,
+            "music did not finish after audio drain"
+        );
+    }
+    player.toggle_play();
+    let until = Instant::now() + Duration::from_secs(5);
+    while player.position() < 0.1 || player.snapshot().state == PlaybackState::Ended {
+        pump(&mut player, 10)?;
+        ensure!(Instant::now() < until, "music replay failed");
+    }
+    println!("PASS: real audio device, music clock, pause, rapid seek, EOF drain and replay");
+    Ok(())
+}
 
 fn pump(p: &mut Player, millis: u64) -> Result<Vec<f64>> {
     let until = Instant::now() + Duration::from_millis(millis);

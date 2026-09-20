@@ -13,3 +13,15 @@ CI dependency source, build scripts and configuration:
 The pinned archive and SHA-256 are recorded in `scripts/setup-windows.ps1`.
 See the upstream build repository for bundled codec libraries, notices and source
 retrieval instructions. Replayer does not modify the FFmpeg libraries.
+
+Magnet playback embeds `librqbit` 9.0.1 and its rqbit support crates, Copyright
+2021 Igor Katson, licensed under Apache-2.0. The license is bundled in
+`licenses/Apache-2.0.txt`. Source: https://github.com/ikatson/rqbit/tree/v9.0.1
+
+The QQ Music adapter includes Rust adaptations of the QMC1 mask from
+https://github.com/Presburger/qmc-decoder (Copyright 2019 Presburger) and QMC2
+ciphers/key envelopes from https://github.com/nukemiko/libtakiyasha
+(Copyright 2023 nukemiko). Both MIT notices are bundled in
+`licenses/QQ-Music-adapters.txt`. No authentication/credential extraction code
+is included. Tencent TEA uses `tc_tea` 0.2.1 (MIT OR Apache-2.0), source:
+https://github.com/jixunmoe/tc_tea_rust .

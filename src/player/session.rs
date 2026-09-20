@@ -18,7 +18,13 @@ pub(super) fn run(
     stale_frames: Receiver<VideoFrame>,
     events: &Sender<Event>,
 ) -> Result<()> {
-    let demux = Demux::spawn(path, shared.stop.clone())?;
+    let demux = Demux::spawn(
+        path,
+        shared.stop.clone(),
+        shared.requested.clone(),
+        shared.progressive,
+        shared.source_key.clone(),
+    )?;
     let header = loop {
         if shared.stop.load(Ordering::Acquire) {
             return Ok(());
@@ -32,7 +38,14 @@ pub(super) fn run(
             _ => {}
         }
     };
-    let mut video = VideoPipeline::new(header.video.params, header.video.tb, header.origin)?;
+    shared.snapshot.lock().unwrap().media = Some(header.info.clone());
+    let _ = events.send(Event::MediaInfo(header.info.clone()));
+    if header.video.is_none() {
+        return super::music::run(header, demux, shared, commands, events);
+    }
+    let track = header.video.as_ref().unwrap();
+    let vi = track.index;
+    let mut video = VideoPipeline::new(track.params.clone(), track.tb, header.origin)?;
     let mut output = None;
     let mut audio = None;
     let ai = header.audio.as_ref().map(|a| a.index);
@@ -74,6 +87,7 @@ pub(super) fn run(
     let mut ended = false;
     let mut audio_finished = false;
     let mut audio_fallback = false;
+    let mut buffering = false;
     let mut starving_since: Option<Instant> = None;
     let mut deferred_command = None;
     let mut vpackets = VecDeque::<ffmpeg::Packet>::new();
@@ -88,7 +102,7 @@ pub(super) fn run(
         while let Some(command) = deferred_command.take().or_else(|| commands.try_recv().ok()) {
             match command {
                 Command::Playing(playing) => {
-                    if !seeking && !ended {
+                    if !seeking && !ended && !buffering {
                         shared.clock.set_playing(playing);
                         shared.output.enabled.store(
                             playing && !audio_finished && !audio_fallback,
@@ -111,6 +125,7 @@ pub(super) fn run(
             ended = false;
             audio_finished = false;
             audio_fallback = false;
+            buffering = false;
             starving_since = None;
             vpackets.clear();
             apackets.clear();
@@ -148,7 +163,7 @@ pub(super) fn run(
         while packet_bytes < PACKET_BUDGET {
             match demux.rx.try_recv() {
                 Ok(Message::Packet(id, p)) if id == epoch && seek_ack => {
-                    if p.stream() == header.video.index {
+                    if p.stream() == vi {
                         packet_bytes += p.size();
                         vpackets.push_back(p);
                     } else if Some(p.stream()) == ai && audio.is_some() {
@@ -205,6 +220,10 @@ pub(super) fn run(
             {
                 if starving_since.get_or_insert_with(Instant::now).elapsed()
                     >= Duration::from_millis(250)
+                    && !(shared.progressive
+                        && !eof
+                        && demux.waiting.load(Ordering::Acquire)
+                        && video.end <= shared.clock.now() + 0.1)
                 {
                     shared.clock.use_wall_clock();
                     audio_fallback = true;
@@ -253,6 +272,28 @@ pub(super) fn run(
         // gap. Do not wait for global EOF behind a full video read-ahead queue.
         let audio_ready = audio.as_ref().is_none_or(|a| a.end > target || audio_eof)
             || (apackets.is_empty() && seeking_since.elapsed() >= Duration::from_millis(100));
+        if shared.progressive && !seeking && !ended {
+            let now = shared.clock.now();
+            let stalled = !eof
+                && demux.waiting.load(Ordering::Acquire)
+                && video.end <= now + 0.05
+                && video.pending.is_empty()
+                && frames.is_empty()
+                && vpackets.is_empty();
+            if stalled && !buffering {
+                buffering = true;
+                shared.clock.set_playing(false);
+                shared.output.enabled.store(false, Ordering::Release);
+            } else if buffering && (eof || video.end > now + 0.25) {
+                buffering = false;
+                let playing = shared.desired_playing.load(Ordering::Acquire);
+                shared.clock.set_playing(playing);
+                shared.output.enabled.store(
+                    playing && !audio_fallback && !audio_finished,
+                    Ordering::Release,
+                );
+            }
+        }
         if seeking
             && seek_ack
             && video_ready
@@ -321,6 +362,8 @@ pub(super) fn run(
                 PlaybackState::Ended
             } else if !shared.desired_playing.load(Ordering::Acquire) {
                 PlaybackState::Paused
+            } else if buffering {
+                PlaybackState::Buffering
             } else if eof {
                 PlaybackState::Draining
             } else {

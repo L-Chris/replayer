@@ -1,18 +1,38 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod media;
+mod media_source;
 mod player;
+mod queue;
 mod renderer;
 mod selftest;
 mod settings;
 mod subtitles;
+mod torrent;
 mod updater;
 
 use app::App;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--selftest-music") {
+        if let Err(error) = selftest::music(args.get(1).cloned().unwrap_or_default()) {
+            eprintln!("music selftest: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("--torrent-selftest") {
+        let result = torrent::selftest(args.get(1).map(String::as_str).unwrap_or(""));
+        if let Err(error) = result {
+            eprintln!("torrent selftest: {error:#}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     if args.first().map(String::as_str) == Some("--subtitles") {
         let result = match (args.get(1), args.get(2)) {
@@ -37,7 +57,7 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
-    let initial = args.into_iter().next();
+    let initial = args;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("replayer")

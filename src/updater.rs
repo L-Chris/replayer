@@ -151,6 +151,7 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
         .build()?)
 }
 fn client(timeout: Duration) -> Result<reqwest::Client> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     Ok(reqwest::Client::builder()
         .user_agent(concat!("replayer/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(15))

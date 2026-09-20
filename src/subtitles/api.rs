@@ -187,6 +187,7 @@ impl Client {
         .unwrap()
     }
     pub fn new(config: Config) -> Result<Self> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(120))

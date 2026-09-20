@@ -1,8 +1,11 @@
 # replayer
 
-使用 Rust、FFmpeg、egui/WGPU 和 CPAL 开发的桌面视频播放器，目前主要在 Windows 上验证。
+使用 Rust、FFmpeg、egui/WGPU 和 CPAL 开发的桌面音视频播放器，目前主要在 Windows 上验证。
 
 ## 功能
+
+- 音乐与视频自动切换界面；音乐显示内嵌封面、标题、歌手和专辑，控件常驻。
+- 多文件打开、混合播放队列、上一首/下一首、播完自动继续及队列排序；详见 [音乐与通用播放](MUSIC_PLAYBACK.md)。
 
 - 播放、暂停、拖动定位、音量控制和全屏；`Space` 播放/暂停，左右方向键快进/快退，`F` 切换全屏，`Esc` 退出全屏，`M` 静音。
 - 顶部和底部工具栏自动隐藏，鼠标靠近边缘时显示。
@@ -11,6 +14,7 @@
 - 兼容 OpenAI Chat Completions 音频输入的字幕生成：默认 MP3、120 秒分段、2 路并发，支持播放位置优先调度、取消、进度显示和 SRT 导出。
 - 语言相关的字幕标点、两行排版、阅读速度检查和白字黑描边。
 - Windows 安装包与便携版；设置中的“关于”支持版本检查、下载更新、校验并安装重启。
+- 磁链文件列表解析、选片边下边播、暂停/恢复下载和按播放位置取块；AI 字幕仅读已下载缓存，说明见 [MAGNET_PLAYBACK.md](MAGNET_PLAYBACK.md)。
 
 ## 构建
 
@@ -35,6 +39,18 @@ GitHub Actions 自动构建 Windows x64 安装包与便携 ZIP。推送与 Cargo
 cargo build --locked
 cargo run --locked -- "path/to/video.mkv"
 ```
+
+本地构建预览统一使用固定名称 `target/debug/replayer.exe`，参考 torto 的
+Cargo 开发流程，不再按功能创建新的可执行文件名：
+
+```powershell
+./scripts/preview.ps1
+./scripts/preview.ps1 -Media "path/to/song.flac"
+./scripts/preview.ps1 -NoLaunch
+```
+
+脚本会关闭本项目原有的 debug 预览、重新构建，再启动新版本；构建失败不会启动旧版本。
+QQ 音乐文件支持范围和密钥导入方式见 [音乐播放说明](MUSIC_PLAYBACK.md#qq-music-local-files)。
 
 设置 `REPLAYER_SOFTWARE=1` 可强制软件解码；`REPLAYER_STATS=1` 可输出播放诊断信息。
 

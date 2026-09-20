@@ -29,6 +29,23 @@ impl Language {
     }
     pub fn error(self, message: &str) -> String {
         if self == Self::Chinese {
+            if message.starts_with("QQ music needs a song key") {
+                return "该 QQ 音乐文件没有内嵌密钥，请导入这首歌对应的 ekey。".into();
+            }
+            if message.starts_with("QQ music EncV2") {
+                return "暂不支持此 EncV2 密钥封装版本。".into();
+            }
+            if message.starts_with("QQ music key is incorrect") {
+                return "歌曲密钥不匹配，或此加密变体尚不支持。".into();
+            }
+            if message.starts_with("unsupported QQ music") {
+                return "暂不支持此 QQ 音乐文件结构或加密版本。".into();
+            }
+            if message.starts_with("invalid QQ music")
+                || message.starts_with("QQ music file is truncated")
+            {
+                return "QQ 音乐文件或密钥格式无效，文件可能已损坏。".into();
+            }
             return message.into();
         }
         let mut output = message.to_owned();

@@ -62,12 +62,32 @@ impl Schedule {
     }
 }
 
+#[cfg(test)]
 pub(super) fn run(
     path: &Path,
     cancel: &Arc<AtomicBool>,
     options: Options,
     priority: &AtomicU64,
     client: api::Client,
+    report: impl FnMut(Event),
+) -> Result<()> {
+    run_with_cache(path, cancel, options, priority, client, None, report)
+}
+#[derive(Debug)]
+struct CachePending;
+impl std::fmt::Display for CachePending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Waiting for downloaded audio")
+    }
+}
+impl std::error::Error for CachePending {}
+pub(super) fn run_with_cache(
+    path: &Path,
+    cancel: &Arc<AtomicBool>,
+    options: Options,
+    priority: &AtomicU64,
+    client: api::Client,
+    cache: Option<Arc<AtomicU64>>,
     mut report: impl FnMut(Event),
 ) -> Result<()> {
     ensure!(
@@ -75,7 +95,22 @@ pub(super) fn run(
         "concurrency must be between 1 and 6"
     );
     let started = Instant::now();
-    let mut audio = audio::AudioChunks::open(path, cancel.clone(), client.chunk_seconds())?;
+    let mut audio = loop {
+        ensure!(!cancel.load(Ordering::Acquire), "字幕生成已取消");
+        let before = cache.as_ref().map_or(0, |c| c.load(Ordering::Acquire));
+        match audio::AudioChunks::open(path, cancel.clone(), client.chunk_seconds()) {
+            Ok(audio) => break audio,
+            Err(_)
+                if cache
+                    .as_ref()
+                    .is_some_and(|c| c.load(Ordering::Acquire) > before) =>
+            {
+                report(Event::WaitingCache);
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            Err(error) => return Err(error),
+        }
+    };
     let end = options.end.unwrap_or(audio.duration);
     if end <= 0.0 {
         // Unknown-length inputs retain the bounded sequential pipeline.
@@ -110,6 +145,7 @@ pub(super) fn run(
                 if reply.is_closed() {
                     continue;
                 }
+                let before = cache.as_ref().map_or(0, |c| c.load(Ordering::Acquire));
                 let result = (|| {
                     audio.set_range(start, Some(end))?;
                     let mut chunks = Vec::new();
@@ -121,6 +157,14 @@ pub(super) fn run(
                     }
                     Ok(chunks)
                 })();
+                let result = if cache
+                    .as_ref()
+                    .is_some_and(|c| c.load(Ordering::Acquire) > before)
+                {
+                    Err(anyhow::Error::new(CachePending))
+                } else {
+                    result
+                };
                 let _ = reply.send(result);
             }
         })?;
@@ -135,24 +179,33 @@ pub(super) fn run(
         total,
     });
     let outcome: Result<()> = runtime.block_on(async {
+        let (notice_tx,notice_rx)=crossbeam_channel::unbounded();
         let mut jobs = FuturesUnordered::new();
         let mut running: HashMap<u64, Arc<AtomicBool>> = HashMap::new();
         loop {
+            while let Ok(())=notice_rx.try_recv(){report(Event::WaitingCache);}
             ensure!(!cancel.load(Ordering::Acquire), "字幕生成已取消");
             while jobs.len() < options.concurrency {
                 let position = f64::from_bits(priority.load(Ordering::Acquire));
                 let Some((start, end)) = schedule.take(position) else {
                     break;
                 };
-                let (reply, decoded) = tokio::sync::oneshot::channel();
-                tx.send((start, end, reply))
-                    .context("subtitle decoder stopped")?;
+                let decode_tx=tx.clone();let notice=notice_tx.clone();
                 let client = &client;
                 let task_cancel = Arc::new(AtomicBool::new(false));
                 running.insert(start.to_bits(), task_cancel.clone());
                 jobs.push(async move {
                     let work = async {
-                    let chunks = decoded.await.context("subtitle decoder stopped")??;
+                    let chunks=loop{
+                        ensure!(!cancel.load(Ordering::Acquire)&&!task_cancel.load(Ordering::Acquire),"字幕生成已取消");
+                        let (reply,decoded)=tokio::sync::oneshot::channel();
+                        decode_tx.send((start,end,reply)).context("subtitle decoder stopped")?;
+                        match decoded.await.context("subtitle decoder stopped")? {
+                            Ok(chunks)=>break chunks,
+                            Err(error) if error.downcast_ref::<CachePending>().is_some()=>{let _=notice.send(());tokio::time::sleep(Duration::from_secs(2)).await;}
+                            Err(error)=>return Err(error),
+                        }
+                    };
                     let mut cues: Vec<Cue> = Vec::new();
                     let mut skipped = Vec::new();
                     for chunk in chunks {
@@ -239,6 +292,102 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn missing_cache_waits_and_recovers_without_skipping_subtitles() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let cache = Arc::new(AtomicU64::new(0));
+        let server_cache = cache.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let wav = audio::Chunk {
+            start: 0.0,
+            samples: vec![0.0; audio::RATE as usize * 3],
+        }
+        .wav();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut requests = 0;
+            while !server_stop.load(Ordering::Acquire) && Instant::now() < deadline {
+                let (mut socket, _) = match listener.accept() {
+                    Ok(c) => c,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(e) => panic!("{e}"),
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut headers = Vec::new();
+                while !headers.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let mut buffer = [0; 4096];
+                    let n = socket.read(&mut buffer).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    headers.extend_from_slice(&buffer[..n]);
+                }
+                requests += 1;
+                if requests == 1 {
+                    server_cache.fetch_add(1, Ordering::AcqRel);
+                    write!(socket,"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    continue;
+                }
+                let header = String::from_utf8_lossy(&headers).to_lowercase();
+                let offset = header
+                    .lines()
+                    .find_map(|l| l.strip_prefix("range: bytes="))
+                    .and_then(|r| r.split('-').next())
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(0)
+                    .min(wav.len());
+                let data = &wav[offset..];
+                let _ = write!(
+                    socket,
+                    "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    offset,
+                    wav.len() - 1,
+                    wav.len(),
+                    data.len()
+                );
+                let _ = socket.write_all(data);
+            }
+        });
+        let mut waiting = 0;
+        let mut skipped = 0;
+        let mut through = 0.0;
+        let result = run_with_cache(
+            Path::new(&format!("http://{address}/cached.wav")),
+            &Arc::new(AtomicBool::new(false)),
+            Options {
+                concurrency: 1,
+                ..Default::default()
+            },
+            &AtomicU64::new(0.0f64.to_bits()),
+            api::Client::mock("http://127.0.0.1:9".into()),
+            Some(cache),
+            |event| match event {
+                Event::WaitingCache => waiting += 1,
+                Event::Skipped { .. } => skipped += 1,
+                Event::Progress { through: t, .. } => through = t,
+                _ => {}
+            },
+        );
+        stop.store(true, Ordering::Release);
+        server.join().unwrap();
+        result.unwrap();
+        assert!(waiting >= 1);
+        assert_eq!(skipped, 0);
+        assert_eq!(through, 3.0);
+    }
     #[test]
     fn seek_frees_a_slot_without_waiting_for_old_http_responses() {
         use std::{

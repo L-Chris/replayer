@@ -1,6 +1,11 @@
 mod audio;
 mod clock;
 mod demux;
+mod music;
+#[cfg(test)]
+mod music_tests;
+#[cfg(test)]
+mod network_tests;
 mod session;
 mod video;
 pub use video::VideoFrame;
@@ -18,12 +23,14 @@ pub enum PlaybackState {
     Playing,
     Paused,
     Seeking,
+    Buffering,
     Draining,
     Ended,
     Failed,
 }
 #[derive(Clone, Debug)]
 pub struct Snapshot {
+    pub media: Option<Arc<crate::media::Info>>,
     pub state: PlaybackState,
     pub duration: f64,
     pub has_audio: bool,
@@ -32,6 +39,7 @@ pub struct Snapshot {
 }
 #[derive(Debug)]
 pub enum Event {
+    MediaInfo(Arc<crate::media::Info>),
     Opened,
     SeekCompleted { id: u64, position: f64 },
     Ended,
@@ -45,7 +53,9 @@ enum Command {
 struct Shared {
     snapshot: Mutex<Snapshot>,
     clock: Arc<Clock>,
-    requested: AtomicU64,
+    requested: Arc<AtomicU64>,
+    progressive: bool,
+    source_key: Option<String>,
     desired_playing: AtomicBool,
     stop: Arc<AtomicBool>,
     output: Arc<OutputControl>,
@@ -65,12 +75,22 @@ pub struct Player {
 impl Player {
     /// Returns immediately. Opened/Error report asynchronous initialization.
     pub fn open(path: String) -> Result<Self> {
+        Self::open_source(path, false, None)
+    }
+    pub fn open_progressive(path: String) -> Result<Self> {
+        Self::open_source(path, true, None)
+    }
+    pub fn open_with_qq_key(path: String, ekey: String) -> Result<Self> {
+        Self::open_source(path, false, Some(ekey))
+    }
+    fn open_source(path: String, progressive: bool, source_key: Option<String>) -> Result<Self> {
         let (commands, command_rx) = unbounded();
         let (frame_tx, frames) = bounded(3);
         let stale_frames = frames.clone();
         let (event_tx, events) = unbounded();
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(Snapshot {
+                media: None,
                 state: PlaybackState::Opening,
                 duration: 0.0,
                 has_audio: false,
@@ -78,7 +98,9 @@ impl Player {
                 epoch: 1,
             }),
             clock: Arc::new(Clock::new()),
-            requested: AtomicU64::new(1),
+            requested: Arc::new(AtomicU64::new(1)),
+            progressive,
+            source_key,
             desired_playing: AtomicBool::new(true),
             stop: Arc::new(AtomicBool::new(false)),
             output: Arc::new(OutputControl::new()),
@@ -153,7 +175,7 @@ impl Player {
     pub fn is_playing(&self) -> bool {
         matches!(
             self.snapshot().state,
-            PlaybackState::Playing | PlaybackState::Draining
+            PlaybackState::Playing | PlaybackState::Draining | PlaybackState::Buffering
         )
     }
     pub fn set_playing(&self, playing: bool) {

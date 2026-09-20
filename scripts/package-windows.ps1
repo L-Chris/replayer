@@ -25,8 +25,11 @@ try {
     $dlls | Copy-Item -Destination $stage
     Copy-Item -LiteralPath 'README.md' -Destination $stage
     Copy-Item -LiteralPath 'SUBTITLES.md' -Destination $stage
+    Copy-Item -LiteralPath 'MAGNET_PLAYBACK.md' -Destination $stage
+    Copy-Item -LiteralPath 'MUSIC_PLAYBACK.md' -Destination $stage
     Copy-Item -LiteralPath '.env.example' -Destination $stage
     Copy-Item -LiteralPath 'THIRD_PARTY.md' -Destination $stage
+    Copy-Item -LiteralPath 'licenses' -Destination $stage -Recurse
     Copy-Item -LiteralPath (Join-Path $ffmpeg 'LICENSE.txt') -Destination (Join-Path $stage 'FFmpeg-LICENSE.txt')
     $zip = Join-Path $output "replayer-$version-windows-x86_64.zip"
     Compress-Archive -LiteralPath @(Get-ChildItem -LiteralPath $stage -Force | ForEach-Object FullName) -DestinationPath $zip -Force

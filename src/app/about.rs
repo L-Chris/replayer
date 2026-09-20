@@ -12,10 +12,9 @@ impl App {
             env!("CARGO_PKG_VERSION")
         ));
         ui.label(
-            RichText::new(language.text(
-                "本地播放 · AI 字幕 · 专注观看",
-                "Local playback · AI subtitles · Just watch",
-            ))
+            RichText::new(
+                language.text("音乐 · 视频 · 磁链播放", "Music · Video · Magnet playback"),
+            )
             .color(MUTED),
         );
         ui.horizontal(|ui| {

@@ -136,6 +136,13 @@ impl AudioChunks {
                 Ordering::Relaxed,
             );
             let ts = ((start + self.origin) * 1e6) as i64;
+            unsafe {
+                let io = (*self.input.as_mut_ptr()).pb;
+                if !io.is_null() {
+                    (*io).error = 0;
+                    (*io).eof_reached = 0;
+                }
+            }
             self.input.seek(ts, ..ts)?;
             self.dec.flush();
             self.resampler = None;

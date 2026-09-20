@@ -45,6 +45,7 @@ pub struct Cue {
 }
 
 pub enum Event {
+    WaitingCache,
     Progress {
         through: f64,
         total: f64,
@@ -71,11 +72,12 @@ pub struct Job {
     priority: Arc<std::sync::atomic::AtomicU64>,
 }
 impl Job {
-    pub fn start_at(
+    pub fn start_with_cache(
         path: PathBuf,
         options: Options,
         position: f64,
         config: LlmConfig,
+        cache: Option<Arc<std::sync::atomic::AtomicU64>>,
     ) -> Result<Self> {
         let (tx, events) = unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -85,7 +87,7 @@ impl Job {
         let thread = std::thread::Builder::new()
             .name("replayer-subtitles".into())
             .spawn(move || {
-                let result = scheduler::run(
+                let result = scheduler::run_with_cache(
                     &path,
                     &worker_cancel,
                     options,
@@ -97,6 +99,7 @@ impl Job {
                             return;
                         }
                     },
+                    cache,
                     |event| {
                         let _ = tx.send(event);
                     },

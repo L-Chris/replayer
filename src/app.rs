@@ -15,7 +15,10 @@ use crate::settings::{Language, Settings};
 use crate::subtitles::{self, Cue, Job};
 mod about;
 mod design;
+mod magnets;
+mod music;
 mod preferences;
+mod qq;
 use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
 
 const BAR_BOTTOM: f32 = 68.0;
@@ -30,16 +33,35 @@ enum Act {
     ToggleMute,
     ToggleFullscreen,
     Open,
+    AddFiles,
+    Previous,
+    Next,
+    QueuePlay(usize),
+    QueueRemove(usize),
+    QueueMove(usize, bool),
     GenerateSubtitles,
     CancelSubtitles,
     ExportSubtitles,
 }
 
 pub struct App {
+    queue: crate::queue::Queue,
+    queue_open: bool,
+    media_info: Option<Arc<crate::media::Info>>,
+    artwork: Option<egui::TextureHandle>,
+    append_dialog: bool,
     settings: Settings,
     settings_open: bool,
     preferences_about: bool,
     updater: crate::updater::Updater,
+    torrent_job: Option<crate::torrent::Job>,
+    torrent_files: Vec<crate::torrent::File>,
+    torrent_selected: Option<crate::torrent::File>,
+    torrent_progress: crate::torrent::Progress,
+    torrent_status: String,
+    torrent_resolving: bool,
+    magnet_open: bool,
+    magnet_input: String,
     llm_draft: crate::settings::LlmSettings,
     llm_defaults: crate::settings::LlmSettings,
     env_key_available: bool,
@@ -56,9 +78,10 @@ pub struct App {
     subtitle_save_tx: Sender<Result<PathBuf, String>>,
     subtitle_save_rx: Receiver<Result<PathBuf, String>>,
     subtitle_metrics: String,
-    open_tx: Sender<Option<PathBuf>>,
-    open_rx: Receiver<Option<PathBuf>>,
+    open_tx: Sender<Option<Vec<PathBuf>>>,
+    open_rx: Receiver<Option<Vec<PathBuf>>>,
     dialog_open: bool,
+    qq_key_rx: Option<Receiver<qq::KeyResult>>,
     scrubbing: bool,
     scrub: f64,
     pending_seek: Option<(u64, f64)>,
@@ -74,7 +97,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<String>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, initial: Vec<String>) -> Self {
         setup_fonts(&cc.egui_ctx);
         design::apply(&cc.egui_ctx);
         let settings = Settings::load();
@@ -84,7 +107,20 @@ impl App {
         let (open_tx, open_rx) = unbounded();
         let (subtitle_save_tx, subtitle_save_rx) = unbounded();
         let mut app = Self {
+            queue: Default::default(),
+            queue_open: true,
+            media_info: None,
+            artwork: None,
+            append_dialog: false,
             updater: crate::updater::Updater::new(settings.auto_check_updates),
+            torrent_job: None,
+            torrent_files: Vec::new(),
+            torrent_selected: None,
+            torrent_progress: Default::default(),
+            torrent_status: String::new(),
+            torrent_resolving: false,
+            magnet_open: false,
+            magnet_input: String::new(),
             preferences_about: false,
             llm_draft: settings.llm.clone(),
             settings,
@@ -107,6 +143,7 @@ impl App {
             open_tx,
             open_rx,
             dialog_open: false,
+            qq_key_rx: None,
             scrubbing: false,
             scrub: 0.0,
             pending_seek: None,
@@ -120,13 +157,34 @@ impl App {
             last_stats: Instant::now(),
             stats: std::env::var_os("REPLAYER_STATS").is_some(),
         };
-        if let Some(p) = initial {
-            app.load(p);
+        if !initial.is_empty() {
+            app.open_items(initial, false);
         }
         app
     }
 
     fn load(&mut self, path: String) {
+        if path.trim().starts_with("magnet:") {
+            self.magnet_input = path;
+            self.start_magnet();
+            return;
+        }
+        self.torrent_job = None;
+        self.remove_torrent_queue();
+        self.torrent_selected = None;
+        self.torrent_files.clear();
+        self.torrent_resolving = false;
+        self.magnet_open = false;
+        self.torrent_status.clear();
+        self.torrent_progress = Default::default();
+        self.load_media(path, false);
+    }
+    fn load_media(&mut self, path: String, progressive: bool) {
+        self.load_media_with_key(path, progressive, None);
+    }
+    fn load_media_with_key(&mut self, path: String, progressive: bool, key: Option<String>) {
+        self.media_info = None;
+        self.artwork = None;
         self.subtitle_job = None;
         self.subtitles.clear();
         self.subtitle_status.clear();
@@ -145,7 +203,13 @@ impl App {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or(path.clone());
-        match Player::open(path) {
+        match if let Some(key) = key {
+            Player::open_with_qq_key(path, key)
+        } else if progressive {
+            Player::open_progressive(path)
+        } else {
+            Player::open(path)
+        } {
             Ok(p) => {
                 p.set_volume(if self.muted { 0.0 } else { self.vol });
                 self.player = Some(p);
@@ -163,15 +227,17 @@ impl App {
         let language = self.settings.language;
         thread::spawn(move || {
             let picked = rfd::FileDialog::new()
-                .set_title(language.text("选择视频文件", "Choose a video"))
+                .set_title(language.text("选择音频或视频", "Choose audio or video"))
                 .add_filter(
-                    language.text("视频", "Video"),
-                    &[
-                        "mp4", "mkv", "webm", "mov", "m4v", "avi", "ts", "m2ts", "flv", "wmv",
-                        "mpg", "mpeg", "3gp", "ogv",
-                    ],
+                    language.text("媒体文件", "Media files"),
+                    &crate::media::AUDIO_EXTENSIONS
+                        .iter()
+                        .chain(crate::media::VIDEO_EXTENSIONS)
+                        .chain(crate::media_source::QQ_EXTENSIONS)
+                        .copied()
+                        .collect::<Vec<_>>(),
                 )
-                .pick_file();
+                .pick_files();
             let _ = tx.send(picked);
         });
     }
@@ -185,25 +251,63 @@ impl eframe::App for App {
         let language = self.settings.language;
         let previous_concurrency = self.settings.subtitle_concurrency;
         self.updater.poll();
-        if let Some(path) = ctx.input(|i| {
+        self.poll_torrent();
+        self.poll_qq_key();
+        let dropped = ctx.input(|i| {
             i.raw
                 .dropped_files
-                .first()
-                .map(|file| file.path().to_path_buf())
-        }) {
-            self.load(path.to_string_lossy().into_owned());
+                .iter()
+                .map(|file| file.path().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        });
+        if !dropped.is_empty() {
+            self.open_items(dropped, ctx.input(|i| i.modifiers.shift));
         }
 
         if let Ok(picked) = self.open_rx.try_recv() {
             self.dialog_open = false;
-            if let Some(p) = picked {
-                self.load(p.to_string_lossy().into_owned());
+            if let Some(paths) = picked {
+                self.open_items(
+                    paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect(),
+                    self.append_dialog,
+                );
             }
+            self.append_dialog = false;
         }
 
+        let mut advance = false;
         if let Some(player) = &self.player {
             while let Some(event) = player.poll_event() {
                 match event {
+                    Event::MediaInfo(info) => {
+                        if let Some(title) = &info.title {
+                            self.title = title.clone();
+                            if let Some(i) = self.queue.current
+                                && let Some(item) = self.queue.items.get_mut(i)
+                            {
+                                item.title = title.clone();
+                            }
+                        }
+                        self.artwork = info.artwork.as_ref().map(|cover| {
+                            ctx.load_texture(
+                                "music-artwork",
+                                egui::ColorImage::from_rgba_unmultiplied(
+                                    [cover.width, cover.height],
+                                    &cover.rgba,
+                                ),
+                                egui::TextureOptions::LINEAR,
+                            )
+                        });
+                        if info.kind == crate::media::Kind::Music && self.fullscreen {
+                            self.fullscreen = false;
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                        }
+                        self.media_info = Some(info);
+                    }
+                    Event::Ended => advance = true,
                     Event::SeekCompleted { id, .. } => {
                         if self.pending_seek.is_some_and(|(pending, _)| pending == id) {
                             self.pending_seek = None;
@@ -214,10 +318,29 @@ impl eframe::App for App {
                 }
             }
         }
+        if advance && let Some(next) = self.queue.next_index() {
+            self.play_queue(next);
+        }
+        let music = self.is_music();
+        let sidebar_width = if self.queue_open && !self.queue.items.is_empty() {
+            (screen.width() * 0.38).clamp(220.0, 340.0)
+        } else {
+            0.0
+        };
+        let playback_rect =
+            Rect::from_min_max(screen.min, pos2(screen.max.x - sidebar_width, screen.max.y));
         let mut subtitle_done = false;
         if let Some(job) = &self.subtitle_job {
             while let Ok(event) = job.events.try_recv() {
                 match event {
+                    subtitles::Event::WaitingCache => {
+                        self.subtitle_status = language
+                            .text(
+                                "等待已下载音频，播放下载优先",
+                                "Waiting for cached audio; playback has priority",
+                            )
+                            .into()
+                    }
                     subtitles::Event::Cues(cues) => {
                         self.subtitles.extend(cues);
                         self.subtitles.sort_by(|a, b| a.start.total_cmp(&b.start));
@@ -334,7 +457,8 @@ impl eframe::App for App {
         if in_bar || self.scrubbing || dragging_toolbar || egui::Popup::is_any_open(&ctx) {
             self.last_toolbar_hover = Some(Instant::now());
         }
-        let show = self.player.is_none()
+        let show = music
+            || self.player.is_none()
             || self
                 .last_toolbar_hover
                 .is_some_and(|last| last.elapsed() < TOOLBAR_HIDE_DELAY);
@@ -352,21 +476,21 @@ impl eframe::App for App {
         painter.rect_filled(
             screen,
             CornerRadius::same(0),
-            if self.player.is_some() {
+            if self.player.is_some() && !music {
                 Color32::BLACK
             } else {
                 BACKGROUND
             },
         );
-        let mut video_rect = screen;
+        let mut video_rect = playback_rect;
         if let Some((texture, ar)) = self.video.current() {
-            let mut w = screen.width();
+            let mut w = playback_rect.width();
             let mut h = w / ar;
-            if h > screen.height() {
-                h = screen.height();
+            if h > playback_rect.height() {
+                h = playback_rect.height();
                 w = h * ar;
             }
-            let vr = Rect::from_center_size(screen.center(), vec2(w, h));
+            let vr = Rect::from_center_size(playback_rect.center(), vec2(w, h));
             video_rect = vr;
             painter.image(
                 texture,
@@ -377,22 +501,31 @@ impl eframe::App for App {
         }
 
         // Subtitles remain visible when the toolbars are hidden and follow seeks.
-        if self.subtitles_visible
+        if !music
+            && self.subtitles_visible
             && let Some(text) = subtitles::active(&self.subtitles, pos)
         {
             paint_subtitle(&painter, video_rect, screen, text);
         }
 
         // ---- video click area ----
-        let mut click_rect = screen;
+        let mut click_rect = playback_rect;
         if self.player.is_some() {
             click_rect.max.y = screen.max.y - BAR_BOTTOM;
             click_rect.min.y = screen.min.y + BAR_TOP;
         }
-        let vresp = root.interact(click_rect, Id::new("video_click"), Sense::click());
+        let vresp = root.interact(
+            click_rect,
+            Id::new("video_click"),
+            if music {
+                Sense::hover()
+            } else {
+                Sense::click()
+            },
+        );
 
         let mut act = Act::None;
-        if self.player.is_some() && !self.settings_open {
+        if self.player.is_some() && !music && !self.settings_open && !self.magnet_open {
             if vresp.double_clicked() {
                 act = Act::ToggleFullscreen;
             } else if vresp.clicked() {
@@ -404,16 +537,22 @@ impl eframe::App for App {
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             if self.settings_open {
                 self.settings_open = false;
+            } else if self.magnet_open {
+                self.magnet_open = false;
             } else {
                 self.fullscreen = false;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             }
         }
-        if self.player.is_some() && !self.settings_open && !ctx.egui_wants_keyboard_input() {
+        if self.player.is_some()
+            && !self.settings_open
+            && !self.magnet_open
+            && !ctx.egui_wants_keyboard_input()
+        {
             if ctx.input(|i| i.key_pressed(Key::Space)) {
                 act = Act::TogglePlay;
             }
-            if ctx.input(|i| i.key_pressed(Key::F)) {
+            if !music && ctx.input(|i| i.key_pressed(Key::F)) {
                 act = Act::ToggleFullscreen;
             }
             if ctx.input(|i| i.key_pressed(Key::M)) {
@@ -454,7 +593,7 @@ impl eframe::App for App {
                     if self.player.is_some()
                         && ui
                             .add(open_button(a, language))
-                            .on_hover_text(language.text("打开视频文件", "Open a video"))
+                            .on_hover_text(language.text("打开媒体文件", "Open media files"))
                             .clicked()
                     {
                         act = Act::Open;
@@ -473,6 +612,9 @@ impl eframe::App for App {
                         self.config_message.clear();
                     }
                     if self.player.is_some() {
+                        if ui.button(language.text("磁链", "Magnet")).clicked(){self.magnet_open=true;}
+                        if ui.button(language.text("队列", "Queue")).clicked(){self.queue_open = !self.queue_open;}
+                        if !music {
                         let caption = if self.subtitle_job.is_some() {
                             language.text("字幕 · 生成中", "Subtitles · generating")
                         } else {
@@ -529,11 +671,11 @@ impl eframe::App for App {
                                         ui.close();
                                     }
                                 } else if ui
-                                    .button(if self.subtitles.is_empty() {
+                                    .add(egui::Button::new(if self.subtitles.is_empty() {
                                         language.text("生成 AI 字幕", "Generate AI subtitles")
                                     } else {
                                         language.text("重新生成字幕", "Regenerate subtitles")
-                                    })
+                                    }))
                                     .on_hover_text(language.text(
                                         "将当前视频的音频分段发送到配置的模型服务",
                                         "Send audio chunks to the configured model service",
@@ -542,6 +684,9 @@ impl eframe::App for App {
                                 {
                                     act = Act::GenerateSubtitles;
                                     ui.close();
+                                }
+                                if self.torrent_selected.is_some()&&!self.torrent_progress.finished {
+                                    ui.small(language.text("只读取已下载音频；数据不足时等待，不抢占播放下载", "Uses downloaded audio only; waits for missing data without competing with playback"));
                                 }
                                 if ui
                                     .add_enabled(
@@ -558,6 +703,8 @@ impl eframe::App for App {
                             },
                         );
                     }
+                    }
+                    if self.player.is_none() && !self.queue.items.is_empty() && ui.button(language.text("队列", "Queue")).clicked(){self.queue_open = !self.queue_open;}
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                         ui.add(
                             egui::Label::new(
@@ -574,7 +721,7 @@ impl eframe::App for App {
         }
 
         // ---- bottom bar ----
-        if a > 0.02 && self.player.is_some() {
+        if a > 0.02 && self.player.is_some() && !music {
             let has_audio = self.player.as_ref().map(|p| p.has_audio()).unwrap_or(false);
             let (mut vol, mut muted) = (self.vol, self.muted);
             let mut scrubbing = self.scrubbing;
@@ -666,11 +813,28 @@ impl eframe::App for App {
             self.scrubbing = scrubbing;
         }
 
+        if music {
+            self.music_view(root, screen, playback_rect, &mut act);
+        }
+        if sidebar_width > 0.0 {
+            self.queue_sidebar(
+                root,
+                Rect::from_min_max(
+                    pos2(playback_rect.max.x, screen.min.y + BAR_TOP),
+                    pos2(
+                        screen.max.x,
+                        screen.max.y - if music { 108.0 } else { BAR_BOTTOM },
+                    ),
+                ),
+                &mut act,
+            );
+        }
+
         // ---- empty state ----
         if self.player.is_none() {
             let e_rect = Rect::from_center_size(
-                screen.center() + vec2(0.0, 12.0),
-                vec2(screen.width().min(460.0) - 32.0, 270.0),
+                playback_rect.center() + vec2(0.0, 12.0),
+                vec2(playback_rect.width().min(460.0) - 32.0, 270.0),
             );
             let mut eui = root.new_child(
                 UiBuilder::new()
@@ -684,16 +848,17 @@ impl eframe::App for App {
                 draw_play(ui.painter(), logo.shrink(19.0), ACCENT);
                 ui.add_space(20.0);
                 ui.label(
-                    RichText::new(language.text("让画面成为主角", "Make room for the picture"))
-                        .size(28.0)
-                        .strong(),
+                    RichText::new(
+                        language.text("音乐与画面，都在这里", "Your music. Your movies."),
+                    )
+                    .size(28.0)
+                    .strong(),
                 );
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new(language.text(
-                        "本地播放 · AI 字幕 · 专注观看",
-                        "Local playback · AI subtitles · Just watch",
-                    ))
+                    RichText::new(
+                        language.text("音乐 · 视频 · 磁链播放", "Music · Video · Magnet playback"),
+                    )
                     .color(MUTED)
                     .size(14.0),
                 );
@@ -704,20 +869,41 @@ impl eframe::App for App {
                 {
                     act = Act::Open;
                 }
+                ui.add_space(4.0);
+                if ui
+                    .button(language.text("打开磁链", "Open magnet link"))
+                    .clicked()
+                {
+                    self.magnet_open = true;
+                }
                 ui.add_space(14.0);
                 ui.label(
-                    RichText::new(language.text("或将视频拖到这里", "Or drop a video here"))
-                        .color(MUTED)
-                        .size(13.0),
+                    RichText::new(language.text(
+                        "拖入多个文件 · Shift 拖入追加队列",
+                        "Drop files · Shift-drop to add to queue",
+                    ))
+                    .color(MUTED)
+                    .size(13.0),
                 );
             });
         }
 
         // ---- error ----
         if let Some(e) = self.error.clone() {
+            let qq_file = self
+                .source
+                .as_deref()
+                .is_some_and(crate::media_source::is_qq);
+            let error_area = if qq_file { playback_rect } else { screen };
             let r_rect = Rect::from_center_size(
-                pos2(screen.center().x, screen.min.y + 70.0),
-                vec2(420.0, 44.0),
+                pos2(
+                    error_area.center().x,
+                    screen.min.y + if qq_file { 140.0 } else { 70.0 },
+                ),
+                vec2(
+                    560.0_f32.min(error_area.width() - 24.0),
+                    if qq_file { 150.0 } else { 44.0 },
+                ),
             );
             painter.rect_filled(
                 r_rect,
@@ -740,10 +926,35 @@ impl eframe::App for App {
                     .color(Color32::WHITE)
                     .size(13.0),
                 );
+                if qq_file {
+                    ui.label(language.text("需要密钥的歌曲可导入对应的 .ekey 文本文件，仅用于本次播放。", "Import the song's .ekey text file when a key is required. Used for this playback only."));
+                    if ui.add_enabled(self.qq_key_rx.is_none(), egui::Button::new(language.text("导入歌曲密钥并重试", "Import song key and retry"))).clicked() {
+                        self.import_qq_key();
+                    }
+                }
             });
         }
 
         self.preferences(&ctx);
+        self.magnet_dialog(&ctx);
+        if let Some(player) = &self.player {
+            let state = player.snapshot().state;
+            if matches!(
+                state,
+                PlaybackState::Opening | PlaybackState::Seeking | PlaybackState::Buffering
+            ) && self.torrent_selected.is_some()
+                && !self.magnet_open
+                && !self.settings_open
+            {
+                painter.text(
+                    playback_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    language.text("正在缓冲…", "Buffering…"),
+                    egui::FontId::proportional(18.0),
+                    Color32::WHITE,
+                );
+            }
+        }
 
         // ---- apply action ----
         if language != self.settings.language
@@ -804,11 +1015,60 @@ impl eframe::App for App {
                 self.fullscreen = !self.fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
             }
-            Act::Open => self.open_dialog(),
+            Act::Open => {
+                if !self.dialog_open {
+                    self.append_dialog = false;
+                    self.open_dialog();
+                }
+            }
+            Act::AddFiles => {
+                if !self.dialog_open {
+                    self.append_dialog = true;
+                    self.open_dialog();
+                }
+            }
+            Act::Next => {
+                if let Some(i) = self.queue.next_index() {
+                    self.play_queue(i);
+                }
+            }
+            Act::Previous => {
+                if music && pos > 3.0 {
+                    if let Some(p) = &self.player {
+                        self.pending_seek = Some((p.seek(0.0), 0.0));
+                    }
+                } else if let Some(i) = self.queue.previous_index() {
+                    self.play_queue(i);
+                }
+            }
+            Act::QueuePlay(i) => self.play_queue(i),
+            Act::QueueRemove(i) => self.queue.remove(i),
+            Act::QueueMove(i, up) => self.queue.move_item(i, up),
             Act::GenerateSubtitles => {
-                if let Some(path) = &self.source {
+                let subtitle_source = self
+                    .torrent_selected
+                    .as_ref()
+                    .filter(|_| self.torrent_progress.finished)
+                    .map(|file| file.path.clone())
+                    .or_else(|| {
+                        self.source.as_ref().map(|source| {
+                            if self.torrent_selected.is_some() {
+                                PathBuf::from(format!("{}/cached", source.to_string_lossy()))
+                            } else {
+                                source.clone()
+                            }
+                        })
+                    });
+                let cache = if self.torrent_selected.is_some() && !self.torrent_progress.finished {
+                    self.torrent_job
+                        .as_ref()
+                        .map(|job| job.cache_misses.clone())
+                } else {
+                    None
+                };
+                if let Some(path) = &subtitle_source {
                     match subtitles::LlmConfig::load_with(&self.settings.llm).and_then(|config| {
-                        Job::start_at(
+                        Job::start_with_cache(
                             path.clone(),
                             subtitles::Options {
                                 language: self.settings.language,
@@ -817,6 +1077,7 @@ impl eframe::App for App {
                             },
                             pos,
                             config,
+                            cache,
                         )
                     }) {
                         Ok(job) => {
@@ -896,7 +1157,9 @@ impl eframe::App for App {
                 PlaybackState::Opening | PlaybackState::Seeking
             )
         });
-        let delay = if (a - target).abs() > 0.001 {
+        let delay = if music {
+            if playing { 0.1 } else { 0.25 }
+        } else if (a - target).abs() > 0.001 {
             1.0 / 60.0
         } else if transitioning {
             0.01
@@ -976,7 +1239,7 @@ fn paint_subtitle(painter: &Painter, video: Rect, screen: Rect, text: &str) {
 
 fn open_button(a: f32, language: Language) -> egui::Button<'static> {
     egui::Button::new(
-        RichText::new(language.text("打开视频", "Open video"))
+        RichText::new(language.text("打开文件", "Open files"))
             .color(Color32::from_white_alpha((235.0 * a) as u8))
             .size(13.0),
     )

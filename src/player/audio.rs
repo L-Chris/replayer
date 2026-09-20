@@ -3,7 +3,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use super::clock::Clock;
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
+#[cfg(not(test))]
+use anyhow::{Context, bail};
+#[cfg(not(test))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ffmpeg::{ChannelLayout, codec, format, frame, software};
 use ffmpeg_next as ffmpeg;
@@ -37,8 +40,11 @@ pub struct AudioOut {
     pub rate: u32,
     pub producer: Producer<Sample>,
     pub capacity: usize,
-    _stream: cpal::Stream,
+    _stream: Option<cpal::Stream>,
+    #[cfg(test)]
+    simulation_stop: Arc<AtomicBool>,
 }
+#[cfg(not(test))]
 pub fn open_output(
     clock: Arc<Clock>,
     control: Arc<OutputControl>,
@@ -137,8 +143,60 @@ pub fn open_output(
         rate,
         producer,
         capacity,
-        _stream: stream,
+        _stream: Some(stream),
     })
+}
+#[cfg(test)]
+pub fn open_output(
+    clock: Arc<Clock>,
+    control: Arc<OutputControl>,
+    _volume: Arc<AtomicU32>,
+) -> Result<AudioOut> {
+    let rate = 48000;
+    let capacity = 24000;
+    let (producer, mut consumer) = RingBuffer::<Sample>::new(capacity);
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = stop.clone();
+    std::thread::spawn(move || {
+        while !worker_stop.load(Ordering::Acquire) {
+            let epoch = control.epoch.load(Ordering::Acquire);
+            while consumer.peek().is_ok_and(|s| s.epoch < epoch) {
+                let _ = consumer.pop();
+            }
+            if control.enabled.load(Ordering::Acquire) {
+                let mut last = None;
+                for _ in 0..240 {
+                    if consumer.peek().is_ok_and(|s| s.epoch == epoch) {
+                        last = consumer.pop().ok();
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(sample) = last {
+                    assert!(sample.pcm.iter().all(|v| v.is_finite()));
+                    clock.progress.publish(
+                        epoch,
+                        sample.pts + 1.0 / rate as f64,
+                        clock.wall() + 0.005,
+                    );
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    });
+    Ok(AudioOut {
+        rate,
+        capacity,
+        producer,
+        _stream: None,
+        simulation_stop: stop,
+    })
+}
+#[cfg(test)]
+impl Drop for AudioOut {
+    fn drop(&mut self) {
+        self.simulation_stop.store(true, Ordering::Release);
+    }
 }
 
 pub struct AudioPipeline {
@@ -156,10 +214,11 @@ pub struct AudioPipeline {
 }
 impl AudioPipeline {
     pub fn new(params: codec::Parameters, tb: f64, origin: f64, rate: u32) -> Result<Self> {
-        let dec = codec::context::Context::from_parameters(params)?
+        let mut dec = codec::context::Context::from_parameters(params)?
             .decoder()
             .audio()?;
-        let layout = if dec.channel_layout().channels() > 0 {
+        dec.set_packet_time_base(ffmpeg::Rational::from(tb));
+        let layout = if !dec.channel_layout().is_empty() {
             dec.channel_layout()
         } else {
             ChannelLayout::default(dec.channels() as i32)
@@ -253,6 +312,9 @@ impl AudioPipeline {
                 Ok(()) => {}
                 Err(e) if super::again(e) || e == ffmpeg::Error::Eof => break,
                 Err(e) => return Err(e.into()),
+            }
+            if input.channel_layout().is_empty() {
+                input.set_channel_layout(ChannelLayout::default(input.channels() as i32));
             }
             let pts = input
                 .timestamp()
