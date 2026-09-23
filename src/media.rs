@@ -59,3 +59,24 @@ pub fn decode_artwork(bytes: &[u8]) -> Option<Arc<Artwork>> {
         rgba: image.into_raw(),
     }))
 }
+/// Extracts embedded cover art without starting playback. Runs off the UI thread.
+pub fn probe_artwork(path: &str) -> Option<Arc<Artwork>> {
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let prepared = crate::media_source::prepare(path, &stop, None).ok()?;
+    ffmpeg_next::init().ok()?;
+    let input = ffmpeg_next::format::input(prepared.path()).ok()?;
+    input
+        .streams()
+        .find(|stream| {
+            stream
+                .disposition()
+                .contains(ffmpeg_next::format::stream::Disposition::ATTACHED_PIC)
+        })
+        .and_then(|stream| {
+            let packet = unsafe { &(*stream.as_ptr()).attached_pic };
+            if packet.data.is_null() || packet.size <= 0 || packet.size > 8 * 1024 * 1024 {
+                return None;
+            }
+            decode_artwork(unsafe { std::slice::from_raw_parts(packet.data, packet.size as usize) })
+        })
+}

@@ -25,11 +25,12 @@ try {
     cargo build --locked --bin replayer
     if ($LASTEXITCODE -ne 0) { throw 'Preview build failed; no executable was launched.' }
     if (-not $NoLaunch) {
+        # UseShellExecute detaches the child from this shell's pipe handles;
+        # otherwise the launched app keeps stdout open and callers block forever.
         $start = New-Object System.Diagnostics.ProcessStartInfo
         $start.FileName = $previewExe
         $start.WorkingDirectory = $repoRoot
-        $start.UseShellExecute = $false
-        $start.CreateNoWindow = $true
+        $start.UseShellExecute = $true
         if ($mediaPath) { $start.Arguments = '"' + $mediaPath + '"' }
         $previewProcess = [Diagnostics.Process]::Start($start)
         Write-Host "Preview: $previewExe (PID $($previewProcess.Id))"

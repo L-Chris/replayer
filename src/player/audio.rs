@@ -281,7 +281,8 @@ impl AudioPipeline {
                     Some(p) => self.dec.send_packet(p)?,
                     None => self.dec.send_eof()?,
                 }
-            } else {
+            } else if packet.is_none() || e != ffmpeg::Error::InvalidData {
+                // A corrupt packet is skipped; the decoder resyncs downstream.
                 return Err(e.into());
             }
         }
@@ -305,17 +306,39 @@ impl AudioPipeline {
             ChannelLayout::STEREO,
         )
     }
+    /// Corrupt streams can decode a frame with new parameters; swr would fail
+    /// with INPUT_CHANGED, so rebuild the resampler around the change instead.
+    fn match_resampler(&mut self, input: &frame::Audio) -> Result<()> {
+        let current = *self.resampler.input();
+        if current.format == input.format()
+            && current.rate == input.rate()
+            && current.channel_layout == input.channel_layout()
+        {
+            return Ok(());
+        }
+        self.resampler = software::resampling::Context::get(
+            input.format(),
+            input.channel_layout(),
+            input.rate(),
+            format::Sample::F32(format::sample::Type::Packed),
+            ChannelLayout::STEREO,
+            self.rate,
+        )?;
+        Ok(())
+    }
     fn receive(&mut self, epoch: u64, target: f64) -> Result<()> {
         let mut input = frame::Audio::empty();
         loop {
             match self.dec.receive_frame(&mut input) {
                 Ok(()) => {}
                 Err(e) if super::again(e) || e == ffmpeg::Error::Eof => break,
+                Err(ffmpeg::Error::InvalidData) => continue,
                 Err(e) => return Err(e.into()),
             }
             if input.channel_layout().is_empty() {
                 input.set_channel_layout(ChannelLayout::default(input.channels() as i32));
             }
+            self.match_resampler(&input)?;
             let pts = input
                 .timestamp()
                 .or(input.pts())

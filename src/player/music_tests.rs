@@ -103,6 +103,45 @@ fn music_formats_tags_cover_and_audio_eof() {
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
+fn music_with_corrupt_frames_and_trailing_garbage_still_ends() {
+    let root =
+        std::env::temp_dir().join(format!("replayer-music-corrupt-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("song.mp3");
+    ffmpeg(
+        &[
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=44100:duration=0.7",
+            "-c:a",
+            "libmp3lame",
+        ],
+        &path,
+    );
+    let mut bytes = std::fs::read(&path).unwrap();
+    // Corrupt one frame in the middle of the stream.
+    let middle = bytes.len() / 2;
+    for slot in &mut bytes[middle + 8..middle + 64] {
+        *slot = slot.wrapping_mul(31).wrapping_add(7);
+    }
+    // Append a frame sync with a garbage payload, then trailing junk.
+    bytes.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x64]);
+    bytes.extend((0..413u32).map(|i| (i % 251) as u8));
+    bytes.extend((0..300u32).map(|i| (i.wrapping_mul(7) % 256) as u8));
+    std::fs::write(&path, &bytes).unwrap();
+    let player = Player::open(path.to_string_lossy().into_owned()).unwrap();
+    await_state(&player, |s| s.state == PlaybackState::Ended);
+    assert!(
+        (player.position() - 0.7).abs() < 0.15,
+        "{}",
+        player.position()
+    );
+    drop(player);
+    std::thread::sleep(Duration::from_millis(30));
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
 fn music_pause_seek_replay_and_device_failure() {
     let path =
         std::env::temp_dir().join(format!("replayer-music-seek-{}.wav", uuid::Uuid::new_v4()));

@@ -227,6 +227,17 @@ impl AudioChunks {
                         decoded
                             .set_channel_layout(ChannelLayout::default(decoded.channels() as i32));
                     }
+                    // Corrupt frames can arrive with new parameters; rebuild instead
+                    // of letting swr fail with INPUT_CHANGED.
+                    if let Some(resampler) = &self.resampler {
+                        let current = *resampler.input();
+                        if current.format != decoded.format()
+                            || current.rate != decoded.rate()
+                            || current.channel_layout != decoded.channel_layout()
+                        {
+                            self.resampler = None;
+                        }
+                    }
                     if self.resampler.is_none() {
                         self.resampler = Some(software::resampling::Context::get(
                             decoded.format(),
@@ -267,6 +278,9 @@ impl AudioChunks {
                     continue;
                 }
                 Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {}
+                // Corrupt frames are skipped; during drain the decoder still reaches EOF.
+                Err(ffmpeg::Error::InvalidData) if self.input_eof => continue,
+                Err(ffmpeg::Error::InvalidData) => {}
                 Err(e) => return Err(e).context("字幕音轨解码失败"),
             }
             ensure!(!self.input_eof, "音频解码器在 EOF 后未完成排空");
@@ -279,8 +293,10 @@ impl AudioChunks {
                 let mut packet = ffmpeg::Packet::empty();
                 match packet.read(&mut self.input) {
                     Ok(()) if packet.stream() == self.index => {
-                        self.dec.send_packet(&packet)?;
-                        break;
+                        match self.dec.send_packet(&packet) {
+                            Ok(()) | Err(ffmpeg::Error::InvalidData) => break,
+                            Err(e) => return Err(e).context("字幕音轨解码失败"),
+                        }
                     }
                     Ok(()) | Err(ffmpeg::Error::InvalidData) => continue,
                     Err(ffmpeg::Error::Eof) => {

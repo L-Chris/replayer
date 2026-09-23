@@ -87,7 +87,8 @@ impl VideoPipeline {
                     Some(p) => self.dec.send_packet(p)?,
                     None => self.dec.send_eof()?,
                 }
-            } else {
+            } else if packet.is_none() || e != ffmpeg::Error::InvalidData {
+                // A corrupt packet is skipped; the decoder resyncs downstream.
                 return Err(e.into());
             }
         }
@@ -99,6 +100,7 @@ impl VideoPipeline {
             match self.dec.receive_frame(&mut decoded) {
                 Ok(()) => {}
                 Err(e) if super::again(e) || e == ffmpeg::Error::Eof => break,
+                Err(ffmpeg::Error::InvalidData) => continue,
                 Err(e) => return Err(e).context("decode video"),
             }
             let pts = decoded

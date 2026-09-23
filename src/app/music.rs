@@ -69,24 +69,29 @@ impl App {
             }
         }
     }
-    fn queue_contents(&self, ui: &mut Ui, act: &mut Act) {
+    fn queue_contents(&mut self, ui: &mut Ui, act: &mut Act) {
         let language = self.settings.language;
-        ui.horizontal(|ui| {
-            if ui.button(language.text("添加文件", "Add files")).clicked() {
-                *act = Act::AddFiles;
-            }
-        });
-        ui.add_space(8.0);
         if self.queue.items.is_empty() {
             ui.label(language.text("队列为空", "Queue is empty"));
         }
+        let mut rects: Vec<(usize, Rect)> = Vec::new();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (index, item) in self.queue.items.iter().enumerate() {
                     let current = self.queue.current == Some(index);
+                    let path = match &item.source {
+                        Source::File(path) => Some(path.clone()),
+                        Source::Torrent(_) => None,
+                    };
+                    if let Some(path) = &path
+                        && !self.art_cache.contains_key(path)
+                    {
+                        self.art_cache.insert(path.clone(), None);
+                        let _ = self.art_requests.send(path.clone());
+                    }
                     ui.push_id(index, |ui| {
-                        egui::Frame::new()
+                        let out = egui::Frame::new()
                             .fill(if current {
                                 Color32::from_rgb(34, 50, 77)
                             } else {
@@ -97,17 +102,78 @@ impl App {
                             .show(ui, |ui| {
                                 ui.set_min_width(ui.available_width());
                                 ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 6.0;
-                                    ui.spacing_mut().button_padding = vec2(4.0, 4.0);
-                                    ui.spacing_mut().interact_size = vec2(24.0, 28.0);
-                                    if ui
-                                        .add(egui::Button::new("▶"))
-                                        .on_hover_text(language.text("播放此项", "Play item"))
-                                        .clicked()
+                                    ui.spacing_mut().item_spacing.x = 8.0;
+                                    let mut tex = None;
+                                    if let Some(path) = &path
+                                        && let Some(Some(art)) = self.art_cache.get(path)
                                     {
-                                        *act = Act::QueuePlay(index);
+                                        let ctx = ui.ctx().clone();
+                                        let art = art.clone();
+                                        tex = Some(
+                                            self.art_textures
+                                                .entry(path.clone())
+                                                .or_insert_with(|| {
+                                                    ctx.load_texture(
+                                                        format!("queue-art-{index}"),
+                                                        egui::ColorImage::from_rgba_unmultiplied(
+                                                            [art.width, art.height],
+                                                            &art.rgba,
+                                                        ),
+                                                        egui::TextureOptions::LINEAR,
+                                                    )
+                                                })
+                                                .clone(),
+                                        );
                                     }
-                                    let label_width = (ui.available_width() - 100.0).max(40.0);
+                                    let playing = current
+                                        && self.player.as_ref().is_some_and(|p| p.is_playing());
+                                    let (tile, resp) =
+                                        ui.allocate_exact_size(Vec2::splat(32.0), Sense::click());
+                                    let painter = ui.painter();
+                                    painter.rect_filled(
+                                        tile,
+                                        CornerRadius::same(4),
+                                        Color32::from_rgb(34, 41, 55),
+                                    );
+                                    if let Some(tex) = &tex {
+                                        painter.image(
+                                            tex.id(),
+                                            tile,
+                                            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                                            Color32::WHITE,
+                                        );
+                                        painter.rect_filled(
+                                            tile,
+                                            CornerRadius::same(4),
+                                            Color32::from_black_alpha(if resp.hovered() {
+                                                70
+                                            } else {
+                                                110
+                                            }),
+                                        );
+                                    }
+                                    if playing {
+                                        draw_pause(painter, tile.shrink(9.0), Color32::WHITE);
+                                    } else {
+                                        draw_play(painter, tile.shrink(9.0), Color32::WHITE);
+                                    }
+                                    let tip = if current {
+                                        if playing {
+                                            language.text("暂停", "Pause")
+                                        } else {
+                                            language.text("播放", "Play")
+                                        }
+                                    } else {
+                                        language.text("播放此项", "Play item")
+                                    };
+                                    if resp.on_hover_text(tip).clicked() {
+                                        *act = if current {
+                                            Act::TogglePlay
+                                        } else {
+                                            Act::QueuePlay(index)
+                                        };
+                                    }
+                                    let label_width = (ui.available_width() - 40.0).max(40.0);
                                     ui.allocate_ui_with_layout(
                                         vec2(label_width, 32.0),
                                         Layout::left_to_right(Align::Center),
@@ -124,23 +190,6 @@ impl App {
                                     .inner
                                     .on_hover_text(&item.title);
                                     if ui
-                                        .add_enabled(index > 0, egui::Button::new("↑").small())
-                                        .on_hover_text(language.text("上移", "Move up"))
-                                        .clicked()
-                                    {
-                                        *act = Act::QueueMove(index, true);
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            index + 1 < self.queue.items.len(),
-                                            egui::Button::new("↓").small(),
-                                        )
-                                        .on_hover_text(language.text("下移", "Move down"))
-                                        .clicked()
-                                    {
-                                        *act = Act::QueueMove(index, false);
-                                    }
-                                    if ui
                                         .add_enabled(!current, egui::Button::new("×").small())
                                         .on_hover_text(language.text(
                                             "从队列移除（不删除文件）",
@@ -152,10 +201,53 @@ impl App {
                                     }
                                 });
                             });
-                        ui.add_space(4.0);
+                        rects.push((index, out.response.rect));
                     });
+                    ui.add_space(4.0);
                 }
             });
+        let (pressed, released, hover) = ui.input(|i| {
+            (
+                i.pointer.any_pressed(),
+                i.pointer.any_released(),
+                i.pointer.hover_pos(),
+            )
+        });
+        if pressed
+            && self.queue_drag.is_none()
+            && let Some(pointer) = hover
+        {
+            self.queue_drag = rects
+                .iter()
+                .find(|(_, rect)| rect.contains(pointer))
+                .map(|(index, _)| *index);
+        }
+        if let Some(drag) = self.queue_drag {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            let target = hover.map_or(drag, |pointer| {
+                rects
+                    .iter()
+                    .filter(|(_, rect)| pointer.y > rect.center().y)
+                    .count()
+            });
+            if let Some((_, anchor)) = rects.get(target).or_else(|| rects.last()) {
+                let y = if target < rects.len() {
+                    anchor.min.y - 2.0
+                } else {
+                    anchor.max.y + 2.0
+                };
+                ui.painter().line_segment(
+                    [pos2(anchor.min.x, y), pos2(anchor.max.x, y)],
+                    Stroke::new(2.0, ACCENT),
+                );
+            }
+            if released {
+                if target != drag && target != drag + 1 {
+                    self.queue.relocate(drag, target);
+                }
+                self.queue_drag = None;
+            }
+        }
     }
     pub(super) fn queue_sidebar(&mut self, root: &mut Ui, rect: Rect, act: &mut Act) {
         root.painter().rect_filled(rect, 0, SURFACE);
@@ -172,11 +264,11 @@ impl App {
         ui.set_clip_rect(rect.shrink(1.0));
         ui.horizontal(|ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .button(self.settings.language.text("收起", "Hide"))
+                if icon_button(ui, 24.0, 1.0, draw_add)
+                    .on_hover_text(self.settings.language.text("添加文件", "Add files"))
                     .clicked()
                 {
-                    self.queue_open = false;
+                    *act = Act::AddFiles;
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(
@@ -319,63 +411,132 @@ impl App {
             }
             ui.label(RichText::new(fmt_time(duration)).monospace());
         });
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    self.queue.previous_index().is_some() || position > 3.0,
-                    egui::Button::new(language.text("上一首", "Previous")),
-                )
+        let row = ui.available_rect_before_wrap();
+        let row = Rect::from_min_max(row.min, pos2(row.max.x, row.min.y + 46.0));
+        ui.allocate_rect(row, Sense::hover());
+        let has_prev = self.queue.previous_index().is_some() || position > 3.0;
+        let has_next = self.queue.next_index().is_some();
+        let cluster = 26.0 + 16.0 + 30.0 + 16.0 + 46.0 + 16.0 + 30.0 + 16.0 + 26.0;
+        let mut transport = root.new_child(
+            UiBuilder::new()
+                .id_salt("music-transport")
+                .max_rect(Rect::from_center_size(
+                    pos2(row.center().x, row.center().y),
+                    vec2(cluster, row.height()),
+                ))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        transport.spacing_mut().item_spacing.x = 16.0;
+        let single = self.loop_single;
+        let mode = icon_button(&mut transport, 26.0, 1.0, |p, r, c| {
+            draw_repeat(p, r, if single { ACCENT } else { c }, single)
+        });
+        if mode
+            .on_hover_text(if single {
+                language.text("单曲循环", "Repeat one")
+            } else {
+                language.text("列表循环", "Repeat list")
+            })
+            .clicked()
+        {
+            self.loop_single = !single;
+        }
+        if has_prev {
+            let prev = icon_button(&mut transport, 30.0, 1.0, draw_prev);
+            if prev
+                .on_hover_text(language.text("上一首", "Previous"))
                 .clicked()
             {
                 *act = Act::Previous;
             }
-            if ui
-                .add(
-                    egui::Button::new(if playing {
-                        language.text("暂停", "Pause")
-                    } else {
-                        language.text("播放", "Play")
-                    })
-                    .fill(ACCENT)
-                    .min_size(vec2(76.0, 34.0)),
-                )
-                .clicked()
-            {
-                *act = Act::TogglePlay;
-            }
-            if ui
-                .add_enabled(
-                    self.queue.next_index().is_some(),
-                    egui::Button::new(language.text("下一首", "Next")),
-                )
+        } else {
+            disabled_icon_button(&mut transport, 30.0, draw_prev);
+        }
+        let play = play_circle_button(&mut transport, 46.0, playing);
+        let play = play.on_hover_text(if playing {
+            language.text("暂停", "Pause")
+        } else {
+            language.text("播放", "Play")
+        });
+        if play.clicked() {
+            *act = Act::TogglePlay;
+        }
+        if has_next {
+            let next = icon_button(&mut transport, 30.0, 1.0, draw_next);
+            if next
+                .on_hover_text(language.text("下一首", "Next"))
                 .clicked()
             {
                 *act = Act::Next;
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let effective = if self.muted { 0.0 } else { self.vol };
-                let mut volume = effective;
-                if screen.width() >= 620.0 {
-                    ui.add(
-                        egui::Slider::new(&mut volume, 0.0..=1.0)
-                            .show_value(false)
-                            .trailing_fill(true),
-                    );
-                }
-                if volume != effective {
-                    *act = Act::Volume(volume);
-                }
-                if ui
-                    .button(if self.muted {
-                        language.text("取消静音", "Unmute")
-                    } else {
-                        language.text("音量", "Volume")
-                    })
-                    .clicked()
-                {
-                    *act = Act::ToggleMute;
-                }
-            });
+        } else {
+            disabled_icon_button(&mut transport, 30.0, draw_next);
+        }
+        let effective = if self.muted { 0.0 } else { self.vol };
+        let volume = icon_button(&mut transport, 26.0, 1.0, |p, r, c| {
+            draw_volume(p, r, c, self.muted, effective)
         });
+        let volume = volume.on_hover_text(language.text("音量", "Volume"));
+        let volume_rect = volume.rect;
+        if volume.clicked() {
+            self.volume_open = !self.volume_open;
+        }
+        let mut queue_ui = root.new_child(
+            UiBuilder::new()
+                .id_salt("music-queue")
+                .max_rect(Rect::from_min_max(
+                    pos2(row.max.x - 26.0, row.min.y),
+                    pos2(row.max.x, row.max.y),
+                ))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        let queue = icon_button(&mut queue_ui, 26.0, 1.0, draw_queue);
+        if queue
+            .on_hover_text(language.text("播放队列", "Play queue"))
+            .clicked()
+        {
+            self.queue_open = !self.queue_open;
+        }
+        if self.volume_open {
+            let bottom = volume_rect.min.y - 10.0;
+            let top_limit = screen.min.y + BAR_TOP + 4.0;
+            let popup_h = (bottom - top_limit).clamp(60.0, 132.0);
+            let popup_w = 40.0;
+            let px = (volume_rect.center().x - popup_w * 0.5)
+                .clamp(screen.min.x + 4.0, screen.max.x - popup_w - 4.0);
+            let popup = Rect::from_min_max(pos2(px, bottom - popup_h), pos2(px + popup_w, bottom));
+            let outside = root.ctx().input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer
+                        .hover_pos()
+                        .is_some_and(|p| !popup.contains(p) && !volume_rect.contains(p))
+            });
+            if outside {
+                self.volume_open = false;
+            } else {
+                let painter = root.painter();
+                painter.rect_filled(popup, CornerRadius::same(10), SURFACE);
+                painter.rect_stroke(
+                    popup,
+                    CornerRadius::same(10),
+                    Stroke::new(1.0, Color32::from_rgb(48, 57, 73)),
+                    egui::StrokeKind::Outside,
+                );
+                let mut pui = root.new_child(
+                    UiBuilder::new()
+                        .id_salt("music-volume-popup")
+                        .max_rect(popup.shrink(12.0))
+                        .layout(Layout::top_down(Align::Center)),
+                );
+                let (vrect, vresp) =
+                    vslider(&mut pui, 16.0, popup.height() - 24.0, effective, 3.5, 1.0);
+                if (vresp.dragged() || vresp.clicked())
+                    && let Some(pointer) = pui.input(|i| i.pointer.hover_pos())
+                {
+                    let f = ((vrect.max.y - pointer.y) / vrect.height()).clamp(0.0, 1.0);
+                    *act = Act::Volume(f);
+                }
+            }
+        }
     }
 }

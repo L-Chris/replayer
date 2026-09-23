@@ -49,24 +49,22 @@ impl Queue {
             *current -= 1;
         }
     }
-    pub fn move_item(&mut self, index: usize, up: bool) {
-        let other = if up {
-            index.checked_sub(1)
-        } else {
-            index.checked_add(1)
-        };
-        let Some(other) = other.filter(|&i| i < self.items.len() && index < self.items.len())
-        else {
+    pub fn relocate(&mut self, from: usize, to: usize) {
+        if from >= self.items.len() || to > self.items.len() || to == from || to == from + 1 {
             return;
-        };
-        self.items.swap(index, other);
-        self.current = self.current.map(|i| {
-            if i == index {
-                other
-            } else if i == other {
-                index
+        }
+        let item = self.items.remove(from);
+        let dest = if from < to { to - 1 } else { to };
+        self.items.insert(dest, item);
+        self.current = self.current.map(|c| {
+            if c == from {
+                dest
+            } else if from < c && dest >= c {
+                c - 1
+            } else if from > c && dest <= c {
+                c + 1
             } else {
-                i
+                c
             }
         });
     }
@@ -85,7 +83,7 @@ mod tests {
             current: None,
         };
         q.select(1).unwrap();
-        q.move_item(1, true);
+        q.relocate(1, 0);
         assert_eq!(q.current, Some(0));
         q.remove(0);
         assert_eq!(q.items.len(), 3);

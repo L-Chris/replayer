@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
@@ -24,6 +25,7 @@ use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
 const BAR_BOTTOM: f32 = 68.0;
 const BAR_TOP: f32 = 60.0;
 const TOOLBAR_HIDE_DELAY: Duration = Duration::from_millis(400);
+type ArtworkResult = (String, Option<Arc<crate::media::Artwork>>);
 
 enum Act {
     None,
@@ -38,7 +40,6 @@ enum Act {
     Next,
     QueuePlay(usize),
     QueueRemove(usize),
-    QueueMove(usize, bool),
     GenerateSubtitles,
     CancelSubtitles,
     ExportSubtitles,
@@ -47,6 +48,11 @@ enum Act {
 pub struct App {
     queue: crate::queue::Queue,
     queue_open: bool,
+    queue_drag: Option<usize>,
+    art_requests: Sender<String>,
+    art_results: Receiver<ArtworkResult>,
+    art_cache: HashMap<String, Option<Arc<crate::media::Artwork>>>,
+    art_textures: HashMap<String, egui::TextureHandle>,
     media_info: Option<Arc<crate::media::Info>>,
     artwork: Option<egui::TextureHandle>,
     append_dialog: bool,
@@ -87,6 +93,8 @@ pub struct App {
     pending_seek: Option<(u64, f64)>,
     vol: f32,
     muted: bool,
+    volume_open: bool,
+    loop_single: bool,
     fullscreen: bool,
     ui_alpha: f32,
     last_toolbar_hover: Option<Instant>,
@@ -106,9 +114,25 @@ impl App {
         defaults.api_key.clear();
         let (open_tx, open_rx) = unbounded();
         let (subtitle_save_tx, subtitle_save_rx) = unbounded();
+        let (art_requests, art_requests_rx): (Sender<String>, Receiver<String>) = unbounded();
+        let (art_results_tx, art_results): (Sender<ArtworkResult>, Receiver<ArtworkResult>) =
+            unbounded();
+        thread::spawn(move || {
+            while let Ok(path) = art_requests_rx.recv() {
+                let art = crate::media::probe_artwork(&path);
+                if art_results_tx.send((path, art)).is_err() {
+                    break;
+                }
+            }
+        });
         let mut app = Self {
             queue: Default::default(),
             queue_open: true,
+            queue_drag: None,
+            art_requests,
+            art_results,
+            art_cache: HashMap::new(),
+            art_textures: HashMap::new(),
             media_info: None,
             artwork: None,
             append_dialog: false,
@@ -149,6 +173,8 @@ impl App {
             pending_seek: None,
             vol: 1.0,
             muted: false,
+            volume_open: false,
+            loop_single: false,
             fullscreen: false,
             ui_alpha: 0.0,
             last_toolbar_hover: None,
@@ -253,6 +279,9 @@ impl eframe::App for App {
         self.updater.poll();
         self.poll_torrent();
         self.poll_qq_key();
+        while let Ok((path, art)) = self.art_results.try_recv() {
+            self.art_cache.insert(path, art);
+        }
         let dropped = ctx.input(|i| {
             i.raw
                 .dropped_files
@@ -305,6 +334,12 @@ impl eframe::App for App {
                             self.fullscreen = false;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                         }
+                        if let Some(source) = &self.source {
+                            self.art_cache.insert(
+                                source.to_string_lossy().into_owned(),
+                                info.artwork.clone(),
+                            );
+                        }
                         self.media_info = Some(info);
                     }
                     Event::Ended => advance = true,
@@ -318,8 +353,24 @@ impl eframe::App for App {
                 }
             }
         }
-        if advance && let Some(next) = self.queue.next_index() {
-            self.play_queue(next);
+        if advance {
+            let replay = |app: &mut App| {
+                if let Some(p) = &app.player {
+                    p.set_playing(true);
+                }
+            };
+            if self.loop_single {
+                replay(self);
+            } else {
+                let next = self
+                    .queue
+                    .next_index()
+                    .or_else(|| (!self.queue.items.is_empty()).then_some(0));
+                match next {
+                    Some(next) if Some(next) != self.queue.current => self.play_queue(next),
+                    Some(_) | None => replay(self),
+                }
+            }
         }
         let music = self.is_music();
         let sidebar_width = if self.queue_open && !self.queue.items.is_empty() {
@@ -583,11 +634,6 @@ impl eframe::App for App {
                     .max_rect(top_rect.shrink2(vec2(20.0, 12.0)))
                     .layout(Layout::top_down(Align::Min)),
             );
-            let title = if self.player.is_none() {
-                "replayer".into()
-            } else {
-                self.title.clone()
-            };
             tui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if self.player.is_some()
@@ -598,22 +644,28 @@ impl eframe::App for App {
                     {
                         act = Act::Open;
                     }
-                    let settings_label = if matches!(
+                    let update_ready = matches!(
                         self.updater.status,
                         crate::updater::Status::Available | crate::updater::Status::Ready
-                    ) {
+                    );
+                    let settings_label = if update_ready {
                         language.text("设置 · 有更新", "Settings · Update available")
                     } else {
                         language.text("设置", "Settings")
                     };
-                    if ui.button(settings_label).clicked() {
+                    let settings = icon_button(ui, 26.0, a, |p, r, c| {
+                        draw_settings(p, r, c);
+                        if update_ready {
+                            p.circle_filled(pos2(r.max.x, r.min.y), 3.0, ACCENT);
+                        }
+                    });
+                    if settings.on_hover_text(settings_label).clicked() {
                         self.settings_open = true;
                         self.llm_draft = self.settings.llm.clone();
                         self.config_message.clear();
                     }
                     if self.player.is_some() {
-                        if ui.button(language.text("磁链", "Magnet")).clicked(){self.magnet_open=true;}
-                        if ui.button(language.text("队列", "Queue")).clicked(){self.queue_open = !self.queue_open;}
+                        if !music && ui.button(language.text("磁链", "Magnet")).clicked(){self.magnet_open=true;}
                         if !music {
                         let caption = if self.subtitle_job.is_some() {
                             language.text("字幕 · 生成中", "Subtitles · generating")
@@ -704,18 +756,6 @@ impl eframe::App for App {
                         );
                     }
                     }
-                    if self.player.is_none() && !self.queue.items.is_empty() && ui.button(language.text("队列", "Queue")).clicked(){self.queue_open = !self.queue_open;}
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(title)
-                                    .color(Color32::from_white_alpha((230.0 * a) as u8))
-                                    .strong()
-                                    .size(14.0),
-                            )
-                            .truncate(),
-                        );
-                    });
                 });
             });
         }
@@ -1043,7 +1083,6 @@ impl eframe::App for App {
             }
             Act::QueuePlay(i) => self.play_queue(i),
             Act::QueueRemove(i) => self.queue.remove(i),
-            Act::QueueMove(i, up) => self.queue.move_item(i, up),
             Act::GenerateSubtitles => {
                 let subtitle_source = self
                     .torrent_selected
@@ -1314,9 +1353,9 @@ fn draw_play(p: &Painter, r: Rect, c: Color32) {
     let cy = r.center().y;
     p.add(Shape::convex_polygon(
         vec![
-            pos2(cx - rr * 0.55, cy - rr * 0.9),
-            pos2(cx - rr * 0.55, cy + rr * 0.9),
-            pos2(cx + rr * 0.9, cy),
+            pos2(cx - rr * 0.7, cy - rr * 0.9),
+            pos2(cx - rr * 0.7, cy + rr * 0.9),
+            pos2(cx + rr * 0.7, cy),
         ],
         c,
         Stroke::NONE,
@@ -1339,6 +1378,215 @@ fn draw_pause(p: &Painter, r: Rect, c: Color32) {
         CornerRadius::same(1),
         c,
     );
+}
+
+fn draw_prev(p: &Painter, r: Rect, c: Color32) {
+    let rr = r.width().min(r.height()) * 0.5;
+    let cx = r.center().x;
+    let cy = r.center().y;
+    p.rect_filled(
+        Rect::from_min_max(
+            pos2(cx - rr * 0.95, cy - rr * 0.85),
+            pos2(cx - rr * 0.65, cy + rr * 0.85),
+        ),
+        CornerRadius::same(1),
+        c,
+    );
+    p.add(Shape::convex_polygon(
+        vec![
+            pos2(cx + rr * 0.9, cy - rr * 0.85),
+            pos2(cx + rr * 0.9, cy + rr * 0.85),
+            pos2(cx - rr * 0.4, cy),
+        ],
+        c,
+        Stroke::NONE,
+    ));
+}
+
+fn draw_next(p: &Painter, r: Rect, c: Color32) {
+    let rr = r.width().min(r.height()) * 0.5;
+    let cx = r.center().x;
+    let cy = r.center().y;
+    p.rect_filled(
+        Rect::from_min_max(
+            pos2(cx + rr * 0.65, cy - rr * 0.85),
+            pos2(cx + rr * 0.95, cy + rr * 0.85),
+        ),
+        CornerRadius::same(1),
+        c,
+    );
+    p.add(Shape::convex_polygon(
+        vec![
+            pos2(cx - rr * 0.9, cy - rr * 0.85),
+            pos2(cx - rr * 0.9, cy + rr * 0.85),
+            pos2(cx + rr * 0.4, cy),
+        ],
+        c,
+        Stroke::NONE,
+    ));
+}
+
+fn disabled_icon_button(ui: &mut Ui, size: f32, draw: impl FnOnce(&Painter, Rect, Color32)) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    draw(
+        ui.painter(),
+        rect.shrink(size * 0.24),
+        Color32::from_white_alpha(70),
+    );
+}
+
+fn play_circle_button(ui: &mut Ui, size: f32, playing: bool) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let fill = if resp.hovered() || resp.clicked() {
+        ACCENT.gamma_multiply(1.25)
+    } else {
+        ACCENT
+    };
+    ui.painter().circle_filled(rect.center(), size * 0.5, fill);
+    let icon = rect.shrink(size * 0.33);
+    if playing {
+        draw_pause(ui.painter(), icon, Color32::WHITE);
+    } else {
+        draw_play(ui.painter(), icon, Color32::WHITE);
+    }
+    resp
+}
+
+fn draw_repeat(p: &Painter, r: Rect, c: Color32, single: bool) {
+    let s = Stroke::new(2.0, c);
+    let aw = r.width() * 0.16;
+    let mx = r.center().x;
+    let (y0, y1) = (r.min.y, r.max.y);
+    p.line_segment([pos2(r.min.x, y0), pos2(mx - aw * 1.3, y0)], s);
+    p.line_segment([pos2(mx + aw * 1.3, y0), pos2(r.max.x, y0)], s);
+    p.line_segment([pos2(r.min.x, y1), pos2(mx - aw * 1.3, y1)], s);
+    p.line_segment([pos2(mx + aw * 1.3, y1), pos2(r.max.x, y1)], s);
+    p.line_segment([pos2(r.min.x, y0), pos2(r.min.x, y1)], s);
+    p.line_segment([pos2(r.max.x, y0), pos2(r.max.x, y1)], s);
+    p.add(Shape::convex_polygon(
+        vec![
+            pos2(mx - aw * 0.7, y0 - aw),
+            pos2(mx - aw * 0.7, y0 + aw),
+            pos2(mx + aw, y0),
+        ],
+        c,
+        Stroke::NONE,
+    ));
+    p.add(Shape::convex_polygon(
+        vec![
+            pos2(mx + aw * 0.7, y1 - aw),
+            pos2(mx + aw * 0.7, y1 + aw),
+            pos2(mx - aw, y1),
+        ],
+        c,
+        Stroke::NONE,
+    ));
+    if single {
+        p.text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            "1",
+            egui::FontId::proportional(r.height() * 0.66),
+            c,
+        );
+    }
+}
+
+fn draw_settings(p: &Painter, r: Rect, c: Color32) {
+    let center = r.center();
+    let rad = r.width().min(r.height()) * 0.5;
+    p.circle_stroke(center, rad * 0.58, Stroke::new(2.0, c));
+    for i in 0..8 {
+        let ang = i as f32 * std::f32::consts::TAU / 8.0;
+        let (sx, sy) = (ang.cos(), ang.sin());
+        p.line_segment(
+            [
+                pos2(center.x + sx * rad * 0.58, center.y + sy * rad * 0.58),
+                pos2(center.x + sx * rad, center.y + sy * rad),
+            ],
+            Stroke::new(2.0, c),
+        );
+    }
+    p.circle_filled(center, rad * 0.2, c);
+}
+
+fn draw_add(p: &Painter, r: Rect, c: Color32) {
+    let s = Stroke::new(2.0, c);
+    let cx = r.center().x;
+    let cy = r.center().y;
+    let d = r.width().min(r.height()) * 0.42;
+    p.line_segment([pos2(cx - d, cy), pos2(cx + d, cy)], s);
+    p.line_segment([pos2(cx, cy - d), pos2(cx, cy + d)], s);
+}
+
+fn draw_queue(p: &Painter, r: Rect, c: Color32) {
+    let s = Stroke::new(2.0, c);
+    let (w, h) = (r.width(), r.height());
+    p.line_segment(
+        [
+            pos2(r.min.x, r.min.y + h * 0.2),
+            pos2(r.max.x, r.min.y + h * 0.2),
+        ],
+        s,
+    );
+    p.line_segment(
+        [
+            pos2(r.min.x, r.min.y + h * 0.5),
+            pos2(r.max.x, r.min.y + h * 0.5),
+        ],
+        s,
+    );
+    p.line_segment(
+        [
+            pos2(r.min.x, r.min.y + h * 0.8),
+            pos2(r.min.x + w * 0.55, r.min.y + h * 0.8),
+        ],
+        s,
+    );
+    p.add(Shape::convex_polygon(
+        vec![
+            pos2(r.min.x + w * 0.7, r.min.y + h * 0.62),
+            pos2(r.min.x + w * 0.7, r.max.y),
+            pos2(r.max.x, r.min.y + h * 0.81),
+        ],
+        c,
+        Stroke::NONE,
+    ));
+}
+
+fn vslider(
+    ui: &mut Ui,
+    width: f32,
+    height: f32,
+    frac: f32,
+    bar: f32,
+    alpha: f32,
+) -> (Rect, Response) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
+    let hov = resp.hovered() || resp.dragged();
+    let th = if hov { bar * 1.6 } else { bar };
+    let cx = rect.center().x;
+    let p = ui.painter();
+    let cr = CornerRadius::same((th * 0.5).clamp(0.0, 8.0) as u8);
+    p.rect_filled(
+        Rect::from_min_max(
+            pos2(cx - th * 0.5, rect.min.y),
+            pos2(cx + th * 0.5, rect.max.y),
+        ),
+        cr,
+        Color32::from_white_alpha((70.0 * alpha) as u8),
+    );
+    let fy = rect.max.y - rect.height() * frac;
+    let fill = ACCENT.gamma_multiply(alpha);
+    p.rect_filled(
+        Rect::from_min_max(pos2(cx - th * 0.5, fy), pos2(cx + th * 0.5, rect.max.y)),
+        cr,
+        fill,
+    );
+    if hov {
+        p.circle_filled(pos2(cx, fy), th * 0.95, fill);
+    }
+    (rect, resp)
 }
 
 fn draw_fullscreen(p: &Painter, r: Rect, c: Color32) {
