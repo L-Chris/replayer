@@ -3,6 +3,7 @@ use super::*;
 impl App {
     pub(super) fn start_magnet(&mut self) {
         self.torrent_job = None;
+        self.set_active_queue(false);
         self.queue = Default::default();
         self.media_info = None;
         self.artwork = None;
@@ -48,6 +49,7 @@ impl App {
         for event in events {
             match event {
                 crate::torrent::Event::Files(files) => {
+                    self.set_active_queue(false);
                     self.queue.items = files
                         .iter()
                         .map(|file| crate::queue::Item {
@@ -235,6 +237,9 @@ impl App {
             self.subtitle_skipped.clear();
             self.subtitle_metrics.clear();
             self.source = None;
+        }
+        if selected.is_some() {
+            self.set_active_queue(false);
         }
         if let Some(id) = selected
             && let Some(job) = &self.torrent_job

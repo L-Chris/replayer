@@ -195,18 +195,24 @@ impl Settings {
         std::fs::rename(temporary, path).context("save settings")
     }
     fn path() -> PathBuf {
+        Self::root().join("settings.json")
+    }
+    pub fn queue_path() -> PathBuf {
+        Self::root().join("queue.json")
+    }
+    fn root() -> PathBuf {
         if let Some(path) = std::env::var_os("REPLAYER_SETTINGS_FILE") {
-            return path.into();
+            return PathBuf::from(path).with_extension("");
         }
         if let Some(root) =
             std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("XDG_CONFIG_HOME"))
         {
-            return PathBuf::from(root).join("replayer/settings.json");
+            return PathBuf::from(root).join("replayer");
         }
         std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| ".".into())
-            .join(".config/replayer/settings.json")
+            .join(".config/replayer")
     }
 }
 

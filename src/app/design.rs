@@ -25,6 +25,9 @@ pub fn apply(ctx: &egui::Context) {
     ] {
         widgets.corner_radius = CornerRadius::same(8);
         widgets.bg_stroke = Stroke::new(1.0, Color32::from_rgb(53, 64, 82));
+        // Inactive buttons drop the frame stroke, so expansion must compensate
+        // for it or hover changes the widget size and neighbours jump.
+        widgets.expansion = widgets.bg_stroke.width;
     }
     style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(34, 41, 55);
     style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(45, 58, 80);

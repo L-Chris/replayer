@@ -25,7 +25,34 @@ pub struct Queue {
     pub items: Vec<Item>,
     pub current: Option<usize>,
 }
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+pub struct SavedQueue {
+    pub items: Vec<String>,
+    pub current: Option<usize>,
+}
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+pub struct SavedQueues {
+    pub music: SavedQueue,
+    pub video: SavedQueue,
+}
 impl Queue {
+    pub fn saved(&self) -> SavedQueue {
+        let mut items = Vec::new();
+        let mut current = None;
+        for (index, item) in self.items.iter().enumerate() {
+            if let Source::File(path) = &item.source {
+                if self.current == Some(index) {
+                    current = Some(items.len());
+                }
+                items.push(path.clone());
+            }
+        }
+        SavedQueue { items, current }
+    }
+    pub fn restore(&mut self, saved: SavedQueue) {
+        self.items = saved.items.into_iter().map(Item::file).collect();
+        self.current = saved.current.filter(|current| *current < self.items.len());
+    }
     pub fn select(&mut self, index: usize) -> Option<Item> {
         let item = self.items.get(index)?.clone();
         self.current = Some(index);
@@ -39,15 +66,15 @@ impl Queue {
         self.current.and_then(|i| i.checked_sub(1))
     }
     pub fn remove(&mut self, index: usize) {
-        if index >= self.items.len() || self.current == Some(index) {
+        if index >= self.items.len() {
             return;
         }
         self.items.remove(index);
-        if let Some(current) = &mut self.current
-            && index < *current
-        {
-            *current -= 1;
-        }
+        self.current = match self.current {
+            Some(current) if current == index => None,
+            Some(current) if current > index => Some(current - 1),
+            other => other,
+        };
     }
     pub fn relocate(&mut self, from: usize, to: usize) {
         if from >= self.items.len() || to > self.items.len() || to == from || to == from + 1 {
@@ -73,7 +100,7 @@ impl Queue {
 mod tests {
     use super::*;
     #[test]
-    fn reorder_and_remove_preserve_playing_item() {
+    fn reorder_and_remove_adjust_current() {
         let mut q = Queue {
             items: vec![
                 Item::file("a.mp3".into()),
@@ -85,15 +112,15 @@ mod tests {
         q.select(1).unwrap();
         q.relocate(1, 0);
         assert_eq!(q.current, Some(0));
-        q.remove(0);
-        assert_eq!(q.items.len(), 3);
         q.remove(1);
-        assert_eq!(q.items[0].title, "b.mp4");
-        assert_eq!(q.next_index(), Some(1));
-        q.select(1);
-        assert_eq!(q.next_index(), None);
-        q.remove(0);
+        assert_eq!(q.items.len(), 2);
+        assert_eq!(q.items[1].title, "c.flac");
         assert_eq!(q.current, Some(0));
+        q.remove(0);
+        assert_eq!(q.items.len(), 1);
+        assert_eq!(q.current, None);
+        q.select(0);
+        assert_eq!(q.next_index(), None);
         assert_eq!(q.previous_index(), None);
     }
 }

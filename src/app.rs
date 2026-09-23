@@ -27,6 +27,17 @@ const BAR_TOP: f32 = 60.0;
 const TOOLBAR_HIDE_DELAY: Duration = Duration::from_millis(400);
 type ArtworkResult = (String, Option<Arc<crate::media::Artwork>>);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum UiMode {
+    Music,
+    Video,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrefTab {
+    General,
+    Subtitles,
+    About,
+}
 enum Act {
     None,
     TogglePlay,
@@ -47,6 +58,8 @@ enum Act {
 
 pub struct App {
     queue: crate::queue::Queue,
+    queue_inactive: crate::queue::Queue,
+    queue_kind_music: bool,
     queue_open: bool,
     queue_drag: Option<usize>,
     art_requests: Sender<String>,
@@ -58,7 +71,10 @@ pub struct App {
     append_dialog: bool,
     settings: Settings,
     settings_open: bool,
-    preferences_about: bool,
+    preferences_tab: PrefTab,
+    preferences_armed: bool,
+    preferences_rect: Option<Rect>,
+    mode: UiMode,
     updater: crate::updater::Updater,
     torrent_job: Option<crate::torrent::Job>,
     torrent_files: Vec<crate::torrent::File>,
@@ -127,6 +143,8 @@ impl App {
         });
         let mut app = Self {
             queue: Default::default(),
+            queue_inactive: Default::default(),
+            queue_kind_music: true,
             queue_open: true,
             queue_drag: None,
             art_requests,
@@ -145,7 +163,10 @@ impl App {
             torrent_resolving: false,
             magnet_open: false,
             magnet_input: String::new(),
-            preferences_about: false,
+            preferences_tab: PrefTab::General,
+            preferences_armed: false,
+            preferences_rect: None,
+            mode: UiMode::Music,
             llm_draft: settings.llm.clone(),
             settings,
             settings_open: false,
@@ -183,10 +204,38 @@ impl App {
             last_stats: Instant::now(),
             stats: std::env::var_os("REPLAYER_STATS").is_some(),
         };
+        if let Ok(bytes) = std::fs::read(Settings::queue_path())
+            && let Ok(saved) = serde_json::from_slice::<crate::queue::SavedQueues>(&bytes)
+        {
+            app.queue.restore(saved.music);
+            app.queue_inactive.restore(saved.video);
+        }
         if !initial.is_empty() {
             app.open_items(initial, false);
         }
         app
+    }
+
+    fn persist_queue(&self) {
+        let path = Settings::queue_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let (music, video) = if self.queue_kind_music {
+            (self.queue.saved(), self.queue_inactive.saved())
+        } else {
+            (self.queue_inactive.saved(), self.queue.saved())
+        };
+        let saved = crate::queue::SavedQueues { music, video };
+        let _ = std::fs::write(path, serde_json::to_vec_pretty(&saved).unwrap_or_default());
+    }
+    /// The music and video queues are stored independently; switching swaps them.
+    fn set_active_queue(&mut self, music: bool) {
+        if self.queue_kind_music == music {
+            return;
+        }
+        std::mem::swap(&mut self.queue, &mut self.queue_inactive);
+        self.queue_kind_music = music;
     }
 
     fn load(&mut self, path: String) {
@@ -623,11 +672,6 @@ impl eframe::App for App {
                 pos2(screen.min.x, screen.min.y),
                 pos2(screen.max.x, screen.min.y + BAR_TOP),
             );
-            painter.rect_filled(
-                top_rect,
-                CornerRadius::same(0),
-                SURFACE.gamma_multiply(a * 0.96),
-            );
             let mut tui = root.new_child(
                 UiBuilder::new()
                     .id_salt("topbar")
@@ -637,8 +681,7 @@ impl eframe::App for App {
             tui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if self.player.is_some()
-                        && ui
-                            .add(open_button(a, language))
+                        && icon_button(ui, 26.0, a, draw_folder)
                             .on_hover_text(language.text("打开媒体文件", "Open media files"))
                             .clicked()
                     {
@@ -756,6 +799,30 @@ impl eframe::App for App {
                         );
                     }
                     }
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        if self.player.is_none() {
+                            if ui
+                                .selectable_value(
+                                    &mut self.mode,
+                                    UiMode::Music,
+                                    language.text("音乐", "Music"),
+                                )
+                                .clicked()
+                            {
+                                self.set_active_queue(true);
+                            }
+                            if ui
+                                .selectable_value(
+                                    &mut self.mode,
+                                    UiMode::Video,
+                                    language.text("视频", "Video"),
+                                )
+                                .clicked()
+                            {
+                                self.set_active_queue(false);
+                            }
+                        }
+                    });
                 });
             });
         }
@@ -872,60 +939,34 @@ impl eframe::App for App {
 
         // ---- empty state ----
         if self.player.is_none() {
-            let e_rect = Rect::from_center_size(
-                playback_rect.center() + vec2(0.0, 12.0),
-                vec2(playback_rect.width().min(460.0) - 32.0, 270.0),
-            );
+            let center = if music {
+                let content = Rect::from_min_max(
+                    playback_rect.min + vec2(24.0, BAR_TOP + 20.0),
+                    playback_rect.max - vec2(24.0, 126.0),
+                );
+                content.center()
+            } else {
+                playback_rect.center() + vec2(0.0, 12.0)
+            };
             let mut eui = root.new_child(
                 UiBuilder::new()
                     .id_salt("empty")
-                    .max_rect(e_rect)
-                    .layout(Layout::top_down(Align::Center)),
+                    .max_rect(Rect::from_center_size(center, vec2(220.0, 56.0)))
+                    .layout(Layout::left_to_right(Align::Center)),
             );
-            eui.vertical_centered(|ui| {
-                let (logo, _) = ui.allocate_exact_size(vec2(64.0, 64.0), Sense::hover());
-                ui.painter().rect_filled(logo, 20, SURFACE);
-                draw_play(ui.painter(), logo.shrink(19.0), ACCENT);
-                ui.add_space(20.0);
-                ui.label(
-                    RichText::new(
-                        language.text("音乐与画面，都在这里", "Your music. Your movies."),
-                    )
-                    .size(28.0)
-                    .strong(),
-                );
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(
-                        language.text("音乐 · 视频 · 磁链播放", "Music · Video · Magnet playback"),
-                    )
-                    .color(MUTED)
-                    .size(14.0),
-                );
-                ui.add_space(26.0);
-                if ui
-                    .add(open_button(1.0, language).min_size(vec2(160.0, 42.0)))
-                    .clicked()
-                {
-                    act = Act::Open;
-                }
-                ui.add_space(4.0);
-                if ui
-                    .button(language.text("打开磁链", "Open magnet link"))
-                    .clicked()
-                {
-                    self.magnet_open = true;
-                }
-                ui.add_space(14.0);
-                ui.label(
-                    RichText::new(language.text(
-                        "拖入多个文件 · Shift 拖入追加队列",
-                        "Drop files · Shift-drop to add to queue",
-                    ))
-                    .color(MUTED)
-                    .size(13.0),
-                );
-            });
+            eui.spacing_mut().item_spacing.x = 28.0;
+            if icon_button(&mut eui, 44.0, 1.0, draw_folder)
+                .on_hover_text(language.text("打开媒体文件", "Open media files"))
+                .clicked()
+            {
+                act = Act::Open;
+            }
+            if icon_button(&mut eui, 44.0, 1.0, draw_magnet)
+                .on_hover_text(language.text("打开磁链", "Open magnet link"))
+                .clicked()
+            {
+                self.magnet_open = true;
+            }
         }
 
         // ---- error ----
@@ -1082,7 +1123,20 @@ impl eframe::App for App {
                 }
             }
             Act::QueuePlay(i) => self.play_queue(i),
-            Act::QueueRemove(i) => self.queue.remove(i),
+            Act::QueueRemove(i) => {
+                if self.queue.current == Some(i) {
+                    self.player = None;
+                    self.media_info = None;
+                    self.artwork = None;
+                    self.video.clear();
+                    self.subtitle_job = None;
+                    self.subtitles.clear();
+                    self.source = None;
+                    self.title.clear();
+                }
+                self.queue.remove(i);
+                self.persist_queue();
+            }
             Act::GenerateSubtitles => {
                 let subtitle_source = self
                     .torrent_selected
@@ -1274,17 +1328,6 @@ fn paint_subtitle(painter: &Painter, video: Rect, screen: Rect, text: &str) {
         y += line.size().y + gap;
         painter.galley(origin, line, Color32::WHITE);
     }
-}
-
-fn open_button(a: f32, language: Language) -> egui::Button<'static> {
-    egui::Button::new(
-        RichText::new(language.text("打开文件", "Open files"))
-            .color(Color32::from_white_alpha((235.0 * a) as u8))
-            .size(13.0),
-    )
-    .fill(ACCENT.gamma_multiply(a))
-    .corner_radius(CornerRadius::same(8))
-    .min_size(vec2(90.0, 34.0))
 }
 
 fn hslider(
@@ -1490,6 +1533,106 @@ fn draw_repeat(p: &Painter, r: Rect, c: Color32, single: bool) {
             c,
         );
     }
+}
+
+fn draw_trash(p: &Painter, r: Rect, c: Color32) {
+    let s = Stroke::new(2.0, c);
+    let lid = r.min.y + r.height() * 0.26;
+    p.line_segment(
+        [
+            pos2(r.center().x - r.width() * 0.16, r.min.y + r.height() * 0.1),
+            pos2(r.center().x + r.width() * 0.16, r.min.y + r.height() * 0.1),
+        ],
+        s,
+    );
+    p.line_segment([pos2(r.min.x, lid), pos2(r.max.x, lid)], s);
+    p.line_segment(
+        [
+            pos2(r.min.x + r.width() * 0.14, lid),
+            pos2(r.min.x + r.width() * 0.24, r.max.y),
+        ],
+        s,
+    );
+    p.line_segment(
+        [
+            pos2(r.max.x - r.width() * 0.14, lid),
+            pos2(r.max.x - r.width() * 0.24, r.max.y),
+        ],
+        s,
+    );
+    p.line_segment(
+        [
+            pos2(r.min.x + r.width() * 0.24, r.max.y),
+            pos2(r.max.x - r.width() * 0.24, r.max.y),
+        ],
+        s,
+    );
+    let ribs = Stroke::new(1.5, c);
+    p.line_segment(
+        [
+            pos2(r.center().x - r.width() * 0.13, lid + r.height() * 0.14),
+            pos2(r.center().x - r.width() * 0.11, r.max.y - r.height() * 0.12),
+        ],
+        ribs,
+    );
+    p.line_segment(
+        [
+            pos2(r.center().x + r.width() * 0.13, lid + r.height() * 0.14),
+            pos2(r.center().x + r.width() * 0.11, r.max.y - r.height() * 0.12),
+        ],
+        ribs,
+    );
+}
+
+fn draw_close(p: &Painter, r: Rect, c: Color32) {
+    let s = Stroke::new(2.0, c);
+    p.line_segment([r.left_top(), r.right_bottom()], s);
+    p.line_segment([r.left_bottom(), r.right_top()], s);
+}
+
+fn draw_folder(p: &Painter, r: Rect, c: Color32) {
+    let tab_w = r.width() * 0.38;
+    let tab_y = r.min.y + r.height() * 0.18;
+    let top = r.min.y + r.height() * 0.38;
+    let pts = vec![
+        pos2(r.min.x, r.max.y),
+        pos2(r.min.x, tab_y),
+        pos2(r.min.x + tab_w, tab_y),
+        pos2(r.min.x + tab_w + r.width() * 0.1, top),
+        pos2(r.max.x, top),
+        pos2(r.max.x, r.max.y),
+        pos2(r.min.x, r.max.y),
+    ];
+    p.add(Shape::closed_line(pts, Stroke::new(2.0, c)));
+}
+
+fn draw_magnet(p: &Painter, r: Rect, c: Color32) {
+    let s = Stroke::new(2.0, c);
+    let cx = r.center().x;
+    let cy = r.center().y + r.height() * 0.08;
+    let rad = r.width() * 0.3;
+    let mut pts = Vec::new();
+    for i in 0..=12 {
+        let ang = std::f32::consts::PI + std::f32::consts::PI * i as f32 / 12.0;
+        pts.push(pos2(cx + ang.cos() * rad, cy + ang.sin() * rad));
+    }
+    p.add(Shape::line(pts, s));
+    p.line_segment([pos2(cx - rad, cy), pos2(cx - rad, r.max.y)], s);
+    p.line_segment([pos2(cx + rad, cy), pos2(cx + rad, r.max.y)], s);
+    p.line_segment(
+        [
+            pos2(cx - rad, r.max.y - r.height() * 0.22),
+            pos2(cx - rad, r.max.y),
+        ],
+        Stroke::new(3.5, c),
+    );
+    p.line_segment(
+        [
+            pos2(cx + rad, r.max.y - r.height() * 0.22),
+            pos2(cx + rad, r.max.y),
+        ],
+        Stroke::new(3.5, c),
+    );
 }
 
 fn draw_settings(p: &Painter, r: Rect, c: Color32) {

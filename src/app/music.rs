@@ -1,6 +1,18 @@
 use super::*;
 use crate::queue::{Item, Source};
 
+fn item_is_music(item: &Item) -> bool {
+    match &item.source {
+        Source::File(path) => !std::path::Path::new(path)
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| {
+                crate::media::VIDEO_EXTENSIONS.contains(&s.to_ascii_lowercase().as_str())
+            }),
+        Source::Torrent(_) => false,
+    }
+}
+
 impl App {
     pub(super) fn remove_torrent_queue(&mut self) {
         let current = self.queue.current.and_then(|i| {
@@ -17,13 +29,18 @@ impl App {
             .items
             .retain(|item| matches!(item.source, Source::File(_)));
         self.queue.current = current;
+        self.persist_queue();
     }
     pub(super) fn is_music(&self) -> bool {
         self.media_info.as_ref().map_or_else(
             || {
-                self.source
-                    .as_deref()
-                    .is_some_and(crate::media_source::is_qq)
+                if self.player.is_none() {
+                    self.mode == UiMode::Music
+                } else {
+                    self.source
+                        .as_deref()
+                        .is_some_and(crate::media_source::is_qq)
+                }
             },
             |info| info.kind == crate::media::Kind::Music,
         )
@@ -37,17 +54,26 @@ impl App {
         if items.is_empty() {
             return;
         }
-        if append {
-            let start = self.queue.items.len();
-            self.queue.items.extend(items);
-            if self.player.is_none() {
-                self.play_queue(start);
-            }
-        } else {
-            self.queue.items = items;
+        let first_music = item_is_music(&items[0]);
+        self.set_active_queue(first_music);
+        if !append {
+            self.queue.items.clear();
             self.queue.current = None;
-            self.play_queue(0);
+            self.queue_inactive.items.clear();
+            self.queue_inactive.current = None;
         }
+        let start = self.queue.items.len();
+        for item in items {
+            if item_is_music(&item) == first_music {
+                self.queue.items.push(item);
+            } else {
+                self.queue_inactive.items.push(item);
+            }
+        }
+        if self.player.is_none() {
+            self.play_queue(start);
+        }
+        self.persist_queue();
     }
     pub(super) fn play_queue(&mut self, index: usize) {
         let Some(item) = self.queue.select(index) else {
@@ -68,6 +94,7 @@ impl App {
                 }
             }
         }
+        self.persist_queue();
     }
     fn queue_contents(&mut self, ui: &mut Ui, act: &mut Act) {
         let language = self.settings.language;
@@ -100,7 +127,10 @@ impl App {
                             .corner_radius(8)
                             .inner_margin(8)
                             .show(ui, |ui| {
-                                ui.set_min_width(ui.available_width());
+                                // Keep rows clear of the vertical scrollbar hit zone.
+                                let row_width = (ui.available_width() - 12.0).max(80.0);
+                                ui.set_min_width(row_width);
+                                ui.set_max_width(row_width);
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 8.0;
                                     let mut tex = None;
@@ -189,8 +219,7 @@ impl App {
                                     )
                                     .inner
                                     .on_hover_text(&item.title);
-                                    if ui
-                                        .add_enabled(!current, egui::Button::new("×").small())
+                                    if icon_button(ui, 22.0, 1.0, draw_trash)
                                         .on_hover_text(language.text(
                                             "从队列移除（不删除文件）",
                                             "Remove from queue (keeps file)",
@@ -244,6 +273,7 @@ impl App {
             if released {
                 if target != drag && target != drag + 1 {
                     self.queue.relocate(drag, target);
+                    self.persist_queue();
                 }
                 self.queue_drag = None;
             }
@@ -295,73 +325,87 @@ impl App {
             playback.max - vec2(24.0, 126.0),
         );
         let left = content;
-        let compact = left.height() < 280.0;
-        let size = if compact {
-            left.height().clamp(40.0, 110.0)
-        } else {
-            (left.height() - 112.0)
-                .clamp(90.0, 280.0)
-                .min(left.width() - 20.0)
-        };
-        let cover = if compact {
-            Rect::from_min_size(left.min, Vec2::splat(size))
-        } else {
-            Rect::from_center_size(
-                pos2(left.center().x, left.min.y + size / 2.0),
-                Vec2::splat(size),
-            )
-        };
-        let painter = root.painter();
-        painter.rect_filled(cover, 16, SURFACE);
-        if let Some(art) = &self.artwork {
-            let texture_size = art.size_vec2();
-            let ratio = (cover.width() / texture_size.x).min(cover.height() / texture_size.y);
-            painter.image(
-                art.id(),
-                Rect::from_center_size(cover.center(), texture_size * ratio),
-                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
-        } else {
-            painter.text(
-                cover.center(),
-                egui::Align2::CENTER_CENTER,
-                "♫",
-                egui::FontId::proportional(size * 0.4),
-                ACCENT,
-            );
-        }
-        let text_rect = if compact {
-            Rect::from_min_max(pos2(cover.max.x + 18.0, left.min.y), left.max)
-        } else {
-            Rect::from_min_max(pos2(left.min.x, cover.max.y + 16.0), left.max)
-        };
-        let mut info_ui = root.new_child(
-            UiBuilder::new()
-                .id_salt("music-info")
-                .max_rect(text_rect)
-                .layout(Layout::top_down(if compact {
-                    Align::Min
-                } else {
-                    Align::Center
-                })),
-        );
-        info_ui
-            .add(
-                egui::Label::new(
-                    RichText::new(&self.title)
-                        .size(if compact { 18.0 } else { 24.0 })
-                        .strong(),
-                )
-                .truncate(),
-            )
-            .on_hover_text(&self.title);
-        if let Some(info) = &self.media_info {
-            if let Some(artist) = &info.artist {
-                info_ui.label(RichText::new(artist).color(MUTED));
+        if self.player.is_some() {
+            let compact = left.height() < 280.0;
+            let size = if compact {
+                left.height().clamp(40.0, 110.0)
+            } else {
+                (left.height() - 112.0)
+                    .clamp(90.0, 280.0)
+                    .min(left.width() - 20.0)
+            };
+            let (cover, text_rect) = if compact {
+                let cover = Rect::from_center_size(
+                    pos2(left.min.x + size * 0.5, left.center().y),
+                    Vec2::splat(size),
+                );
+                let text = Rect::from_min_max(
+                    pos2(cover.max.x + 18.0, left.center().y - 60.0),
+                    pos2(left.max.x, left.center().y + 60.0),
+                );
+                (cover, text)
+            } else {
+                let gap = 16.0;
+                let text_height = 84.0;
+                let total = size + gap + text_height;
+                let top = left.center().y - total * 0.5;
+                let cover = Rect::from_center_size(
+                    pos2(left.center().x, top + size * 0.5),
+                    Vec2::splat(size),
+                );
+                let text = Rect::from_min_max(
+                    pos2(left.min.x, top + size + gap),
+                    pos2(left.max.x, top + total),
+                );
+                (cover, text)
+            };
+            let painter = root.painter();
+            painter.rect_filled(cover, 16, SURFACE);
+            if let Some(art) = &self.artwork {
+                let texture_size = art.size_vec2();
+                let ratio = (cover.width() / texture_size.x).min(cover.height() / texture_size.y);
+                painter.image(
+                    art.id(),
+                    Rect::from_center_size(cover.center(), texture_size * ratio),
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            } else {
+                painter.text(
+                    cover.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "♫",
+                    egui::FontId::proportional(size * 0.4),
+                    ACCENT,
+                );
             }
-            if let Some(album) = &info.album {
-                info_ui.small(RichText::new(album).color(MUTED));
+            let mut info_ui = root.new_child(
+                UiBuilder::new()
+                    .id_salt("music-info")
+                    .max_rect(text_rect)
+                    .layout(Layout::top_down(if compact {
+                        Align::Min
+                    } else {
+                        Align::Center
+                    })),
+            );
+            info_ui
+                .add(
+                    egui::Label::new(
+                        RichText::new(&self.title)
+                            .size(if compact { 18.0 } else { 24.0 })
+                            .strong(),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(&self.title);
+            if let Some(info) = &self.media_info {
+                if let Some(artist) = &info.artist {
+                    info_ui.label(RichText::new(artist).color(MUTED));
+                }
+                if let Some(album) = &info.album {
+                    info_ui.small(RichText::new(album).color(MUTED));
+                }
             }
         }
         let rect = Rect::from_min_max(pos2(screen.min.x, screen.max.y - 108.0), screen.max);
