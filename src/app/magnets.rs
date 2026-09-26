@@ -3,6 +3,7 @@ use super::*;
 impl App {
     pub(super) fn start_magnet(&mut self) {
         self.torrent_job = None;
+        self.loading = false;
         self.set_active_queue(false);
         self.queue = Default::default();
         self.media_info = None;
@@ -191,8 +192,8 @@ impl App {
                 ui.small(crate::torrent::cache_dir().display().to_string());
                 ui.separator();
                 ui.small(language.text(
-                    "TUN 用户：BT 可单独直连，LLM 域名保留代理",
-                    "TUN users: route BT directly while keeping the LLM endpoint proxied",
+                    "TUN 开启后 BT 流量按下列规则走代理，本地流媒体连接保持直连",
+                    "With TUN on, BT traffic follows the rules below via the proxy; local streaming stays direct",
                 ));
                 if ui
                     .button(language.text("复制 Clash 分流规则", "Copy Clash routing rules"))

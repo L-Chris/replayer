@@ -142,7 +142,7 @@ fn music_with_corrupt_frames_and_trailing_garbage_still_ends() {
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
-fn music_pause_seek_replay_and_device_failure() {
+fn music_pause_seek_replay_and_device_recovery() {
     let path =
         std::env::temp_dir().join(format!("replayer-music-seek-{}.wav", uuid::Uuid::new_v4()));
     ffmpeg(
@@ -172,15 +172,19 @@ fn music_pause_seek_replay_and_device_failure() {
     await_state(&player, |s| s.state == PlaybackState::Ended);
     player.toggle_play();
     await_state(&player, |s| s.state == PlaybackState::Playing);
+    let epoch_before = player.snapshot().epoch;
     player.shared.output.failed.store(true, Ordering::Release);
-    let start = Instant::now();
-    while player.snapshot().state != PlaybackState::Failed {
-        assert!(start.elapsed() < Duration::from_secs(2));
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    // The device is reopened and an internal seek resyncs the pipeline.
+    await_state(&player, |s| {
+        s.state == PlaybackState::Playing && s.epoch > epoch_before
+    });
+    assert!(player.snapshot().has_audio);
     let before = player.position();
-    std::thread::sleep(Duration::from_millis(80));
-    assert_eq!(player.position(), before);
+    std::thread::sleep(Duration::from_millis(120));
+    assert!(
+        player.position() > before,
+        "recovered audio did not resume the clock"
+    );
     drop(player);
     std::thread::sleep(Duration::from_millis(50));
     std::fs::remove_file(path).unwrap();

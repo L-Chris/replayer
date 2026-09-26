@@ -61,6 +61,12 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("replayer")
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!(
+                    "../assets/branding/replayer-icon-256.png"
+                ))
+                .expect("embedded application icon must be a valid PNG"),
+            )
             .with_inner_size([1100.0, 640.0])
             .with_min_inner_size([420.0, 280.0]),
         ..Default::default()

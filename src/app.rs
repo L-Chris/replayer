@@ -22,7 +22,7 @@ mod preferences;
 mod qq;
 use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
 
-const BAR_BOTTOM: f32 = 68.0;
+const BAR_BOTTOM: f32 = 108.0;
 const BAR_TOP: f32 = 60.0;
 const TOOLBAR_HIDE_DELAY: Duration = Duration::from_millis(400);
 type ArtworkResult = (String, Option<Arc<crate::media::Artwork>>);
@@ -114,6 +114,8 @@ pub struct App {
     fullscreen: bool,
     ui_alpha: f32,
     last_toolbar_hover: Option<Instant>,
+    loading: bool,
+    ui_kind_music: Option<bool>,
     error: Option<String>,
     frames: u64,
     last_stats: Instant,
@@ -199,6 +201,8 @@ impl App {
             fullscreen: false,
             ui_alpha: 0.0,
             last_toolbar_hover: None,
+            loading: false,
+            ui_kind_music: None,
             error: None,
             frames: 0,
             last_stats: Instant::now(),
@@ -237,6 +241,73 @@ impl App {
         std::mem::swap(&mut self.queue, &mut self.queue_inactive);
         self.queue_kind_music = music;
     }
+    fn settings_button(&mut self, ui: &mut Ui, alpha: f32) {
+        let language = self.settings.language;
+        let update_ready = matches!(
+            self.updater.status,
+            crate::updater::Status::Available | crate::updater::Status::Ready
+        );
+        let label = if update_ready {
+            language.text("设置 · 有更新", "Settings · Update available")
+        } else {
+            language.text("设置", "Settings")
+        };
+        let settings = icon_button(ui, 26.0, alpha, |p, r, c| {
+            draw_settings(p, r, c);
+            if update_ready {
+                p.circle_filled(pos2(r.max.x, r.min.y), 3.0, ACCENT);
+            }
+        });
+        if settings.on_hover_text(label).clicked() {
+            self.settings_open = true;
+            self.llm_draft = self.settings.llm.clone();
+            self.config_message.clear();
+        }
+    }
+    fn volume_popup(&mut self, root: &mut Ui, screen: Rect, volume_rect: Rect, act: &mut Act) {
+        if !self.volume_open {
+            return;
+        }
+        let bottom = volume_rect.min.y - 10.0;
+        let top_limit = screen.min.y + BAR_TOP + 4.0;
+        let popup_h = (bottom - top_limit).clamp(60.0, 132.0);
+        let popup_w = 40.0;
+        let px = (volume_rect.center().x - popup_w * 0.5)
+            .clamp(screen.min.x + 4.0, screen.max.x - popup_w - 4.0);
+        let popup = Rect::from_min_max(pos2(px, bottom - popup_h), pos2(px + popup_w, bottom));
+        let outside = root.ctx().input(|i| {
+            i.pointer.any_pressed()
+                && i.pointer
+                    .hover_pos()
+                    .is_some_and(|p| !popup.contains(p) && !volume_rect.contains(p))
+        });
+        if outside {
+            self.volume_open = false;
+            return;
+        }
+        let painter = root.painter();
+        painter.rect_filled(popup, CornerRadius::same(10), SURFACE);
+        painter.rect_stroke(
+            popup,
+            CornerRadius::same(10),
+            Stroke::new(1.0, Color32::from_rgb(48, 57, 73)),
+            egui::StrokeKind::Outside,
+        );
+        let effective = if self.muted { 0.0 } else { self.vol };
+        let mut pui = root.new_child(
+            UiBuilder::new()
+                .id_salt("volume-popup")
+                .max_rect(popup.shrink(12.0))
+                .layout(Layout::top_down(Align::Center)),
+        );
+        let (vrect, vresp) = vslider(&mut pui, 16.0, popup.height() - 24.0, effective, 3.5, 1.0);
+        if (vresp.dragged() || vresp.clicked())
+            && let Some(pointer) = pui.input(|i| i.pointer.hover_pos())
+        {
+            let f = ((vrect.max.y - pointer.y) / vrect.height()).clamp(0.0, 1.0);
+            *act = Act::Volume(f);
+        }
+    }
 
     fn load(&mut self, path: String) {
         if path.trim().starts_with("magnet:") {
@@ -259,7 +330,6 @@ impl App {
     }
     fn load_media_with_key(&mut self, path: String, progressive: bool, key: Option<String>) {
         self.media_info = None;
-        self.artwork = None;
         self.subtitle_job = None;
         self.subtitles.clear();
         self.subtitle_status.clear();
@@ -267,12 +337,11 @@ impl App {
         self.subtitle_metrics.clear();
         self.source = Some(PathBuf::from(&path));
         self.player = None;
+        self.loading = true;
         self.video.clear();
         self.scrub = 0.0;
         self.pending_seek = None;
         self.scrubbing = false;
-        self.ui_alpha = 0.0;
-        self.last_toolbar_hover = None;
         self.error = None;
         self.title = PathBuf::from(&path)
             .file_name()
@@ -289,7 +358,10 @@ impl App {
                 p.set_volume(if self.muted { 0.0 } else { self.vol });
                 self.player = Some(p);
             }
-            Err(e) => self.error = Some(format!("{e}")),
+            Err(e) => {
+                self.loading = false;
+                self.error = Some(format!("{e}"));
+            }
         }
     }
 
@@ -361,6 +433,8 @@ impl eframe::App for App {
             while let Some(event) = player.poll_event() {
                 match event {
                     Event::MediaInfo(info) => {
+                        self.loading = false;
+                        self.ui_kind_music = Some(info.kind == crate::media::Kind::Music);
                         if let Some(title) = &info.title {
                             self.title = title.clone();
                             if let Some(i) = self.queue.current
@@ -397,7 +471,13 @@ impl eframe::App for App {
                             self.pending_seek = None;
                         }
                     }
-                    Event::Error(error) | Event::Warning(error) => self.error = Some(error),
+                    Event::Recovered => {
+                        self.error = None;
+                    }
+                    Event::Error(error) | Event::Warning(error) => {
+                        self.loading = false;
+                        self.error = Some(error);
+                    }
                     _ => {}
                 }
             }
@@ -576,7 +656,7 @@ impl eframe::App for App {
         painter.rect_filled(
             screen,
             CornerRadius::same(0),
-            if self.player.is_some() && !music {
+            if (self.player.is_some() || self.loading) && !music {
                 Color32::BLACK
             } else {
                 BACKGROUND
@@ -680,125 +760,6 @@ impl eframe::App for App {
             );
             tui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if self.player.is_some()
-                        && icon_button(ui, 26.0, a, draw_folder)
-                            .on_hover_text(language.text("打开媒体文件", "Open media files"))
-                            .clicked()
-                    {
-                        act = Act::Open;
-                    }
-                    let update_ready = matches!(
-                        self.updater.status,
-                        crate::updater::Status::Available | crate::updater::Status::Ready
-                    );
-                    let settings_label = if update_ready {
-                        language.text("设置 · 有更新", "Settings · Update available")
-                    } else {
-                        language.text("设置", "Settings")
-                    };
-                    let settings = icon_button(ui, 26.0, a, |p, r, c| {
-                        draw_settings(p, r, c);
-                        if update_ready {
-                            p.circle_filled(pos2(r.max.x, r.min.y), 3.0, ACCENT);
-                        }
-                    });
-                    if settings.on_hover_text(settings_label).clicked() {
-                        self.settings_open = true;
-                        self.llm_draft = self.settings.llm.clone();
-                        self.config_message.clear();
-                    }
-                    if self.player.is_some() {
-                        if !music && ui.button(language.text("磁链", "Magnet")).clicked(){self.magnet_open=true;}
-                        if !music {
-                        let caption = if self.subtitle_job.is_some() {
-                            language.text("字幕 · 生成中", "Subtitles · generating")
-                        } else {
-                            language.text("字幕", "Subtitles")
-                        };
-                        ui.menu_button(
-                            RichText::new(caption)
-                                .color(Color32::from_white_alpha((235.0 * a) as u8)),
-                            |ui| {
-                                ui.set_max_width(300.0);
-                                if !self.subtitle_status.is_empty() {
-                                    ui.label(&self.subtitle_status);
-                                    if !self.subtitle_metrics.is_empty() {
-                                        ui.small(&self.subtitle_metrics);
-                                    }
-                                    ui.separator();
-                                }
-                                if !self.subtitle_skipped.is_empty() {
-                                    ui.collapsing(
-                                        format!(
-                                            "{} ({})",
-                                            language.text("已跳过的片段", "Skipped segments"),
-                                            self.subtitle_skipped.len()
-                                        ),
-                                        |ui| {
-                                            egui::ScrollArea::vertical().max_height(180.0).show(
-                                                ui,
-                                                |ui| {
-                                                    for (start, end, error) in
-                                                        &self.subtitle_skipped
-                                                    {
-                                                        ui.label(format!(
-                                                            "{}–{}",
-                                                            fmt_time(*start),
-                                                            fmt_time(*end)
-                                                        ));
-                                                        ui.small(language.error(error));
-                                                    }
-                                                },
-                                            );
-                                        },
-                                    );
-                                }
-                                ui.checkbox(
-                                    &mut self.subtitles_visible,
-                                    language.text("显示字幕", "Show subtitles"),
-                                );
-                                if self.subtitle_job.is_some() {
-                                    if ui
-                                        .button(language.text("取消生成", "Cancel generation"))
-                                        .clicked()
-                                    {
-                                        act = Act::CancelSubtitles;
-                                        ui.close();
-                                    }
-                                } else if ui
-                                    .add(egui::Button::new(if self.subtitles.is_empty() {
-                                        language.text("生成 AI 字幕", "Generate AI subtitles")
-                                    } else {
-                                        language.text("重新生成字幕", "Regenerate subtitles")
-                                    }))
-                                    .on_hover_text(language.text(
-                                        "将当前视频的音频分段发送到配置的模型服务",
-                                        "Send audio chunks to the configured model service",
-                                    ))
-                                    .clicked()
-                                {
-                                    act = Act::GenerateSubtitles;
-                                    ui.close();
-                                }
-                                if self.torrent_selected.is_some()&&!self.torrent_progress.finished {
-                                    ui.small(language.text("只读取已下载音频；数据不足时等待，不抢占播放下载", "Uses downloaded audio only; waits for missing data without competing with playback"));
-                                }
-                                if ui
-                                    .add_enabled(
-                                        !self.subtitles.is_empty(),
-                                        egui::Button::new(
-                                            language.text("导出 SRT…", "Export SRT…"),
-                                        ),
-                                    )
-                                    .clicked()
-                                {
-                                    act = Act::ExportSubtitles;
-                                    ui.close();
-                                }
-                            },
-                        );
-                    }
-                    }
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                         if self.player.is_none() {
                             if ui
@@ -827,15 +788,12 @@ impl eframe::App for App {
             });
         }
 
-        // ---- bottom bar ----
-        if a > 0.02 && self.player.is_some() && !music {
-            let has_audio = self.player.as_ref().map(|p| p.has_audio()).unwrap_or(false);
-            let (mut vol, mut muted) = (self.vol, self.muted);
+        // ---- bottom bar (video): same layout and interactions as music ----
+        if a > 0.02 && (self.player.is_some() || self.loading) && !music {
             let mut scrubbing = self.scrubbing;
             let mut scrub = self.scrub;
-
             let bot_rect = Rect::from_min_max(
-                pos2(screen.min.x, screen.max.y - BAR_BOTTOM),
+                pos2(screen.min.x, screen.max.y - 108.0),
                 pos2(screen.max.x, screen.max.y),
             );
             painter.rect_filled(
@@ -846,34 +804,23 @@ impl eframe::App for App {
             let mut bui = root.new_child(
                 UiBuilder::new()
                     .id_salt("bottombar")
-                    .max_rect(bot_rect.shrink2(vec2(20.0, 17.0)))
+                    .max_rect(bot_rect.shrink2(vec2(24.0, 10.0)))
                     .layout(Layout::top_down(Align::Min)),
             );
             bui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
-                let r = icon_button(ui, 30.0, a, if playing { draw_pause } else { draw_play });
-                if r.clicked() {
-                    act = Act::TogglePlay;
-                }
-                let cur = if scrubbing { scrub } else { pos };
-                ui.label(
-                    RichText::new(format!("{} / {}", fmt_time(cur), fmt_time(dur)))
-                        .monospace()
-                        .color(Color32::from_white_alpha((225.0 * a) as u8))
-                        .size(13.0),
-                );
-                let durmax = dur.max(0.0001);
+                ui.label(RichText::new(fmt_time(if scrubbing { scrub } else { pos })).monospace());
                 let shown = if scrubbing { scrub } else { pos };
-                let frac = (shown / durmax).clamp(0.0, 1.0) as f32;
-                let volume_slider = screen.width() >= 640.0;
-                let sw = (ui.available_width()
-                    - if has_audio {
-                        if volume_slider { 170.0 } else { 78.0 }
-                    } else {
-                        40.0
-                    })
-                .max(30.0);
-                let (srect, sresp) = hslider(ui, sw, 26.0, frac, 4.0, true, a);
+                let frac = (shown / dur.max(0.001)).clamp(0.0, 1.0) as f32;
+                let (srect, sresp) = hslider(
+                    ui,
+                    (ui.available_width() - 66.0).max(80.0),
+                    18.0,
+                    frac,
+                    3.0,
+                    true,
+                    a,
+                );
                 if sresp.dragged()
                     && let Some(pp) = ui.input(|i| i.pointer.hover_pos())
                 {
@@ -890,32 +837,179 @@ impl eframe::App for App {
                     let f = ((pp.x - srect.min.x) / srect.width()).clamp(0.0, 1.0);
                     act = Act::Seek(f as f64 * dur);
                 }
-                if has_audio {
-                    let eff = if muted { 0.0 } else { vol };
-                    let vr = icon_button(ui, 26.0, a, |p, rr, c| draw_volume(p, rr, c, muted, eff));
-                    if vr.clicked() {
-                        act = Act::ToggleMute;
-                    }
-                    if volume_slider {
-                        let (vrect, vresp) = hslider(ui, 80.0, 26.0, eff, 3.5, false, a);
-                        if (vresp.dragged() || vresp.clicked())
-                            && let Some(pp) = ui.input(|i| i.pointer.hover_pos())
-                        {
-                            let f = ((pp.x - vrect.min.x) / vrect.width()).clamp(0.0, 1.0);
-                            vol = f;
-                            muted = false;
-                            act = Act::Volume(f);
-                        }
-                    }
+                ui.label(RichText::new(fmt_time(dur)).monospace());
+            });
+            let row = bui.available_rect_before_wrap();
+            let row = Rect::from_min_max(row.min, pos2(row.max.x, row.min.y + 46.0));
+            bui.allocate_rect(row, Sense::hover());
+            let mut left_ui = root.new_child(
+                UiBuilder::new()
+                    .id_salt("footer-settings")
+                    .max_rect(Rect::from_min_max(
+                        pos2(row.min.x, row.min.y),
+                        pos2(row.min.x + 26.0, row.max.y),
+                    ))
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            self.settings_button(&mut left_ui, a);
+            let cluster = 30.0 + 16.0 + 46.0 + 16.0 + 30.0 + 16.0 + 26.0;
+            let mut transport = root.new_child(
+                UiBuilder::new()
+                    .id_salt("video-transport")
+                    .max_rect(Rect::from_center_size(
+                        pos2(row.center().x, row.center().y),
+                        vec2(cluster, row.height()),
+                    ))
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            transport.spacing_mut().item_spacing.x = 16.0;
+            let has_prev = self.queue.previous_index().is_some() || pos > 3.0;
+            let has_next = self.queue.next_index().is_some();
+            if has_prev {
+                let prev = icon_button(&mut transport, 30.0, a, draw_prev);
+                if prev
+                    .on_hover_text(language.text("上一个", "Previous"))
+                    .clicked()
+                {
+                    act = Act::Previous;
                 }
-                let fr = icon_button(ui, 28.0, a, draw_fullscreen);
-                if fr.clicked() {
-                    act = Act::ToggleFullscreen;
+            } else {
+                disabled_icon_button(&mut transport, 30.0, draw_prev);
+            }
+            let play = play_circle_button(&mut transport, 46.0, playing);
+            let play = play.on_hover_text(if playing {
+                language.text("暂停", "Pause")
+            } else {
+                language.text("播放", "Play")
+            });
+            if play.clicked() {
+                act = Act::TogglePlay;
+            }
+            if has_next {
+                let next = icon_button(&mut transport, 30.0, a, draw_next);
+                if next
+                    .on_hover_text(language.text("下一个", "Next"))
+                    .clicked()
+                {
+                    act = Act::Next;
+                }
+            } else {
+                disabled_icon_button(&mut transport, 30.0, draw_next);
+            }
+            let effective = if self.muted { 0.0 } else { self.vol };
+            let volume = icon_button(&mut transport, 26.0, a, |p, r, c| {
+                draw_volume(p, r, c, self.muted, effective)
+            });
+            let volume = volume.on_hover_text(language.text("音量", "Volume"));
+            let volume_rect = volume.rect;
+            if volume.clicked() {
+                self.volume_open = !self.volume_open;
+            }
+            let mut right_ui = root.new_child(
+                UiBuilder::new()
+                    .id_salt("footer-right")
+                    .max_rect(Rect::from_min_max(
+                        pos2(row.max.x - 96.0, row.min.y),
+                        pos2(row.max.x, row.max.y),
+                    ))
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            right_ui.spacing_mut().item_spacing.x = 8.0;
+            let caption = if self.subtitle_job.is_some() {
+                language.text("字幕 · 生成中", "Subtitles · generating")
+            } else {
+                language.text("字幕", "Subtitles")
+            };
+            let subtitles = icon_button(&mut right_ui, 26.0, a, draw_subtitles);
+            let subtitles = subtitles.on_hover_text(caption);
+            egui::Popup::menu(&subtitles).show(|ui| {
+                ui.set_max_width(300.0);
+                if !self.subtitle_status.is_empty() {
+                    ui.label(&self.subtitle_status);
+                    if !self.subtitle_metrics.is_empty() {
+                        ui.small(&self.subtitle_metrics);
+                    }
+                    ui.separator();
+                }
+                if !self.subtitle_skipped.is_empty() {
+                    ui.collapsing(
+                        format!(
+                            "{} ({})",
+                            language.text("已跳过的片段", "Skipped segments"),
+                            self.subtitle_skipped.len()
+                        ),
+                        |ui| {
+                            egui::ScrollArea::vertical()
+                                .max_height(180.0)
+                                .show(ui, |ui| {
+                                    for (start, end, error) in &self.subtitle_skipped {
+                                        ui.label(format!(
+                                            "{}–{}",
+                                            fmt_time(*start),
+                                            fmt_time(*end)
+                                        ));
+                                        ui.small(language.error(error));
+                                    }
+                                });
+                        },
+                    );
+                }
+                ui.checkbox(
+                    &mut self.subtitles_visible,
+                    language.text("显示字幕", "Show subtitles"),
+                );
+                if self.subtitle_job.is_some() {
+                    if ui
+                        .button(language.text("取消生成", "Cancel generation"))
+                        .clicked()
+                    {
+                        act = Act::CancelSubtitles;
+                        ui.close();
+                    }
+                } else if ui
+                    .add(egui::Button::new(if self.subtitles.is_empty() {
+                        language.text("生成 AI 字幕", "Generate AI subtitles")
+                    } else {
+                        language.text("重新生成字幕", "Regenerate subtitles")
+                    }))
+                    .on_hover_text(language.text(
+                        "将当前视频的音频分段发送到配置的模型服务",
+                        "Send audio chunks to the configured model service",
+                    ))
+                    .clicked()
+                {
+                    act = Act::GenerateSubtitles;
+                    ui.close();
+                }
+                if self.torrent_selected.is_some() && !self.torrent_progress.finished {
+                    ui.small(language.text("只读取已下载音频；数据不足时等待，不抢占播放下载", "Uses downloaded audio only; waits for missing data without competing with playback"));
+                }
+                if ui
+                    .add_enabled(
+                        !self.subtitles.is_empty(),
+                        egui::Button::new(language.text("导出 SRT…", "Export SRT…")),
+                    )
+                    .clicked()
+                {
+                    act = Act::ExportSubtitles;
+                    ui.close();
                 }
             });
-
-            self.vol = vol;
-            self.muted = muted;
+            let fullscreen = icon_button(&mut right_ui, 28.0, a, draw_fullscreen);
+            if fullscreen
+                .on_hover_text(language.text("全屏", "Fullscreen"))
+                .clicked()
+            {
+                act = Act::ToggleFullscreen;
+            }
+            let queue = icon_button(&mut right_ui, 26.0, a, draw_queue);
+            if queue
+                .on_hover_text(language.text("播放队列", "Play queue"))
+                .clicked()
+            {
+                self.queue_open = !self.queue_open;
+            }
+            self.volume_popup(root, screen, volume_rect, &mut act);
             self.scrub = scrub;
             self.scrubbing = scrubbing;
         }
@@ -928,17 +1022,14 @@ impl eframe::App for App {
                 root,
                 Rect::from_min_max(
                     pos2(playback_rect.max.x, screen.min.y + BAR_TOP),
-                    pos2(
-                        screen.max.x,
-                        screen.max.y - if music { 108.0 } else { BAR_BOTTOM },
-                    ),
+                    pos2(screen.max.x, screen.max.y - BAR_BOTTOM),
                 ),
                 &mut act,
             );
         }
 
         // ---- empty state ----
-        if self.player.is_none() {
+        if self.player.is_none() && !self.loading {
             let center = if music {
                 let content = Rect::from_min_max(
                     playback_rect.min + vec2(24.0, BAR_TOP + 20.0),
@@ -1033,6 +1124,30 @@ impl eframe::App for App {
                     language.text("正在缓冲…", "Buffering…"),
                     egui::FontId::proportional(18.0),
                     Color32::WHITE,
+                );
+                let progress = self.torrent_progress.clone();
+                let detail = if progress.total > 0 {
+                    format!(
+                        "{} {:.1} / {:.1} MiB · {:.2} MiB/s",
+                        language.text("已下载", "Downloaded"),
+                        progress.downloaded as f64 / 1048576.0,
+                        progress.total as f64 / 1048576.0,
+                        progress.download_mbps
+                    )
+                } else {
+                    language
+                        .text(
+                            "尚未连接到 peer：请确认代理(TUN)已开启并应用磁链路由规则",
+                            "No peer connections yet: enable the proxy (TUN) and apply the magnet routing rules",
+                        )
+                        .to_owned()
+                };
+                painter.text(
+                    playback_rect.center() + vec2(0.0, 28.0),
+                    egui::Align2::CENTER_CENTER,
+                    detail,
+                    egui::FontId::proportional(13.0),
+                    MUTED,
                 );
             }
         }
@@ -1533,6 +1648,32 @@ fn draw_repeat(p: &Painter, r: Rect, c: Color32, single: bool) {
             c,
         );
     }
+}
+
+fn draw_subtitles(p: &Painter, r: Rect, c: Color32) {
+    p.rect_stroke(
+        r,
+        CornerRadius::same(3),
+        Stroke::new(2.0, c),
+        egui::StrokeKind::Inside,
+    );
+    let inner = Stroke::new(1.8, c);
+    let y1 = r.center().y - r.height() * 0.16;
+    let y2 = r.center().y + r.height() * 0.2;
+    p.line_segment(
+        [
+            pos2(r.min.x + r.width() * 0.2, y1),
+            pos2(r.max.x - r.width() * 0.2, y1),
+        ],
+        inner,
+    );
+    p.line_segment(
+        [
+            pos2(r.min.x + r.width() * 0.2, y2),
+            pos2(r.center().x + r.width() * 0.1, y2),
+        ],
+        inner,
+    );
 }
 
 fn draw_trash(p: &Painter, r: Rect, c: Color32) {

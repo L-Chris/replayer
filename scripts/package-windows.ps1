@@ -18,6 +18,7 @@ try {
     New-Item -ItemType Directory -Path $stage -Force | Out-Null
     # Whitelist package contents: never copy the working tree, .env, settings or media.
     Copy-Item -LiteralPath $Binary -Destination (Join-Path $stage 'replayer.exe')
+    Copy-Item -LiteralPath 'assets/branding/replayer.ico' -Destination $stage
     $ffmpeg = $env:FFMPEG_DIR
     if (-not $ffmpeg) { $ffmpeg = Join-Path $root '.deps/ffmpeg-n9.0.1-84-g946fcce07b-win64-lgpl-shared-9.0' }
     $dlls = @(Get-ChildItem -LiteralPath (Join-Path $ffmpeg 'bin') -Filter '*.dll')

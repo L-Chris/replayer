@@ -41,6 +41,18 @@ impl Language {
             if message.starts_with("unsupported QQ music") {
                 return "暂不支持此 QQ 音乐文件结构或加密版本。".into();
             }
+            if message.starts_with("Magnet metadata timed out") {
+                return "磁链元数据解析超时：没有可连通的 peer。稍后重试；若使用代理，请在磁链弹窗复制并应用路由规则后重试。".into();
+            }
+            if message.starts_with("audio device failed") {
+                return "音频设备失效，将继续无声播放".into();
+            }
+            if message.starts_with("audio device lost") {
+                return "音频设备已断开，正在等待设备恢复…".into();
+            }
+            if message.starts_with("Audio output device failed") {
+                return "音频输出设备失效；请重新连接设备后重新打开该曲目".into();
+            }
             if message.starts_with("invalid QQ music")
                 || message.starts_with("QQ music file is truncated")
             {

@@ -131,6 +131,10 @@ pub fn routing_rules(executable: &str, llm_base: &str) -> String {
         executable
     };
     let mut rules = Vec::new();
+    // The local streaming server must stay direct, but BitTorrent peer and DHT
+    // traffic needs the proxy egress on networks where UDP is otherwise blocked.
+    rules.push("IP-CIDR,127.0.0.1/32,DIRECT,no-resolve".to_owned());
+    rules.push(format!("PROCESS-NAME,{name},PROXY"));
     if let Ok(url) = reqwest::Url::parse(llm_base)
         && let Some(host) = url.host_str()
         && host != "localhost"
@@ -147,15 +151,37 @@ pub fn routing_rules(executable: &str, llm_base: &str) -> String {
         .into_iter()
         .map(str::to_owned),
     );
-    rules.push(format!("PROCESS-NAME,{name},DIRECT"));
     format!(
-        "prepend:\n{}\n",
+        "# Clash Verge Rev: 新建 Merge 类型配置并粘贴启用；将 PROXY 替换为你的策略组名\nprepend-rules:\n{}\n",
         rules
             .into_iter()
             .map(|rule| format!("  - {}", serde_json::to_string(&rule).unwrap()))
             .collect::<Vec<_>>()
             .join("\n")
     )
+}
+fn public_trackers() -> Vec<String> {
+    [
+        "udp://tracker.opentrackr.org:1337/announce",
+        "udp://open.tracker.cl:1337/announce",
+        "udp://tracker.torrent.eu.org:451/announce",
+        "udp://exodus.desync.com:6969/announce",
+        "udp://tracker.theoks.net:6969/announce",
+        "udp://open.stealth.si:80/announce",
+        "udp://tracker.tiny-vps.com:6969/announce",
+        "udp://tracker.dler.org:6969/announce",
+        "udp://tracker1.itzmx.com:8080/announce",
+        "udp://p4p.arenabg.com:1337/announce",
+        "udp://public.publicbt.one:6969/announce",
+        "https://tracker.tamersunion.org:443/announce",
+        "https://trackers.run:443/announce",
+        "https://tracker.moeking.me:443/announce",
+        "https://tr.cili001.com:7073/announce",
+        "https://open.acgtracker.com:1096/announce",
+        "https://tracker.gbitt.info:443/announce",
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 fn safe_path(components: &[String]) -> Result<PathBuf> {
     ensure!(!components.is_empty(), "Empty torrent filename");
@@ -200,7 +226,22 @@ async fn run(
                 ..Default::default()
             }),
             dht: Some(librqbit::DhtSessionConfig {
-                persistence: None,
+                // A single unreachable bootstrap node stalls peer discovery;
+                // try several well-known nodes and reuse the routing table.
+                bootstrap_addrs: Some(
+                    [
+                        "router.bittorrent.com:6881",
+                        "router.utorrent.com:6881",
+                        "dht.transmissionbt.com:6881",
+                        "dht.libtorrent.org:25401",
+                    ]
+                    .map(str::to_owned)
+                    .to_vec(),
+                ),
+                persistence: Some(librqbit::dht::DhtPersistenceConfig {
+                    dump_interval: None,
+                    config_filename: root.parent().map(|parent| parent.join("dht-state.json")),
+                }),
                 ..Default::default()
             }),
             ipv4_only: true,
@@ -228,12 +269,13 @@ async fn run(
                 Some(AddTorrentOptions {
                     list_only: true,
                     output_folder: Some(root.join("data").to_string_lossy().into_owned()),
+                    trackers: Some(public_trackers()),
                     ..Default::default()
                 }),
             ),
         )
         .await
-        .context("Magnet metadata timed out; no reachable peers. Retry later.")??;
+        .context("Magnet metadata timed out; no reachable peers. Retry later, or apply the proxy routing rules from the magnet dialog.")??;
         let AddTorrentResponse::ListOnly(listed) = listed else {
             bail!("Expected torrent metadata");
         };
@@ -281,6 +323,7 @@ async fn run(
                     overwrite: true,
                     output_folder: Some(root.join("data").to_string_lossy().into_owned()),
                     initial_peers: Some(listed.seen_peers),
+                    trackers: Some(public_trackers()),
                     ..Default::default()
                 }),
             )
@@ -871,9 +914,14 @@ mod tests {
     #[test]
     fn ranges_and_paths_are_bounded() {
         let rules = routing_rules("replayer.exe", "https://chat.rethinkos.com/v1");
+        assert!(rules.starts_with("# Clash Verge Rev"));
         assert!(
-            rules.find("DOMAIN,chat.rethinkos.com,PROXY").unwrap()
-                < rules.find("PROCESS-NAME,replayer.exe,DIRECT").unwrap()
+            rules.find("IP-CIDR,127.0.0.1/32,DIRECT").unwrap()
+                < rules.find("PROCESS-NAME,replayer.exe,PROXY").unwrap()
+        );
+        assert!(
+            rules.find("PROCESS-NAME,replayer.exe,PROXY").unwrap()
+                < rules.find("DOMAIN,chat.rethinkos.com,PROXY").unwrap()
         );
         assert!(!routing_rules("bad,INJECT.exe", "http://localhost:8000").contains("INJECT"));
         assert_eq!(

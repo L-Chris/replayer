@@ -8,9 +8,15 @@ use super::{
 use anyhow::{Context, Result, bail};
 use crossbeam_channel::{Receiver, Sender};
 use std::{
+    collections::VecDeque,
     sync::{Arc, atomic::Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+/// A lost device freezes the music clock; retry reopening for this window
+/// before surfacing the failure, so device switches resume transparently.
+const DEVICE_RETRY_WINDOW: Duration = Duration::from_secs(10);
+const DEVICE_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(super) fn run(
     header: Header,
@@ -20,6 +26,8 @@ pub(super) fn run(
     events: &Sender<Event>,
 ) -> Result<()> {
     let track = header.audio.context("Music has no audio track")?;
+    let params = track.params.clone();
+    let tb = track.tb;
     let mut output = audio::open_output(
         shared.clock.clone(),
         shared.output.clone(),
@@ -41,13 +49,15 @@ pub(super) fn run(
     let mut decoder_eof = false;
     let mut ended = false;
     let mut buffering = false;
-    let mut deferred = None;
+    let mut deferred = VecDeque::<Command>::new();
     shared.clock.reset(epoch, target, false, true);
     while !shared.stop.load(Ordering::Acquire) {
         let mut seek = None;
-        while let Some(command) = deferred.take().or_else(|| commands.try_recv().ok()) {
+        while let Some(command) = deferred.pop_front().or_else(|| commands.try_recv().ok()) {
             match command {
-                Command::Seek { id, target } => seek = Some((id, target)),
+                // Internal recovery seeks carry newer ids; stale seeks are dropped
+                // so the epoch never regresses below shared.requested.
+                Command::Seek { id, target } if id > epoch => seek = Some((id, target)),
                 Command::Playing(playing) if !seeking && !ended && !buffering => {
                     shared.clock.set_playing(playing);
                     shared.output.enabled.store(playing, Ordering::Release);
@@ -73,7 +83,45 @@ pub(super) fn run(
                 .context("send music seek")?;
         }
         if shared.output.failed.swap(false, Ordering::AcqRel) {
-            bail!("Audio output device failed; reconnect the device and reopen the track");
+            shared.output.enabled.store(false, Ordering::Release);
+            if ended {
+                // The track already finished; do not fail or restart playback.
+                return Ok(());
+            }
+            let position = shared.clock.now();
+            let deadline = Instant::now() + DEVICE_RETRY_WINDOW;
+            let reopened = loop {
+                if shared.stop.load(Ordering::Acquire) {
+                    break None;
+                }
+                match audio::open_output(
+                    shared.clock.clone(),
+                    shared.output.clone(),
+                    shared.volume.clone(),
+                )
+                .and_then(|out| {
+                    AudioPipeline::new(params.clone(), tb, header.origin, out.rate)
+                        .map(|pipe| (out, pipe))
+                }) {
+                    Ok(pair) => break Some(pair),
+                    Err(_) if Instant::now() < deadline => {
+                        std::thread::sleep(DEVICE_RETRY_INTERVAL);
+                    }
+                    Err(_) => break None,
+                }
+            };
+            let Some((next_output, next_pipeline)) = reopened else {
+                bail!("Audio output device failed; reconnect the device and reopen the track");
+            };
+            output = next_output;
+            audio = next_pipeline;
+            let id = shared.requested.fetch_add(1, Ordering::AcqRel) + 1;
+            shared.output.epoch.store(id, Ordering::Release);
+            deferred.push_back(Command::Seek {
+                id,
+                target: position,
+            });
+            let _ = events.send(Event::Recovered);
         }
         audio.pump(&mut output);
         for _ in 0..32 {
@@ -158,7 +206,7 @@ pub(super) fn run(
             };
         }
         match commands.recv_timeout(Duration::from_millis(5)) {
-            Ok(command) => deferred = Some(command),
+            Ok(command) => deferred.push_back(command),
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             _ => {}
         }

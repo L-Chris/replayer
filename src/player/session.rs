@@ -10,6 +10,15 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+/// Device switches kill the cpal stream through its error callback even though
+/// a current default device usually exists. Reopen it and reseek to resync
+/// instead of muting for the rest of the session. Budgets are bounded so a
+/// flapping device cannot loop reseek storms forever.
+const REOPEN_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_REOPENS: u32 = 8;
+const MAX_REOPEN_FAILURES: u32 = 15;
+const REOPEN_BUDGET_RESET: Duration = Duration::from_secs(60);
+
 pub(super) fn run(
     path: String,
     shared: &Arc<Shared>,
@@ -49,6 +58,8 @@ pub(super) fn run(
     let mut output = None;
     let mut audio = None;
     let ai = header.audio.as_ref().map(|a| a.index);
+    // Kept so a lost audio device can be reopened and the pipeline rebuilt.
+    let audio_params = header.audio.as_ref().map(|a| (a.params.clone(), a.tb));
     if let Some(track) = header.audio {
         let setup = audio::open_output(
             shared.clock.clone(),
@@ -89,17 +100,24 @@ pub(super) fn run(
     let mut audio_fallback = false;
     let mut buffering = false;
     let mut starving_since: Option<Instant> = None;
-    let mut deferred_command = None;
+    let mut deferred_command = VecDeque::<Command>::new();
     let mut vpackets = VecDeque::<ffmpeg::Packet>::new();
     let mut apackets = VecDeque::<ffmpeg::Packet>::new();
     let mut packet_bytes = 0usize;
+    let mut reopens = 0u32;
+    let mut reopen_failures = 0u32;
+    let mut reopened_at: Option<Instant> = None;
+    let mut reopen_at: Option<Instant> = None;
     let stats = std::env::var_os("REPLAYER_STATS").is_some();
     let mut last_stats = Instant::now();
     shared.clock.reset(epoch, target, false, audio.is_some());
 
     while !shared.stop.load(Ordering::Acquire) {
         let mut seek = None;
-        while let Some(command) = deferred_command.take().or_else(|| commands.try_recv().ok()) {
+        while let Some(command) = deferred_command
+            .pop_front()
+            .or_else(|| commands.try_recv().ok())
+        {
             match command {
                 Command::Playing(playing) => {
                     if !seeking && !ended && !buffering {
@@ -110,7 +128,10 @@ pub(super) fn run(
                         );
                     }
                 }
-                Command::Seek { id, target } => seek = Some((id, target)),
+                // Internal recovery seeks carry newer ids; stale seeks are dropped
+                // so the epoch never regresses below shared.requested.
+                Command::Seek { id, target } if id > epoch => seek = Some((id, target)),
+                _ => {}
             }
         }
         if let Some((id, position)) = seek {
@@ -151,11 +172,69 @@ pub(super) fn run(
             audio = None;
             apackets.clear();
             packet_bytes = vpackets.iter().map(ffmpeg::Packet::size).sum();
-            shared.snapshot.lock().unwrap().has_audio = false;
+            // Video keeps running on the wall clock while audio recovers.
             shared.clock.use_wall_clock();
-            let _ = events.send(Event::Warning(
-                "audio device failed; continuing without audio".into(),
-            ));
+            if reopened_at.is_some_and(|t| t.elapsed() >= REOPEN_BUDGET_RESET) {
+                reopens = 0;
+            }
+            if !ended && audio_params.is_some() && reopens < MAX_REOPENS {
+                reopen_at = Some(Instant::now());
+            } else {
+                shared.snapshot.lock().unwrap().has_audio = false;
+                let _ = events.send(Event::Warning(
+                    "audio device failed; continuing without audio".into(),
+                ));
+            }
+        }
+        if reopen_at.is_some_and(|due| Instant::now() >= due) {
+            reopen_at = None;
+            let position = shared.clock.now();
+            let reopened = audio_params.as_ref().and_then(|(params, tb)| {
+                audio::open_output(
+                    shared.clock.clone(),
+                    shared.output.clone(),
+                    shared.volume.clone(),
+                )
+                .and_then(|out| {
+                    AudioPipeline::new(params.clone(), *tb, header.origin, out.rate)
+                        .map(|pipe| (out, pipe))
+                })
+                .ok()
+            });
+            match reopened {
+                Some((out, pipe)) => {
+                    output = Some(out);
+                    audio = Some(pipe);
+                    reopens += 1;
+                    reopen_failures = 0;
+                    reopened_at = Some(Instant::now());
+                    shared.snapshot.lock().unwrap().has_audio = true;
+                    // An internal seek flushes both pipelines and the demuxer
+                    // read-ahead so audio resyncs at the running position.
+                    let id = shared.requested.fetch_add(1, Ordering::AcqRel) + 1;
+                    shared.output.epoch.store(id, Ordering::Release);
+                    deferred_command.push_back(Command::Seek {
+                        id,
+                        target: position,
+                    });
+                    let _ = events.send(Event::Recovered);
+                }
+                None => {
+                    reopen_failures += 1;
+                    if reopen_failures >= MAX_REOPEN_FAILURES {
+                        shared.snapshot.lock().unwrap().has_audio = false;
+                        let _ = events.send(Event::Warning(
+                            "audio device failed; continuing without audio".into(),
+                        ));
+                    } else {
+                        reopen_at = Some(Instant::now() + REOPEN_INTERVAL);
+                        if reopen_failures == 1 {
+                            let _ =
+                                events.send(Event::Warning("audio device lost; retrying".into()));
+                        }
+                    }
+                }
+            }
         }
 
         // Read-ahead is bounded in compressed bytes. Audio and video are then
@@ -387,7 +466,7 @@ pub(super) fn run(
             );
         }
         match commands.recv_timeout(Duration::from_millis(if idle { 100 } else { 2 })) {
-            Ok(command) => deferred_command = Some(command),
+            Ok(command) => deferred_command.push_back(command),
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return Ok(()),
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
         }

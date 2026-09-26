@@ -34,6 +34,13 @@ impl App {
     pub(super) fn is_music(&self) -> bool {
         self.media_info.as_ref().map_or_else(
             || {
+                if self.loading {
+                    // While a track is opening, keep the previous UI mode so the
+                    // interface does not flash between music and video layouts.
+                    if let Some(kind) = self.ui_kind_music {
+                        return kind;
+                    }
+                }
                 if self.player.is_none() {
                     self.mode == UiMode::Music
                 } else {
@@ -300,6 +307,13 @@ impl App {
                 {
                     *act = Act::AddFiles;
                 }
+                if !self.is_music()
+                    && icon_button(ui, 24.0, 1.0, draw_magnet)
+                        .on_hover_text(self.settings.language.text("打开磁链", "Open magnet link"))
+                        .clicked()
+                {
+                    self.magnet_open = true;
+                }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(
                         RichText::new(self.settings.language.text("播放队列", "Play queue"))
@@ -325,7 +339,7 @@ impl App {
             playback.max - vec2(24.0, 126.0),
         );
         let left = content;
-        if self.player.is_some() {
+        if self.player.is_some() || self.loading {
             let compact = left.height() < 280.0;
             let size = if compact {
                 left.height().clamp(40.0, 110.0)
@@ -458,6 +472,16 @@ impl App {
         let row = ui.available_rect_before_wrap();
         let row = Rect::from_min_max(row.min, pos2(row.max.x, row.min.y + 46.0));
         ui.allocate_rect(row, Sense::hover());
+        let mut left_ui = root.new_child(
+            UiBuilder::new()
+                .id_salt("footer-settings")
+                .max_rect(Rect::from_min_max(
+                    pos2(row.min.x, row.min.y),
+                    pos2(row.min.x + 26.0, row.max.y),
+                ))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        self.settings_button(&mut left_ui, 1.0);
         let has_prev = self.queue.previous_index().is_some() || position > 3.0;
         let has_next = self.queue.next_index().is_some();
         let cluster = 26.0 + 16.0 + 30.0 + 16.0 + 46.0 + 16.0 + 30.0 + 16.0 + 26.0;
@@ -541,46 +565,6 @@ impl App {
         {
             self.queue_open = !self.queue_open;
         }
-        if self.volume_open {
-            let bottom = volume_rect.min.y - 10.0;
-            let top_limit = screen.min.y + BAR_TOP + 4.0;
-            let popup_h = (bottom - top_limit).clamp(60.0, 132.0);
-            let popup_w = 40.0;
-            let px = (volume_rect.center().x - popup_w * 0.5)
-                .clamp(screen.min.x + 4.0, screen.max.x - popup_w - 4.0);
-            let popup = Rect::from_min_max(pos2(px, bottom - popup_h), pos2(px + popup_w, bottom));
-            let outside = root.ctx().input(|i| {
-                i.pointer.any_pressed()
-                    && i.pointer
-                        .hover_pos()
-                        .is_some_and(|p| !popup.contains(p) && !volume_rect.contains(p))
-            });
-            if outside {
-                self.volume_open = false;
-            } else {
-                let painter = root.painter();
-                painter.rect_filled(popup, CornerRadius::same(10), SURFACE);
-                painter.rect_stroke(
-                    popup,
-                    CornerRadius::same(10),
-                    Stroke::new(1.0, Color32::from_rgb(48, 57, 73)),
-                    egui::StrokeKind::Outside,
-                );
-                let mut pui = root.new_child(
-                    UiBuilder::new()
-                        .id_salt("music-volume-popup")
-                        .max_rect(popup.shrink(12.0))
-                        .layout(Layout::top_down(Align::Center)),
-                );
-                let (vrect, vresp) =
-                    vslider(&mut pui, 16.0, popup.height() - 24.0, effective, 3.5, 1.0);
-                if (vresp.dragged() || vresp.clicked())
-                    && let Some(pointer) = pui.input(|i| i.pointer.hover_pos())
-                {
-                    let f = ((vrect.max.y - pointer.y) / vrect.height()).clamp(0.0, 1.0);
-                    *act = Act::Volume(f);
-                }
-            }
-        }
+        self.volume_popup(root, screen, volume_rect, act);
     }
 }

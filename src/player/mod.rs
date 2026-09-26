@@ -41,8 +41,13 @@ pub struct Snapshot {
 pub enum Event {
     MediaInfo(Arc<crate::media::Info>),
     Opened,
-    SeekCompleted { id: u64, position: f64 },
+    SeekCompleted {
+        id: u64,
+        position: f64,
+    },
     Ended,
+    /// The audio device was lost and reopened; playback resumed with audio.
+    Recovered,
     Warning(String),
     Error(String),
 }
@@ -308,5 +313,104 @@ mod tests {
             reaped,
             "session did not release its shared state after cancellation"
         );
+    }
+
+    #[test]
+    fn video_device_failure_recovers_audio() {
+        let root =
+            std::env::temp_dir().join(format!("replayer-video-device-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("sample.mp4");
+        let exe = std::path::PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap())
+            .join("bin/ffmpeg.exe");
+        assert!(
+            std::process::Command::new(exe)
+                .args([
+                    "-v",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=320x180:rate=24:duration=6",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:sample_rate=48000:duration=6",
+                    "-c:v",
+                    "mpeg4",
+                    "-g",
+                    "24",
+                    "-q:v",
+                    "4",
+                    "-c:a",
+                    "aac",
+                    "-movflags",
+                    "+faststart",
+                ])
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let mut player = Player::open(path.to_string_lossy().into_owned()).unwrap();
+        let pump = |player: &mut Player| {
+            let mut events = Vec::new();
+            while let Some(event) = player.poll_event() {
+                if let Event::Error(error) = &event {
+                    panic!("{error}");
+                }
+                events.push(event);
+            }
+            player.next_frame(player.sync_time());
+            events
+        };
+        let start = Instant::now();
+        loop {
+            let s = player.snapshot();
+            assert!(s.state != PlaybackState::Failed, "open failed");
+            if s.state == PlaybackState::Playing && s.has_audio && player.position() > 0.1 {
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(10), "{s:?}");
+            pump(&mut player);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let epoch_before = player.snapshot().epoch;
+        player.shared.output.failed.store(true, Ordering::Release);
+        let mut warnings = Vec::new();
+        let start = Instant::now();
+        loop {
+            let s = player.snapshot();
+            if s.state == PlaybackState::Playing && s.epoch > epoch_before && s.has_audio {
+                break;
+            }
+            assert!(s.state != PlaybackState::Failed, "recovery failed: {s:?}");
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "no recovery: {s:?}"
+            );
+            for event in pump(&mut player) {
+                if let Event::Warning(message) = event {
+                    warnings.push(message);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(warnings.is_empty(), "recovery warned: {warnings:?}");
+        let before = player.position();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while player.position() < before + 0.2 {
+            pump(&mut player);
+            assert!(
+                Instant::now() < deadline,
+                "clock froze after audio recovery: {}",
+                player.position()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        drop(player);
+        std::thread::sleep(Duration::from_millis(50));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

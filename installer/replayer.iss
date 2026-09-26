@@ -21,6 +21,7 @@ OutputBaseFilename=replayer-{#AppVersion}-windows-x86_64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile={#SourceDir}\replayer.ico
 UninstallDisplayIcon={app}\replayer.exe
 CloseApplications=yes
 RestartApplications=no
@@ -36,8 +37,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\replayer"; Filename: "{app}\replayer.exe"
-Name: "{autodesktop}\replayer"; Filename: "{app}\replayer.exe"; Tasks: desktopicon
+Name: "{group}\replayer"; Filename: "{app}\replayer.exe"; IconFilename: "{app}\replayer.exe"; IconIndex: 0
+Name: "{autodesktop}\replayer"; Filename: "{app}\replayer.exe"; IconFilename: "{app}\replayer.exe"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\replayer.exe"; Description: "Launch replayer"; Flags: nowait postinstall skipifsilent
