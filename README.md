@@ -1,5 +1,7 @@
 # replayer
 
+> 本项目由 Qwen3.8 Max 开发。
+
 使用 Rust、FFmpeg、egui/WGPU 和 CPAL 开发的桌面音视频播放器，目前主要在 Windows 上验证。
 
 ## 功能
