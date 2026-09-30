@@ -79,6 +79,18 @@ fn music_formats_tags_cover_and_audio_eof() {
             "album=Test album",
         ]);
         ffmpeg(&args, &path);
+        crate::media::LocalMetadata {
+            title: "fallback title".into(),
+            artist: "fallback artist".into(),
+            album: "fallback album".into(),
+        }
+        .save(&path)
+        .unwrap();
+        let queued_info = crate::media::probe_info(path.to_str().unwrap()).unwrap();
+        assert_eq!(queued_info.title.as_deref(), Some("Test song"));
+        assert_eq!(queued_info.artist.as_deref(), Some("Test artist"));
+        assert_eq!(queued_info.album.as_deref(), Some("Test album"));
+        assert_eq!(queued_info.artwork.is_some(), has_cover);
         let player = Player::open(path.to_string_lossy().into_owned()).unwrap();
         await_state(&player, |s| s.state == PlaybackState::Ended);
         let snapshot = player.snapshot();

@@ -18,6 +18,7 @@ mod about;
 mod design;
 mod magnets;
 mod music;
+mod online_music;
 mod preferences;
 mod qq;
 use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
@@ -25,7 +26,7 @@ use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
 const BAR_BOTTOM: f32 = 108.0;
 const BAR_TOP: f32 = 60.0;
 const TOOLBAR_HIDE_DELAY: Duration = Duration::from_millis(400);
-type ArtworkResult = (String, Option<Arc<crate::media::Artwork>>);
+type MetadataResult = (String, Option<Arc<crate::media::Info>>);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum UiMode {
@@ -36,6 +37,7 @@ pub enum UiMode {
 enum PrefTab {
     General,
     Subtitles,
+    MusicSources,
     About,
 }
 enum Act {
@@ -57,14 +59,15 @@ enum Act {
 }
 
 pub struct App {
+    online_music: online_music::State,
     queue: crate::queue::Queue,
     queue_inactive: crate::queue::Queue,
     queue_kind_music: bool,
     queue_open: bool,
     queue_drag: Option<usize>,
-    art_requests: Sender<String>,
-    art_results: Receiver<ArtworkResult>,
-    art_cache: HashMap<String, Option<Arc<crate::media::Artwork>>>,
+    metadata_requests: Sender<String>,
+    metadata_results: Receiver<MetadataResult>,
+    metadata_cache: HashMap<String, Option<Arc<crate::media::Info>>>,
     art_textures: HashMap<String, egui::TextureHandle>,
     media_info: Option<Arc<crate::media::Info>>,
     artwork: Option<egui::TextureHandle>,
@@ -132,26 +135,30 @@ impl App {
         defaults.api_key.clear();
         let (open_tx, open_rx) = unbounded();
         let (subtitle_save_tx, subtitle_save_rx) = unbounded();
-        let (art_requests, art_requests_rx): (Sender<String>, Receiver<String>) = unbounded();
-        let (art_results_tx, art_results): (Sender<ArtworkResult>, Receiver<ArtworkResult>) =
+        let (metadata_requests, metadata_requests_rx): (Sender<String>, Receiver<String>) =
             unbounded();
+        let (metadata_results_tx, metadata_results): (
+            Sender<MetadataResult>,
+            Receiver<MetadataResult>,
+        ) = unbounded();
         thread::spawn(move || {
-            while let Ok(path) = art_requests_rx.recv() {
-                let art = crate::media::probe_artwork(&path);
-                if art_results_tx.send((path, art)).is_err() {
+            while let Ok(path) = metadata_requests_rx.recv() {
+                let art = crate::media::probe_info(&path);
+                if metadata_results_tx.send((path, art)).is_err() {
                     break;
                 }
             }
         });
         let mut app = Self {
+            online_music: online_music::State::new(&settings.music),
             queue: Default::default(),
             queue_inactive: Default::default(),
             queue_kind_music: true,
             queue_open: true,
             queue_drag: None,
-            art_requests,
-            art_results,
-            art_cache: HashMap::new(),
+            metadata_requests,
+            metadata_results,
+            metadata_cache: HashMap::new(),
             art_textures: HashMap::new(),
             media_info: None,
             artwork: None,
@@ -329,6 +336,7 @@ impl App {
         self.load_media_with_key(path, progressive, None);
     }
     fn load_media_with_key(&mut self, path: String, progressive: bool, key: Option<String>) {
+        self.online_music.autoplay = false;
         self.media_info = None;
         self.subtitle_job = None;
         self.subtitles.clear();
@@ -391,43 +399,8 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, root: &mut Ui, _frame: &mut eframe::Frame) {
-        let ctx = root.ctx().clone();
-        let screen = root.max_rect();
-        let painter = root.painter().clone();
-        let language = self.settings.language;
-        let previous_concurrency = self.settings.subtitle_concurrency;
-        self.updater.poll();
-        self.poll_torrent();
-        self.poll_qq_key();
-        while let Ok((path, art)) = self.art_results.try_recv() {
-            self.art_cache.insert(path, art);
-        }
-        let dropped = ctx.input(|i| {
-            i.raw
-                .dropped_files
-                .iter()
-                .map(|file| file.path().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-        });
-        if !dropped.is_empty() {
-            self.open_items(dropped, ctx.input(|i| i.modifiers.shift));
-        }
-
-        if let Ok(picked) = self.open_rx.try_recv() {
-            self.dialog_open = false;
-            if let Some(paths) = picked {
-                self.open_items(
-                    paths
-                        .iter()
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .collect(),
-                    self.append_dialog,
-                );
-            }
-            self.append_dialog = false;
-        }
-
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_online_music();
         let mut advance = false;
         if let Some(player) = &self.player {
             while let Some(event) = player.poll_event() {
@@ -458,10 +431,8 @@ impl eframe::App for App {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                         }
                         if let Some(source) = &self.source {
-                            self.art_cache.insert(
-                                source.to_string_lossy().into_owned(),
-                                info.artwork.clone(),
-                            );
+                            self.metadata_cache
+                                .insert(source.to_string_lossy().into_owned(), Some(info.clone()));
                         }
                         self.media_info = Some(info);
                     }
@@ -501,6 +472,52 @@ impl eframe::App for App {
                 }
             }
         }
+        let busy = self
+            .player
+            .as_ref()
+            .is_some_and(|p| !matches!(p.snapshot().state, PlaybackState::Paused | PlaybackState::Failed));
+        if busy || self.online_music.autoplay {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
+    fn ui(&mut self, root: &mut Ui, _frame: &mut eframe::Frame) {
+        let ctx = root.ctx().clone();
+        let screen = root.max_rect();
+        let painter = root.painter().clone();
+        let language = self.settings.language;
+        let previous_concurrency = self.settings.subtitle_concurrency;
+        self.updater.poll();
+        self.poll_torrent();
+        self.poll_qq_key();
+        while let Ok((path, art)) = self.metadata_results.try_recv() {
+            self.metadata_cache.insert(path, art);
+        }
+        let dropped = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|file| file.path().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        });
+        if !dropped.is_empty() {
+            self.open_items(dropped, ctx.input(|i| i.modifiers.shift));
+        }
+
+        if let Ok(picked) = self.open_rx.try_recv() {
+            self.dialog_open = false;
+            if let Some(paths) = picked {
+                self.open_items(
+                    paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect(),
+                    self.append_dialog,
+                );
+            }
+            self.append_dialog = false;
+        }
+
         let music = self.is_music();
         let sidebar_width = if self.queue_open && !self.queue.items.is_empty() {
             (screen.width() * 0.38).clamp(220.0, 340.0)
@@ -705,7 +722,12 @@ impl eframe::App for App {
         );
 
         let mut act = Act::None;
-        if self.player.is_some() && !music && !self.settings_open && !self.magnet_open {
+        if self.player.is_some()
+            && !music
+            && !self.settings_open
+            && !self.magnet_open
+            && !self.online_music.open
+        {
             if vresp.double_clicked() {
                 act = Act::ToggleFullscreen;
             } else if vresp.clicked() {
@@ -717,6 +739,8 @@ impl eframe::App for App {
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             if self.settings_open {
                 self.settings_open = false;
+            } else if self.online_music.open {
+                self.online_music.open = false;
             } else if self.magnet_open {
                 self.magnet_open = false;
             } else {
@@ -727,6 +751,7 @@ impl eframe::App for App {
         if self.player.is_some()
             && !self.settings_open
             && !self.magnet_open
+            && !self.online_music.open
             && !ctx.egui_wants_keyboard_input()
         {
             if ctx.input(|i| i.key_pressed(Key::Space)) {
@@ -761,25 +786,31 @@ impl eframe::App for App {
             tui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        if icon_button(ui, 26.0, a, draw_search)
+                            .on_hover_text(language.text("搜索音乐", "Search music"))
+                            .clicked()
+                        {
+                            self.online_music.open = true;
+                        }
                         if self.player.is_none() {
-                            if ui
-                                .selectable_value(
-                                    &mut self.mode,
-                                    UiMode::Music,
-                                    language.text("音乐", "Music"),
-                                )
-                                .clicked()
+                            let music_mode = self.mode == UiMode::Music;
+                            if icon_button(ui, 26.0, a, |p, r, c| {
+                                draw_music(p, r, if music_mode { ACCENT } else { c })
+                            })
+                            .on_hover_text(language.text("音乐", "Music"))
+                            .clicked()
                             {
+                                self.mode = UiMode::Music;
                                 self.set_active_queue(true);
                             }
-                            if ui
-                                .selectable_value(
-                                    &mut self.mode,
-                                    UiMode::Video,
-                                    language.text("视频", "Video"),
-                                )
-                                .clicked()
+                            let video_mode = self.mode == UiMode::Video;
+                            if icon_button(ui, 26.0, a, |p, r, c| {
+                                draw_video(p, r, if video_mode { ACCENT } else { c })
+                            })
+                            .on_hover_text(language.text("视频", "Video"))
+                            .clicked()
                             {
+                                self.mode = UiMode::Video;
                                 self.set_active_queue(false);
                             }
                         }
@@ -1108,6 +1139,7 @@ impl eframe::App for App {
         }
 
         self.preferences(&ctx);
+        self.online_music_window(&ctx);
         self.magnet_dialog(&ctx);
         if let Some(player) = &self.player {
             let state = player.snapshot().state;
@@ -1801,6 +1833,60 @@ fn draw_add(p: &Painter, r: Rect, c: Color32) {
     let d = r.width().min(r.height()) * 0.42;
     p.line_segment([pos2(cx - d, cy), pos2(cx + d, cy)], s);
     p.line_segment([pos2(cx, cy - d), pos2(cx, cy + d)], s);
+}
+
+fn draw_search(p: &Painter, r: Rect, c: Color32) {
+    let s = Stroke::new(2.0, c);
+    let size = r.width().min(r.height());
+    let rad = size * 0.3;
+    let k = std::f32::consts::FRAC_1_SQRT_2;
+    let center = pos2(r.center().x - size * 0.13, r.center().y - size * 0.13);
+    p.circle_stroke(center, rad, s);
+    p.line_segment(
+        [
+            pos2(center.x + rad * k, center.y + rad * k),
+            pos2(
+                center.x + (rad + size * 0.28) * k,
+                center.y + (rad + size * 0.28) * k,
+            ),
+        ],
+        s,
+    );
+}
+
+fn draw_music(p: &Painter, r: Rect, c: Color32) {
+    let s = Stroke::new(2.0, c);
+    let top = r.min.y + r.height() * 0.14;
+    let x1 = r.min.x + r.width() * 0.36;
+    let x2 = r.min.x + r.width() * 0.88;
+    let y = r.max.y - r.height() * 0.2;
+    p.line_segment([pos2(x1, top), pos2(x1, y)], s);
+    p.line_segment([pos2(x2, top), pos2(x2, y)], s);
+    p.line_segment([pos2(x1, top + 1.0), pos2(x2, top + 1.0)], Stroke::new(2.5, c));
+    let head = r.width() * 0.17;
+    p.circle_filled(pos2(x1 - head * 0.8, y), head, c);
+    p.circle_filled(pos2(x2 - head * 0.8, y), head, c);
+}
+
+fn draw_video(p: &Painter, r: Rect, c: Color32) {
+    p.rect_stroke(
+        r,
+        CornerRadius::same(3),
+        Stroke::new(2.0, c),
+        egui::StrokeKind::Inside,
+    );
+    let cx = r.center().x;
+    let cy = r.center().y;
+    let d = r.width().min(r.height()) * 0.26;
+    p.add(Shape::convex_polygon(
+        vec![
+            pos2(cx - d * 0.65, cy - d),
+            pos2(cx - d * 0.65, cy + d),
+            pos2(cx + d * 0.95, cy),
+        ],
+        c,
+        Stroke::NONE,
+    ));
 }
 
 fn draw_queue(p: &Painter, r: Rect, c: Color32) {

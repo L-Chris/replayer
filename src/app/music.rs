@@ -86,6 +86,7 @@ impl App {
         let Some(item) = self.queue.select(index) else {
             return;
         };
+        self.online_music.autoplay = false;
         match item.source {
             Source::File(path) => self.load(path),
             Source::Torrent(id) => {
@@ -119,12 +120,40 @@ impl App {
                         Source::Torrent(_) => None,
                     };
                     if let Some(path) = &path
-                        && !self.art_cache.contains_key(path)
+                        && !self.metadata_cache.contains_key(path)
                     {
-                        self.art_cache.insert(path.clone(), None);
-                        let _ = self.art_requests.send(path.clone());
+                        self.metadata_cache.insert(path.clone(), None);
+                        let _ = self.metadata_requests.send(path.clone());
                     }
+                    let metadata = path
+                        .as_ref()
+                        .and_then(|path| self.metadata_cache.get(path))
+                        .and_then(|value| value.as_ref())
+                        .cloned();
+                    let title = metadata
+                        .as_ref()
+                        .and_then(|info| info.title.as_deref())
+                        .unwrap_or(&item.title);
+                    let detail = metadata
+                        .as_ref()
+                        .map(|info| {
+                            [info.artist.as_deref(), info.album.as_deref()]
+                                .into_iter()
+                                .flatten()
+                                .collect::<Vec<_>>()
+                                .join(" · ")
+                        })
+                        .unwrap_or_default();
                     ui.push_id(index, |ui| {
+                        // Keep rows clear of the vertical scrollbar hit zone.
+                        let inner_width = (ui.available_width() - 28.0).max(80.0);
+                        let row_rect =
+                            Rect::from_min_size(ui.cursor().min, vec2(inner_width + 16.0, 48.0));
+                        let row = ui.interact(row_rect, ui.id().with("row"), Sense::drag());
+                        if row.drag_started() {
+                            self.queue_drag = Some(index);
+                        }
+                        row.on_hover_cursor(egui::CursorIcon::PointingHand);
                         let out = egui::Frame::new()
                             .fill(if current {
                                 Color32::from_rgb(34, 50, 77)
@@ -134,15 +163,14 @@ impl App {
                             .corner_radius(8)
                             .inner_margin(8)
                             .show(ui, |ui| {
-                                // Keep rows clear of the vertical scrollbar hit zone.
-                                let row_width = (ui.available_width() - 12.0).max(80.0);
-                                ui.set_min_width(row_width);
-                                ui.set_max_width(row_width);
+                                ui.set_min_width(inner_width);
+                                ui.set_max_width(inner_width);
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 8.0;
                                     let mut tex = None;
                                     if let Some(path) = &path
-                                        && let Some(Some(art)) = self.art_cache.get(path)
+                                        && let Some(art) =
+                                            metadata.as_ref().and_then(|info| info.artwork.as_ref())
                                     {
                                         let ctx = ui.ctx().clone();
                                         let art = art.clone();
@@ -213,19 +241,33 @@ impl App {
                                     let label_width = (ui.available_width() - 40.0).max(40.0);
                                     ui.allocate_ui_with_layout(
                                         vec2(label_width, 32.0),
-                                        Layout::left_to_right(Align::Center),
+                                        Layout::top_down(Align::Min),
                                         |ui| {
                                             ui.set_min_width(label_width);
+                                            ui.spacing_mut().item_spacing.y = 2.0;
                                             ui.add(
-                                                egui::Label::new(RichText::new(&item.title).color(
+                                                egui::Label::new(RichText::new(title).color(
                                                     if current { Color32::WHITE } else { MUTED },
                                                 ))
-                                                .truncate(),
-                                            )
+                                                .truncate()
+                                                .selectable(false),
+                                            );
+                                            if !detail.is_empty() {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(&detail).small().color(MUTED),
+                                                    )
+                                                    .truncate()
+                                                    .selectable(false),
+                                                );
+                                            }
                                         },
                                     )
-                                    .inner
-                                    .on_hover_text(&item.title);
+                                    .response
+                                    .on_hover_text(format!(
+                                        "{title}\n{detail}\n{}",
+                                        path.as_deref().unwrap_or(&item.title)
+                                    ));
                                     if icon_button(ui, 22.0, 1.0, draw_trash)
                                         .on_hover_text(language.text(
                                             "从队列移除（不删除文件）",
@@ -242,22 +284,7 @@ impl App {
                     ui.add_space(4.0);
                 }
             });
-        let (pressed, released, hover) = ui.input(|i| {
-            (
-                i.pointer.any_pressed(),
-                i.pointer.any_released(),
-                i.pointer.hover_pos(),
-            )
-        });
-        if pressed
-            && self.queue_drag.is_none()
-            && let Some(pointer) = hover
-        {
-            self.queue_drag = rects
-                .iter()
-                .find(|(_, rect)| rect.contains(pointer))
-                .map(|(index, _)| *index);
-        }
+        let (released, hover) = ui.input(|i| (i.pointer.any_released(), i.pointer.hover_pos()));
         if let Some(drag) = self.queue_drag {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             let target = hover.map_or(drag, |pointer| {

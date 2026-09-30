@@ -1,4 +1,51 @@
-use std::sync::Arc;
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+/// Metadata accompanying downloaded audio. No credentials or remote URLs are stored.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct LocalMetadata {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+}
+pub fn companion_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+fn read_bounded(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() as u64 <= limit).then_some(bytes)
+}
+pub fn write_companion(path: &Path, suffix: &str, bytes: &[u8]) -> anyhow::Result<()> {
+    let target = companion_path(path, suffix);
+    let temporary = companion_path(&target, &format!(".{}.tmp", uuid::Uuid::new_v4()));
+    let result =
+        std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, target));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    Ok(result?)
+}
+impl LocalMetadata {
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        write_companion(path, ".replayer.json", &serde_json::to_vec(self)?)
+    }
+    fn load(path: &Path) -> Self {
+        read_bounded(&companion_path(path, ".replayer.json"), 64 * 1024)
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+}
 
 pub const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "aif", "aiff", "wma", "alac",
@@ -59,24 +106,80 @@ pub fn decode_artwork(bytes: &[u8]) -> Option<Arc<Artwork>> {
         rgba: image.into_raw(),
     }))
 }
-/// Extracts embedded cover art without starting playback. Runs off the UI thread.
-pub fn probe_artwork(path: &str) -> Option<Arc<Artwork>> {
+/// One metadata reader for playback and queue entries: embedded tags take
+/// precedence, downloaded companion data fills omissions, then the UI uses names.
+pub fn info(input: &ffmpeg_next::format::context::Input, path: &Path) -> Info {
+    use ffmpeg_next::{format::stream::Disposition, media::Type};
+    let video = input.streams().any(|s| {
+        s.parameters().medium() == Type::Video
+            && !s.disposition().contains(Disposition::ATTACHED_PIC)
+    });
+    let local = if video {
+        LocalMetadata::default()
+    } else {
+        LocalMetadata::load(path)
+    };
+    let nonempty = |value: String| (!value.trim().is_empty()).then_some(value);
+    let tag = |name: &str| {
+        input
+            .metadata()
+            .iter()
+            .find(|(key, value)| key.eq_ignore_ascii_case(name) && !value.trim().is_empty())
+            .map(|(_, value)| value.to_owned())
+            .or_else(|| {
+                input.streams().best(Type::Audio).and_then(|s| {
+                    s.metadata()
+                        .iter()
+                        .find(|(key, value)| {
+                            key.eq_ignore_ascii_case(name) && !value.trim().is_empty()
+                        })
+                        .map(|(_, value)| value.to_owned())
+                })
+            })
+    };
+    let artwork = if video {
+        None
+    } else {
+        input
+            .streams()
+            .filter(|s| s.disposition().contains(Disposition::ATTACHED_PIC))
+            .find_map(|s| {
+                let packet = unsafe { &(*s.as_ptr()).attached_pic };
+                if packet.data.is_null() || packet.size <= 0 || packet.size > 8 * 1024 * 1024 {
+                    return None;
+                }
+                decode_artwork(unsafe {
+                    std::slice::from_raw_parts(packet.data, packet.size as usize)
+                })
+            })
+            .or_else(|| {
+                read_bounded(
+                    &companion_path(path, ".replayer-cover.png"),
+                    8 * 1024 * 1024,
+                )
+                .and_then(|bytes| decode_artwork(&bytes))
+            })
+    };
+    Info {
+        kind: if video { Kind::Video } else { Kind::Music },
+        title: tag("title").or_else(|| nonempty(local.title)),
+        artist: tag("artist").or_else(|| nonempty(local.artist)),
+        album: tag("album").or_else(|| nonempty(local.album)),
+        artwork,
+    }
+}
+/// Reads tags and artwork without playback, off the UI thread, including files
+/// that have never been selected. Bound probing so one bad file cannot stall a queue.
+pub fn probe_info(path: &str) -> Option<Arc<Info>> {
     let stop = std::sync::atomic::AtomicBool::new(false);
     let prepared = crate::media_source::prepare(path, &stop, None).ok()?;
     ffmpeg_next::init().ok()?;
-    let input = ffmpeg_next::format::input(prepared.path()).ok()?;
-    input
-        .streams()
-        .find(|stream| {
-            stream
-                .disposition()
-                .contains(ffmpeg_next::format::stream::Disposition::ATTACHED_PIC)
-        })
-        .and_then(|stream| {
-            let packet = unsafe { &(*stream.as_ptr()).attached_pic };
-            if packet.data.is_null() || packet.size <= 0 || packet.size > 8 * 1024 * 1024 {
-                return None;
-            }
-            decode_artwork(unsafe { std::slice::from_raw_parts(packet.data, packet.size as usize) })
-        })
+    let started = std::time::Instant::now();
+    let input = ffmpeg_next::format::input_with_interrupt_and_dictionary(
+        prepared.path(),
+        move || started.elapsed() > std::time::Duration::from_secs(3),
+        ffmpeg_next::Dictionary::new(),
+    )
+    .ok()?;
+    Some(Arc::new(info(&input, Path::new(path))))
 }

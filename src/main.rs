@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod env_config;
 mod media;
 mod media_source;
+mod music_sources;
 mod player;
 mod queue;
 mod renderer;

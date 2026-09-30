@@ -288,6 +288,11 @@ impl Client {
             .await
             .map_err(network_error)?;
         let status = response.status();
+        // A rejected chunk cannot benefit from retrying the same request. Drop
+        // the response immediately, even if the gateway stalls its error body.
+        if status == reqwest::StatusCode::BAD_REQUEST {
+            bail!("字幕 API 返回 HTTP 400: 请求无效，已跳过该片段（不重试）");
+        }
         let retry_after = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)

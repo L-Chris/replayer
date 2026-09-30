@@ -28,6 +28,11 @@ impl Language {
         }
     }
     pub fn error(self, message: &str) -> String {
+        if self == Self::English
+            && message == "字幕 API 返回 HTTP 400: 请求无效，已跳过该片段（不重试）"
+        {
+            return "Subtitle API returned HTTP 400: invalid request; skipped this segment without retrying".into();
+        }
         if self == Self::Chinese {
             if message.starts_with("QQ music needs a song key") {
                 return "该 QQ 音乐文件没有内嵌密钥，请导入这首歌对应的 ekey。".into();
@@ -177,6 +182,7 @@ pub struct Settings {
     pub language: Language,
     pub subtitle_concurrency: usize,
     pub llm: LlmSettings,
+    pub music: crate::music_sources::Settings,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -185,6 +191,7 @@ impl Default for Settings {
             language: Language::Chinese,
             subtitle_concurrency: 2,
             llm: LlmSettings::default(),
+            music: Default::default(),
         }
     }
 }
@@ -234,6 +241,10 @@ mod tests {
     #[test]
     fn language_and_parallelism_roundtrip_without_credentials() {
         let s = Settings {
+            music: crate::music_sources::Settings {
+                api_key: "music-session-secret".into(),
+                ..Default::default()
+            },
             auto_check_updates: true,
             language: Language::English,
             subtitle_concurrency: 4,

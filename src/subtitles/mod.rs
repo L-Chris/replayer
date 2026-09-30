@@ -507,6 +507,13 @@ mod tests {
     }
     #[test]
     fn exhausted_retries_skip_one_segment_and_continue_in_both_pipelines() {
+        check_failed_segment_is_skipped(500, 3);
+    }
+    #[test]
+    fn http_400_skips_without_retry_or_waiting_for_body_in_both_pipelines() {
+        check_failed_segment_is_skipped(400, 1);
+    }
+    fn check_failed_segment_is_skipped(error_status: u16, failed_attempts: usize) {
         use std::io::{Read, Write};
         for prioritized in [false, true] {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -514,7 +521,8 @@ mod tests {
             let address = listener.local_addr().unwrap();
             let server = std::thread::spawn(move || {
                 let deadline = Instant::now() + std::time::Duration::from_secs(12);
-                for attempt in 0..4 {
+                let mut pending_bodies = Vec::new();
+                for attempt in 0..=failed_attempts {
                     let (mut socket, _) = loop {
                         match listener.accept() {
                             Ok(connection) => break connection,
@@ -549,7 +557,16 @@ mod tests {
                             }
                         }
                     }
-                    let (status, body) = if attempt < 3 {
+                    if error_status == 400 && attempt < failed_attempts {
+                        // Keep the connection open and deliberately never send
+                        // the declared body. The next request must be a NEW
+                        // segment, not a retry (verified by cue offset below).
+                        write!(socket, "HTTP/1.1 400 Bad Request\r\nContent-Length: 1000\r\nRetry-After: 30\r\nConnection: close\r\n\r\n").unwrap();
+                        socket.flush().unwrap();
+                        pending_bodies.push(socket);
+                        continue;
+                    }
+                    let (status, body) = if attempt < failed_attempts {
                         (
                             "500 Internal Server Error",
                             r#"{"error":{"message":"persistent failure test-key"}}"#.to_owned(),
@@ -561,7 +578,7 @@ mod tests {
                 }
             });
             let path = std::env::temp_dir().join(format!(
-                "replayer-skip-{}-{prioritized}.wav",
+                "replayer-skip-{}-{prioritized}-{error_status}.wav",
                 std::process::id()
             ));
             std::fs::write(
@@ -606,6 +623,7 @@ mod tests {
             assert_eq!(skipped.len(), 1);
             assert_eq!((skipped[0].0, skipped[0].1), (0.0, 5.0));
             assert!(!skipped[0].2.contains("test-key"));
+            assert!(skipped[0].2.contains(&format!("HTTP {error_status}")));
             assert_eq!(cues[0].start, 5.0);
             assert_eq!(through, 6.0);
         }

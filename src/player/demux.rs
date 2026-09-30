@@ -160,53 +160,7 @@ fn run(
         video.is_some() || audio.is_some(),
         "no playable audio or video stream"
     );
-    let tag = |name: &str| {
-        input
-            .metadata()
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.to_owned())
-            .or_else(|| {
-                input.streams().best(media::Type::Audio).and_then(|s| {
-                    s.metadata()
-                        .iter()
-                        .find(|(key, _)| key.eq_ignore_ascii_case(name))
-                        .map(|(_, v)| v.to_owned())
-                })
-            })
-            .filter(|s| !s.trim().is_empty())
-    };
-    let artwork = if video.is_none() {
-        input
-            .streams()
-            .filter(|s| {
-                s.disposition()
-                    .contains(format::stream::Disposition::ATTACHED_PIC)
-            })
-            .find_map(|s| unsafe {
-                let packet = &(*s.as_ptr()).attached_pic;
-                if packet.data.is_null() || packet.size <= 0 || packet.size > 8 * 1024 * 1024 {
-                    return None;
-                }
-                crate::media::decode_artwork(std::slice::from_raw_parts(
-                    packet.data,
-                    packet.size as usize,
-                ))
-            })
-    } else {
-        None
-    };
-    let info = Arc::new(crate::media::Info {
-        kind: if video.is_some() {
-            crate::media::Kind::Video
-        } else {
-            crate::media::Kind::Music
-        },
-        title: tag("title"),
-        artist: tag("artist"),
-        album: tag("album"),
-        artwork,
-    });
+    let info = Arc::new(crate::media::info(&input, std::path::Path::new(&path)));
     // FFmpeg exposes format start_time only through its FFI context.
     let start = unsafe { (*input.as_ptr()).start_time };
     let origin = if start == ffmpeg::ffi::AV_NOPTS_VALUE {

@@ -66,6 +66,11 @@ impl App {
                         );
                         nav.selectable_value(
                             &mut self.preferences_tab,
+                            PrefTab::MusicSources,
+                            language.text("音乐源", "Music sources"),
+                        );
+                        nav.selectable_value(
+                            &mut self.preferences_tab,
                             PrefTab::About,
                             language.text("关于", "About"),
                         );
@@ -79,6 +84,7 @@ impl App {
                             ui.vertical(|ui| match self.preferences_tab {
                                 PrefTab::General => self.preferences_general(ui),
                                 PrefTab::Subtitles => self.preferences_subtitles(ui),
+                                PrefTab::MusicSources => self.preferences_music_sources(ui),
                                 PrefTab::About => self.about(ui, ctx),
                             });
                         });
@@ -109,6 +115,23 @@ impl App {
         self.settings_open = open && !closed;
     }
     fn save_preferences(&mut self, language: Language) {
+        if self.preferences_tab != PrefTab::Subtitles {
+            let previous = self.settings.music.clone();
+            self.settings.music = self.online_music.draft.clone();
+            self.config_message = match self.settings.save() {
+                Ok(()) => {
+                    if previous.source != self.settings.music.source {
+                        self.online_music.clear_search();
+                    }
+                    language.text("已保存", "Saved").into()
+                }
+                Err(error) => {
+                    self.settings.music = previous;
+                    error.to_string()
+                }
+            };
+            return;
+        }
         match subtitles::LlmConfig::load_with(&self.llm_draft) {
             Ok(_) => {
                 let previous = self.settings.llm.clone();
@@ -132,6 +155,16 @@ impl App {
         }
     }
     fn reset_preferences(&mut self, language: Language) {
+        if self.preferences_tab == PrefTab::MusicSources {
+            self.online_music.draft = Default::default();
+            self.config_message = language
+                .text(
+                    "已恢复默认值，点击保存应用",
+                    "Defaults restored; save to apply",
+                )
+                .into();
+            return;
+        }
         self.llm_draft = Default::default();
         match subtitles::LlmConfig::defaults() {
             Ok(mut defaults) => {
