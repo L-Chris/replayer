@@ -472,10 +472,12 @@ impl eframe::App for App {
                 }
             }
         }
-        let busy = self
-            .player
-            .as_ref()
-            .is_some_and(|p| !matches!(p.snapshot().state, PlaybackState::Paused | PlaybackState::Failed));
+        let busy = self.player.as_ref().is_some_and(|p| {
+            !matches!(
+                p.snapshot().state,
+                PlaybackState::Paused | PlaybackState::Failed
+            )
+        });
         if busy || self.online_music.autoplay {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -1862,7 +1864,10 @@ fn draw_music(p: &Painter, r: Rect, c: Color32) {
     let y = r.max.y - r.height() * 0.2;
     p.line_segment([pos2(x1, top), pos2(x1, y)], s);
     p.line_segment([pos2(x2, top), pos2(x2, y)], s);
-    p.line_segment([pos2(x1, top + 1.0), pos2(x2, top + 1.0)], Stroke::new(2.5, c));
+    p.line_segment(
+        [pos2(x1, top + 1.0), pos2(x2, top + 1.0)],
+        Stroke::new(2.5, c),
+    );
     let head = r.width() * 0.17;
     p.circle_filled(pos2(x1 - head * 0.8, y), head, c);
     p.circle_filled(pos2(x2 - head * 0.8, y), head, c);
