@@ -4,6 +4,10 @@ use std::{
     net::TcpListener,
     sync::Mutex,
 };
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 type Requests = Arc<Mutex<Vec<String>>>;
 fn server(responses: Vec<(u16, Vec<u8>)>) -> (String, Requests, std::thread::JoinHandle<()>) {
@@ -154,7 +158,7 @@ fn download_is_local_playable_reusable_and_never_sends_api_key_to_cdn() {
         .unwrap();
     let cover = cover.into_inner();
     let (cdn, requests, worker) = server(vec![(200, wav()), (200, cover.clone()), (200, cover)]);
-    let resolved = serde_json::json!({"code":200,"url":format!("{cdn}/song.wav"),"format":"wav","name":"Resolved title","singer":"Resolved artist","album":"Resolved album","cover":format!("{cdn}/cover.png")});
+    let resolved = serde_json::json!({"code":200,"url":format!("{cdn}/song.wav"),"format":"wav","name":"Resolved title","singer":"Resolved artist","album":"Resolved album","cover":format!("{cdn}/cover.png"),"lrc":"[00:00.50]first line\n[00:01.50]second line"});
     let (base, _, api_worker) = server(vec![json(resolved.clone()), json(resolved)]);
     let dir = std::env::temp_dir().join(format!("replayer-music-test-{}", uuid::Uuid::new_v4()));
     runtime().block_on(async {
@@ -179,6 +183,12 @@ fn download_is_local_playable_reusable_and_never_sends_api_key_to_cdn() {
         assert_eq!(info.artist.as_deref(), Some("Resolved artist"));
         assert_eq!(info.album.as_deref(), Some("Resolved album"));
         assert!(info.artwork.is_some());
+        let sidecar = path.with_extension("lrc");
+        assert!(
+            std::fs::read_to_string(&sidecar)
+                .unwrap()
+                .contains("first line")
+        );
         // Simulate a legacy download with no companion metadata. The second
         // operation must repair it, without transferring the audio again.
         std::fs::remove_file(crate::media::companion_path(&path, ".replayer.json")).unwrap();
@@ -204,7 +214,7 @@ fn download_is_local_playable_reusable_and_never_sends_api_key_to_cdn() {
             .iter()
             .all(|r| !r.contains("test-secret"))
     );
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 4);
     std::fs::remove_dir_all(dir).unwrap();
 }
 #[test]

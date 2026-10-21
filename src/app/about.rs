@@ -12,9 +12,10 @@ impl App {
             env!("CARGO_PKG_VERSION")
         ));
         ui.label(
-            RichText::new(
-                language.text("音乐 · 视频 · 磁链播放", "Music · Video · Magnet playback"),
-            )
+            RichText::new(language.text(
+                "音乐 · 视频 · 漫画 · 磁链播放",
+                "Music · Video · Comics · Magnet playback",
+            ))
             .color(MUTED),
         );
         ui.horizontal(|ui| {

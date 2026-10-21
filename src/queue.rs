@@ -62,6 +62,19 @@ impl Queue {
         let next = self.current.map_or(0, |i| i + 1);
         (next < self.items.len()).then_some(next)
     }
+    pub fn next_index_with_shuffle(&self, shuffle: bool) -> Option<usize> {
+        if !shuffle || self.items.len() < 2 {
+            return self.next_index();
+        }
+        let current = self.current.filter(|i| *i < self.items.len());
+        let count = self.items.len() - usize::from(current.is_some());
+        let index = (uuid::Uuid::new_v4().as_u128() % count as u128) as usize;
+        Some(if current.is_some_and(|c| index >= c) {
+            index + 1
+        } else {
+            index
+        })
+    }
     pub fn previous_index(&self) -> Option<usize> {
         self.current.and_then(|i| i.checked_sub(1))
     }
@@ -99,6 +112,25 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shuffle_selects_another_valid_item_and_handles_small_queues() {
+        let mut q = Queue::default();
+        assert_eq!(q.next_index_with_shuffle(true), None);
+        q.items.push(Item::file("a.flac".into()));
+        assert_eq!(q.next_index_with_shuffle(true), Some(0));
+        q.select(0);
+        assert_eq!(q.next_index_with_shuffle(true), None);
+        q.items.push(Item::file("b.flac".into()));
+        assert_eq!(q.next_index_with_shuffle(true), Some(1));
+        q.select(1);
+        assert_eq!(q.next_index_with_shuffle(true), Some(0));
+        assert_eq!(q.next_index_with_shuffle(false), None);
+        q.items.push(Item::file("c.flac".into()));
+        for _ in 0..32 {
+            let index = q.next_index_with_shuffle(true).unwrap();
+            assert!(index < q.items.len() && index != 1);
+        }
+    }
     #[test]
     fn reorder_and_remove_adjust_current() {
         let mut q = Queue {

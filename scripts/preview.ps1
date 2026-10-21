@@ -1,6 +1,7 @@
 param(
     [string]$Media,
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    [switch]$Stats
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -32,7 +33,20 @@ try {
         $start.WorkingDirectory = $repoRoot
         $start.UseShellExecute = $true
         if ($mediaPath) { $start.Arguments = '"' + $mediaPath + '"' }
-        $previewProcess = [Diagnostics.Process]::Start($start)
+        if ($Stats) {
+            $previousStats = $env:REPLAYER_STATS
+            try {
+                $env:REPLAYER_STATS = '1'
+                $previewArguments = @{FilePath=$previewExe; WorkingDirectory=$repoRoot; PassThru=$true; WindowStyle='Hidden';
+                    RedirectStandardOutput=(Join-Path $metadata.target_directory 'preview-stdout.log');
+                    RedirectStandardError=(Join-Path $metadata.target_directory 'preview-stderr.log')}
+                if ($mediaPath) { $previewArguments.ArgumentList = '"' + $mediaPath + '"' }
+                $previewProcess = Start-Process @previewArguments
+            } finally { $env:REPLAYER_STATS = $previousStats }
+            Write-Host "Playback diagnostics: $(Join-Path $metadata.target_directory 'preview-stderr.log')"
+        } else {
+            $previewProcess = [Diagnostics.Process]::Start($start)
+        }
         Write-Host "Preview: $previewExe (PID $($previewProcess.Id))"
     } else {
         Write-Host "Preview built: $previewExe"

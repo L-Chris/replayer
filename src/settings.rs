@@ -183,6 +183,7 @@ pub struct Settings {
     pub subtitle_concurrency: usize,
     pub llm: LlmSettings,
     pub music: crate::music_sources::Settings,
+    pub comics: crate::comics::Settings,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -192,6 +193,7 @@ impl Default for Settings {
             subtitle_concurrency: 2,
             llm: LlmSettings::default(),
             music: Default::default(),
+            comics: Default::default(),
         }
     }
 }
@@ -241,6 +243,10 @@ mod tests {
     #[test]
     fn language_and_parallelism_roundtrip_without_credentials() {
         let s = Settings {
+            comics: crate::comics::Settings {
+                image_key: "image-session-secret".into(),
+                ..Default::default()
+            },
             music: crate::music_sources::Settings {
                 api_key: "music-session-secret".into(),
                 ..Default::default()

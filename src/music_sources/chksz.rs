@@ -2,6 +2,7 @@ use super::*;
 use anyhow::{anyhow, ensure};
 use futures_util::StreamExt;
 use serde_json::Value;
+use std::time::Duration;
 
 const NETEASE_QUALITY: &[Quality] = &[
     Quality {
@@ -290,7 +291,24 @@ impl MusicSource for Chksz {
                 cover: cover_url(&field(data, "picUrl"))
                     .or_else(|| cover_url(&field(data, "cover")))
                     .or_else(|| song.cover.clone()),
+                lyrics: {
+                    let text = field(data, "lrc");
+                    (!text.trim().is_empty()).then_some(text)
+                },
             })
+        })
+    }
+    fn lyrics<'a>(&'a self, song: &'a Song) -> BoxFuture<'a, Result<Option<String>>> {
+        Box::pin(async move {
+            // QQ/Kugou detail responses already carry `lrc`; NetEase does not.
+            if !matches!(self.platform, Platform::Netease) {
+                return Ok(None);
+            }
+            let data = self
+                .request("163_lyric", &[("id", song.id.clone())])
+                .await?;
+            let text = field(&data["data"], "lrc");
+            Ok((!text.trim().is_empty()).then_some(text))
         })
     }
 }

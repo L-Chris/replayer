@@ -61,7 +61,26 @@ impl App {
         if items.is_empty() {
             return;
         }
+        self.update_library();
+        self.library.flush();
+        if append && self.player.is_some() {
+            for item in items {
+                if item_is_music(&item) == self.queue_kind_music {
+                    self.queue.items.push(item);
+                } else {
+                    self.queue_inactive.items.push(item);
+                }
+            }
+            self.persist_queue();
+            return;
+        }
         let first_music = item_is_music(&items[0]);
+        self.comic.flush();
+        self.mode = if first_music {
+            UiMode::Music
+        } else {
+            UiMode::Video
+        };
         self.set_active_queue(first_music);
         if !append {
             self.queue.items.clear();
@@ -77,12 +96,14 @@ impl App {
                 self.queue_inactive.items.push(item);
             }
         }
-        if self.player.is_none() {
+        if !append || self.player.is_none() {
             self.play_queue(start);
         }
         self.persist_queue();
     }
     pub(super) fn play_queue(&mut self, index: usize) {
+        self.update_library();
+        self.library.flush();
         let Some(item) = self.queue.select(index) else {
             return;
         };
@@ -106,11 +127,12 @@ impl App {
     }
     fn queue_contents(&mut self, ui: &mut Ui, act: &mut Act) {
         let language = self.settings.language;
+        self.queue_drag.begin(ui);
         if self.queue.items.is_empty() {
             ui.label(language.text("队列为空", "Queue is empty"));
         }
         let mut rects: Vec<(usize, Rect)> = Vec::new();
-        egui::ScrollArea::vertical()
+        let scroll = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (index, item) in self.queue.items.iter().enumerate() {
@@ -145,21 +167,15 @@ impl App {
                         })
                         .unwrap_or_default();
                     ui.push_id(index, |ui| {
-                        // Keep rows clear of the vertical scrollbar hit zone.
-                        let inner_width = (ui.available_width() - 28.0).max(80.0);
+                        // The scroll area already reserves its own gutter; only
+                        // subtract the card's padding from its content width.
+                        let inner_width = (ui.available_width() - 16.0).max(80.0);
                         let row_rect =
                             Rect::from_min_size(ui.cursor().min, vec2(inner_width + 16.0, 48.0));
-                        let row = ui.interact(row_rect, ui.id().with("row"), Sense::drag());
-                        if row.drag_started() {
-                            self.queue_drag = Some(index);
-                        }
+                        let row = self.queue_drag.row(ui, row_rect, index, &item.source);
                         row.on_hover_cursor(egui::CursorIcon::PointingHand);
                         let out = egui::Frame::new()
-                            .fill(if current {
-                                Color32::from_rgb(34, 50, 77)
-                            } else {
-                                SURFACE
-                            })
+                            .fill(if current { design::SELECTED } else { SURFACE })
                             .corner_radius(8)
                             .inner_margin(8)
                             .show(ui, |ui| {
@@ -198,7 +214,7 @@ impl App {
                                     painter.rect_filled(
                                         tile,
                                         CornerRadius::same(4),
-                                        Color32::from_rgb(34, 41, 55),
+                                        design::BACKGROUND,
                                     );
                                     if let Some(tex) = &tex {
                                         painter.image(
@@ -265,8 +281,9 @@ impl App {
                                     )
                                     .response
                                     .on_hover_text(format!(
-                                        "{title}\n{detail}\n{}",
-                                        path.as_deref().unwrap_or(&item.title)
+                                        "{title}\n{detail}\n{}\n{}",
+                                        path.as_deref().unwrap_or(&item.title),
+                                        language.text("长按拖动排序", "Hold to reorder")
                                     ));
                                     if icon_button(ui, 22.0, 1.0, draw_trash)
                                         .on_hover_text(language.text(
@@ -284,32 +301,29 @@ impl App {
                     ui.add_space(4.0);
                 }
             });
-        let (released, hover) = ui.input(|i| (i.pointer.any_released(), i.pointer.hover_pos()));
-        if let Some(drag) = self.queue_drag {
+        if let Some(drag) = self.queue_drag.finish(ui) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-            let target = hover.map_or(drag, |pointer| {
-                rects
-                    .iter()
-                    .filter(|(_, rect)| pointer.y > rect.center().y)
-                    .count()
-            });
+            if !scroll.inner_rect.contains(drag.position) {
+                return;
+            }
+            let target = rects
+                .iter()
+                .filter(|(_, rect)| drag.position.y > rect.center().y)
+                .count();
             if let Some((_, anchor)) = rects.get(target).or_else(|| rects.last()) {
                 let y = if target < rects.len() {
                     anchor.min.y - 2.0
                 } else {
                     anchor.max.y + 2.0
                 };
-                ui.painter().line_segment(
+                ui.painter().with_clip_rect(scroll.inner_rect).line_segment(
                     [pos2(anchor.min.x, y), pos2(anchor.max.x, y)],
                     Stroke::new(2.0, ACCENT),
                 );
             }
-            if released {
-                if target != drag && target != drag + 1 {
-                    self.queue.relocate(drag, target);
-                    self.persist_queue();
-                }
-                self.queue_drag = None;
+            if drag.released && target != drag.index && target != drag.index + 1 {
+                self.queue.relocate(drag.index, target);
+                self.persist_queue();
             }
         }
     }
@@ -317,7 +331,7 @@ impl App {
         root.painter().rect_filled(rect, 0, SURFACE);
         root.painter().line_segment(
             [rect.left_top(), rect.left_bottom()],
-            Stroke::new(1.0, Color32::from_rgb(48, 57, 73)),
+            Stroke::new(1.0, design::LINE),
         );
         let mut ui = root.new_child(
             UiBuilder::new()
@@ -327,6 +341,12 @@ impl App {
         );
         ui.set_clip_rect(rect.shrink(1.0));
         ui.horizontal(|ui| {
+            if icon_button(ui, 20.0, 1.0, draw_close)
+                .on_hover_text(self.settings.language.text("收起队列", "Collapse queue"))
+                .clicked()
+            {
+                self.queue_open = false;
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if icon_button(ui, 24.0, 1.0, draw_add)
                     .on_hover_text(self.settings.language.text("添加文件", "Add files"))
@@ -356,23 +376,43 @@ impl App {
     pub(super) fn music_view(
         &mut self,
         root: &mut Ui,
-        screen: Rect,
+        _screen: Rect,
         playback: Rect,
         act: &mut Act,
     ) {
         let language = self.settings.language;
+        let (_, _, position) = self
+            .player
+            .as_ref()
+            .map(|p| (p.is_playing(), p.duration(), p.position()))
+            .unwrap_or((false, 0.0, 0.0));
         let content = Rect::from_min_max(
-            playback.min + vec2(24.0, BAR_TOP + 20.0),
-            playback.max - vec2(24.0, 126.0),
+            playback.min + vec2(40.0, 86.0),
+            playback.max - vec2(40.0, 24.0),
         );
-        let left = content;
+        let compact = content.height() < 280.0;
+        let show_lyrics = !compact && content.width() >= 560.0;
+        let (left, lyrics_rect) = if show_lyrics {
+            let half = content.width() * 0.5;
+            (
+                Rect::from_min_max(
+                    content.min,
+                    pos2(content.min.x + half - 16.0, content.max.y),
+                ),
+                Some(Rect::from_min_max(
+                    pos2(content.min.x + half + 16.0, content.min.y),
+                    content.max,
+                )),
+            )
+        } else {
+            (content, None)
+        };
         if self.player.is_some() || self.loading {
-            let compact = left.height() < 280.0;
             let size = if compact {
                 left.height().clamp(40.0, 110.0)
             } else {
                 (left.height() - 112.0)
-                    .clamp(90.0, 280.0)
+                    .clamp(90.0, 500.0)
                     .min(left.width() - 20.0)
             };
             let (cover, text_rect) = if compact {
@@ -395,22 +435,15 @@ impl App {
                     Vec2::splat(size),
                 );
                 let text = Rect::from_min_max(
-                    pos2(left.min.x, top + size + gap),
-                    pos2(left.max.x, top + total),
+                    pos2(cover.min.x, top + size + gap),
+                    pos2(cover.max.x, top + total),
                 );
                 (cover, text)
             };
             let painter = root.painter();
             painter.rect_filled(cover, 16, SURFACE);
             if let Some(art) = &self.artwork {
-                let texture_size = art.size_vec2();
-                let ratio = (cover.width() / texture_size.x).min(cover.height() / texture_size.y);
-                painter.image(
-                    art.id(),
-                    Rect::from_center_size(cover.center(), texture_size * ratio),
-                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                    Color32::WHITE,
-                );
+                design::cover(root, art, cover, 10);
             } else {
                 painter.text(
                     cover.center(),
@@ -424,11 +457,7 @@ impl App {
                 UiBuilder::new()
                     .id_salt("music-info")
                     .max_rect(text_rect)
-                    .layout(Layout::top_down(if compact {
-                        Align::Min
-                    } else {
-                        Align::Center
-                    })),
+                    .layout(Layout::top_down(Align::Min)),
             );
             info_ui
                 .add(
@@ -448,150 +477,123 @@ impl App {
                     info_ui.small(RichText::new(album).color(MUTED));
                 }
             }
-        }
-        let rect = Rect::from_min_max(pos2(screen.min.x, screen.max.y - 108.0), screen.max);
-        root.painter().rect_filled(rect, 0, SURFACE);
-        let mut ui = root.new_child(
-            UiBuilder::new()
-                .id_salt("music-controls")
-                .max_rect(rect.shrink2(vec2(24.0, 10.0)))
-                .layout(Layout::top_down(Align::Min)),
-        );
-        let (playing, duration, position) = self
-            .player
-            .as_ref()
-            .map(|p| (p.is_playing(), p.duration(), p.position()))
-            .unwrap_or((false, 0.0, 0.0));
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(fmt_time(if self.scrubbing { self.scrub } else { position }))
-                    .monospace(),
-            );
-            let shown = if self.scrubbing { self.scrub } else { position };
-            let (track, response) = hslider(
-                ui,
-                (ui.available_width() - 66.0).max(80.0),
-                18.0,
-                (shown / duration.max(0.001)).clamp(0.0, 1.0) as f32,
-                3.0,
-                true,
-                1.0,
-            );
-            if response.dragged()
-                && let Some(pointer) = response.interact_pointer_pos()
+            if compact
+                && let Some(index) = self.lyrics.current_index(position)
+                && let Some(line) = self.lyrics.lines.get(index)
             {
-                self.scrubbing = true;
-                self.scrub =
-                    ((pointer.x - track.min.x) / track.width()).clamp(0.0, 1.0) as f64 * duration;
-            }
-            if response.drag_stopped() {
-                *act = Act::Seek(self.scrub);
-                self.scrubbing = false;
-            } else if response.clicked()
-                && let Some(pointer) = response.interact_pointer_pos()
-            {
-                *act = Act::Seek(
-                    ((pointer.x - track.min.x) / track.width()).clamp(0.0, 1.0) as f64 * duration,
+                info_ui.add(
+                    egui::Label::new(RichText::new(&line.text).color(ACCENT))
+                        .truncate()
+                        .selectable(false),
                 );
             }
-            ui.label(RichText::new(fmt_time(duration)).monospace());
-        });
-        let row = ui.available_rect_before_wrap();
-        let row = Rect::from_min_max(row.min, pos2(row.max.x, row.min.y + 46.0));
-        ui.allocate_rect(row, Sense::hover());
-        let mut left_ui = root.new_child(
-            UiBuilder::new()
-                .id_salt("footer-settings")
-                .max_rect(Rect::from_min_max(
-                    pos2(row.min.x, row.min.y),
-                    pos2(row.min.x + 26.0, row.max.y),
-                ))
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-        self.settings_button(&mut left_ui, 1.0);
-        let has_prev = self.queue.previous_index().is_some() || position > 3.0;
-        let has_next = self.queue.next_index().is_some();
-        let cluster = 26.0 + 16.0 + 30.0 + 16.0 + 46.0 + 16.0 + 30.0 + 16.0 + 26.0;
-        let mut transport = root.new_child(
-            UiBuilder::new()
-                .id_salt("music-transport")
-                .max_rect(Rect::from_center_size(
-                    pos2(row.center().x, row.center().y),
-                    vec2(cluster, row.height()),
-                ))
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-        transport.spacing_mut().item_spacing.x = 16.0;
-        let single = self.loop_single;
-        let mode = icon_button(&mut transport, 26.0, 1.0, |p, r, c| {
-            draw_repeat(p, r, if single { ACCENT } else { c }, single)
-        });
-        if mode
-            .on_hover_text(if single {
-                language.text("单曲循环", "Repeat one")
+        }
+        if let Some(rect) = lyrics_rect {
+            if self.workspace.listening_tab == 1 {
+                let mut ui =
+                    workspace::child(root, "track-details", rect.shrink2(vec2(36.0, 60.0)));
+                ui.label(
+                    RichText::new(language.text("歌曲信息", "Track information"))
+                        .size(22.0)
+                        .strong(),
+                );
+                ui.add_space(24.0);
+                let info = self.media_info.as_ref();
+                for (name, value) in [
+                    (language.text("标题", "Title"), self.title.as_str()),
+                    (
+                        language.text("艺术家", "Artist"),
+                        info.and_then(|i| i.artist.as_deref()).unwrap_or("—"),
+                    ),
+                    (
+                        language.text("专辑", "Album"),
+                        info.and_then(|i| i.album.as_deref()).unwrap_or("—"),
+                    ),
+                ] {
+                    ui.label(RichText::new(name).size(12.0).color(MUTED));
+                    ui.label(value);
+                    ui.add_space(16.0);
+                }
+                if let Some(source) = &self.source {
+                    ui.label(
+                        RichText::new(language.text("文件", "File"))
+                            .size(12.0)
+                            .color(MUTED),
+                    );
+                    ui.add(egui::Label::new(source.to_string_lossy()).wrap());
+                }
+            } else if self.lyrics.lines.is_empty() {
+                let mut ui = workspace::child(root, "no-lyrics", rect.shrink(28.0));
+                ui.add_space(rect.height() * 0.32);
+                ui.label(
+                    RichText::new(
+                        language.text("静静聆听，此刻的声音", "Let the music fill the moment"),
+                    )
+                    .size(24.0)
+                    .color(design::TEXT),
+                );
+                ui.label(
+                    RichText::new(language.text("暂无歌词", "No lyrics available")).color(MUTED),
+                );
             } else {
-                language.text("列表循环", "Repeat list")
-            })
-            .clicked()
-        {
-            self.loop_single = !single;
-        }
-        if has_prev {
-            let prev = icon_button(&mut transport, 30.0, 1.0, draw_prev);
-            if prev
-                .on_hover_text(language.text("上一首", "Previous"))
-                .clicked()
-            {
-                *act = Act::Previous;
+                self.lyrics_panel(root, rect, position, act);
             }
-        } else {
-            disabled_icon_button(&mut transport, 30.0, draw_prev);
         }
-        let play = play_circle_button(&mut transport, 46.0, playing);
-        let play = play.on_hover_text(if playing {
-            language.text("暂停", "Pause")
-        } else {
-            language.text("播放", "Play")
-        });
-        if play.clicked() {
-            *act = Act::TogglePlay;
-        }
-        if has_next {
-            let next = icon_button(&mut transport, 30.0, 1.0, draw_next);
-            if next
-                .on_hover_text(language.text("下一首", "Next"))
-                .clicked()
-            {
-                *act = Act::Next;
-            }
-        } else {
-            disabled_icon_button(&mut transport, 30.0, draw_next);
-        }
-        let effective = if self.muted { 0.0 } else { self.vol };
-        let volume = icon_button(&mut transport, 26.0, 1.0, |p, r, c| {
-            draw_volume(p, r, c, self.muted, effective)
-        });
-        let volume = volume.on_hover_text(language.text("音量", "Volume"));
-        let volume_rect = volume.rect;
-        if volume.clicked() {
-            self.volume_open = !self.volume_open;
-        }
-        let mut queue_ui = root.new_child(
+    }
+    /// Time-synced lyric sheet: highlighted current line, click a line to seek,
+    /// auto-scroll until the user scrolls away manually.
+    fn lyrics_panel(&mut self, root: &mut Ui, rect: Rect, position: f64, act: &mut Act) {
+        root.painter().rect_filled(rect, 12, BACKGROUND);
+        let mut ui = root.new_child(
             UiBuilder::new()
-                .id_salt("music-queue")
-                .max_rect(Rect::from_min_max(
-                    pos2(row.max.x - 26.0, row.min.y),
-                    pos2(row.max.x, row.max.y),
-                ))
-                .layout(Layout::left_to_right(Align::Center)),
+                .id_salt("lyrics-panel")
+                .max_rect(rect.shrink(10.0))
+                .layout(Layout::top_down(Align::Min)),
         );
-        let queue = icon_button(&mut queue_ui, 26.0, 1.0, draw_queue);
-        if queue
-            .on_hover_text(language.text("播放队列", "Play queue"))
-            .clicked()
-        {
-            self.queue_open = !self.queue_open;
+        ui.set_clip_rect(rect);
+        let current = self.lyrics.current_index(position);
+        let synced = self.lyrics.synced;
+        let mut follow = self.lyrics_follow;
+        let mut seek = None;
+        let height = rect.height();
+        egui::ScrollArea::vertical()
+            .id_salt("lyrics-scroll")
+            .auto_shrink([false, false])
+            .show(&mut ui, |ui| {
+                ui.add_space((height * 0.3).max(8.0));
+                for (index, line) in self.lyrics.lines.iter().enumerate() {
+                    let active = current == Some(index);
+                    let mut text = RichText::new(&line.text)
+                        .size(if active { 26.0 } else { 22.0 })
+                        .color(if active { design::TEXT } else { MUTED });
+                    if active {
+                        text = text.strong();
+                    }
+                    let mut response = ui.add(egui::Label::new(text).selectable(false));
+                    if synced {
+                        response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if response.clicked() {
+                            seek = Some(line.time);
+                            // Jumping to a line resumes auto-scroll from there.
+                            follow = true;
+                        }
+                    }
+                    if active && follow {
+                        ui.scroll_to_rect(response.rect, Some(Align::Center));
+                    }
+                    ui.add_space(22.0);
+                }
+                ui.add_space((height * 0.5).max(8.0));
+            });
+        if ui.input(|i| {
+            i.smooth_scroll_delta().y.abs() > 0.5
+                && i.pointer.hover_pos().is_some_and(|p| rect.contains(p))
+        }) {
+            follow = false;
         }
-        self.volume_popup(root, screen, volume_rect, act);
+        self.lyrics_follow = follow;
+        if let Some(time) = seek {
+            *act = Act::Seek(time);
+        }
     }
 }

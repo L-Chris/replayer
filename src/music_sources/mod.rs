@@ -7,14 +7,7 @@ mod tests;
 use anyhow::Result;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-    time::Duration,
-};
+use std::{path::PathBuf, sync::Arc};
 
 pub use download::download;
 
@@ -36,6 +29,8 @@ pub struct ResolvedTrack {
     pub extension: String,
     pub metadata: crate::media::LocalMetadata,
     pub cover: Option<reqwest::Url>,
+    /// Raw LRC text when the resolve response already carries lyrics.
+    pub lyrics: Option<String>,
 }
 pub struct Quality {
     pub id: &'static str,
@@ -57,6 +52,12 @@ pub trait MusicSource: Send + Sync {
         song: &'a Song,
         quality: &'a str,
     ) -> BoxFuture<'a, Result<ResolvedTrack>>;
+    /// Optional raw LRC text for a song. Providers without a lyric endpoint
+    /// keep the default; failures here must never fail a download.
+    fn lyrics<'a>(&'a self, song: &'a Song) -> BoxFuture<'a, Result<Option<String>>> {
+        let _ = song;
+        Box::pin(async { Ok(None) })
+    }
 }
 pub fn sources(key: &str) -> Result<Vec<Arc<dyn MusicSource>>> {
     chksz::sources("https://api.chksz.com", key)
@@ -96,50 +97,4 @@ impl Settings {
     }
 }
 
-/// A cancellable background operation. Its receiver is owned by one UI request,
-/// so replacing it cannot apply an older search result to a newer search.
-pub struct Job<T> {
-    result: crossbeam_channel::Receiver<Result<T>>,
-    cancel: Arc<AtomicBool>,
-    pub bytes: Arc<AtomicU64>,
-}
-impl<T: Send + 'static> Job<T> {
-    pub fn spawn<F, Fut>(work: F) -> Self
-    where
-        F: FnOnce(Arc<AtomicU64>) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = Result<T>> + Send + 'static,
-    {
-        let (tx, result) = crossbeam_channel::bounded(1);
-        let cancel = Arc::new(AtomicBool::new(false));
-        let bytes = Arc::new(AtomicU64::new(0));
-        let stop = cancel.clone();
-        let progress = bytes.clone();
-        std::thread::spawn(move || {
-            let result = tokio::runtime::Builder::new_current_thread().enable_all().build()
-                .map_err(anyhow::Error::from).and_then(|runtime| runtime.block_on(async {
-                    tokio::select! {
-                        value = work(progress) => value,
-                        _ = async { while !stop.load(Ordering::Relaxed) { tokio::time::sleep(Duration::from_millis(50)).await; } } => anyhow::bail!("Cancelled"),
-                    }
-                }));
-            let _ = tx.send(result);
-        });
-        Self {
-            result,
-            cancel,
-            bytes,
-        }
-    }
-    pub fn poll(&self) -> Option<Result<T>> {
-        match self.result.try_recv() {
-            Ok(value) => Some(value),
-            Err(crossbeam_channel::TryRecvError::Empty) => None,
-            Err(_) => Some(Err(anyhow::anyhow!("Music worker stopped"))),
-        }
-    }
-}
-impl<T> Drop for Job<T> {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
-    }
-}
+pub use crate::jobs::Job;

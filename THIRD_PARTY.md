@@ -1,5 +1,10 @@
 # Bundled components
 
+Comic library storage uses `rusqlite` 0.40.2 (MIT), which embeds SQLite through
+`libsqlite3-sys` with the bundled feature. SQLite is in the public domain.
+The rusqlite license is bundled in `licenses/rusqlite-MIT.txt`.
+Sources: https://github.com/rusqlite/rusqlite and https://sqlite.org/copyright.html .
+
 Windows packages include FFmpeg shared libraries from the BtbN LGPL shared build.
 The FFmpeg license is included as `FFmpeg-LICENSE.txt`; the libraries remain
 separate DLLs and can be replaced with ABI-compatible builds.

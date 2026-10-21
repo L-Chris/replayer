@@ -13,9 +13,18 @@ struct Vertex { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
     return out;
 }
 @fragment fn fs_main(in: Vertex) -> @location(0) vec4<f32> {
-    let y = textureSample(y_plane,linear_sampler,in.uv).r;
-    let uv = textureSample(u_plane,linear_sampler,in.uv).rg;
-    let v = select(textureSample(v_plane,linear_sampler,in.uv).r,uv.g,matrix.flags.x > 0.5);
-    let sample = vec4(y,uv.r,v,1.0);
+    let ys = textureSample(y_plane,linear_sampler,in.uv).rg;
+    let uv = textureSample(u_plane,linear_sampler,in.uv);
+    let vs = textureSample(v_plane,linear_sampler,in.uv).rg;
+    var y = ys.r;
+    var u = uv.r;
+    var v = select(vs.r,uv.g,matrix.flags.x > 0.5);
+    if matrix.flags.y > 0.5 {
+        let bytes = vec2(matrix.flags.z, matrix.flags.z * 256.0);
+        y = dot(ys,bytes);
+        u = dot(uv.rg,bytes);
+        v = select(dot(vs,bytes),dot(uv.ba,bytes),matrix.flags.x > 0.5);
+    }
+    let sample = vec4(y,u,v,1.0);
     return vec4(clamp(vec3(dot(matrix.r,sample),dot(matrix.g,sample),dot(matrix.b,sample)),vec3(0.0),vec3(1.0)),1.0);
 }

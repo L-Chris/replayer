@@ -15,16 +15,21 @@ use crate::renderer::VideoRenderer;
 use crate::settings::{Language, Settings};
 use crate::subtitles::{self, Cue, Job};
 mod about;
+mod comic;
 mod design;
+mod library;
 mod magnets;
 mod music;
 mod online_music;
 mod preferences;
 mod qq;
+mod queue_drag;
+mod window;
+mod workspace;
 use design::{ACCENT, BACKGROUND, MUTED, SURFACE};
 
-const BAR_BOTTOM: f32 = 108.0;
-const BAR_TOP: f32 = 60.0;
+const BAR_BOTTOM: f32 = 92.0;
+const BAR_TOP: f32 = 56.0;
 const TOOLBAR_HIDE_DELAY: Duration = Duration::from_millis(400);
 type MetadataResult = (String, Option<Arc<crate::media::Info>>);
 
@@ -38,6 +43,7 @@ enum PrefTab {
     General,
     Subtitles,
     MusicSources,
+    Comics,
     About,
 }
 enum Act {
@@ -59,24 +65,27 @@ enum Act {
 }
 
 pub struct App {
+    workspace: workspace::State,
+    library: library::Library,
+    comic: comic::State,
     online_music: online_music::State,
     queue: crate::queue::Queue,
     queue_inactive: crate::queue::Queue,
     queue_kind_music: bool,
     queue_open: bool,
-    queue_drag: Option<usize>,
+    queue_drag: queue_drag::QueueDrag,
     metadata_requests: Sender<String>,
     metadata_results: Receiver<MetadataResult>,
     metadata_cache: HashMap<String, Option<Arc<crate::media::Info>>>,
     art_textures: HashMap<String, egui::TextureHandle>,
     media_info: Option<Arc<crate::media::Info>>,
     artwork: Option<egui::TextureHandle>,
+    lyrics: crate::lyrics::Lyrics,
+    lyrics_follow: bool,
     append_dialog: bool,
     settings: Settings,
     settings_open: bool,
     preferences_tab: PrefTab,
-    preferences_armed: bool,
-    preferences_rect: Option<Rect>,
     mode: UiMode,
     updater: crate::updater::Updater,
     torrent_job: Option<crate::torrent::Job>,
@@ -114,6 +123,7 @@ pub struct App {
     muted: bool,
     volume_open: bool,
     loop_single: bool,
+    shuffle: bool,
     fullscreen: bool,
     ui_alpha: f32,
     last_toolbar_hover: Option<Instant>,
@@ -121,6 +131,10 @@ pub struct App {
     ui_kind_music: Option<bool>,
     error: Option<String>,
     frames: u64,
+    stats_frames: u64,
+    upload_ms: f64,
+    upload_max_ms: f64,
+    video_format: String,
     last_stats: Instant,
     stats: bool,
 }
@@ -150,18 +164,23 @@ impl App {
             }
         });
         let mut app = Self {
+            workspace: workspace::State::default(),
+            library: library::Library::load(),
+            comic: comic::State::new(),
             online_music: online_music::State::new(&settings.music),
             queue: Default::default(),
             queue_inactive: Default::default(),
             queue_kind_music: true,
-            queue_open: true,
-            queue_drag: None,
+            queue_open: false,
+            queue_drag: Default::default(),
             metadata_requests,
             metadata_results,
             metadata_cache: HashMap::new(),
             art_textures: HashMap::new(),
             media_info: None,
             artwork: None,
+            lyrics: crate::lyrics::Lyrics::default(),
+            lyrics_follow: true,
             append_dialog: false,
             updater: crate::updater::Updater::new(settings.auto_check_updates),
             torrent_job: None,
@@ -173,8 +192,6 @@ impl App {
             magnet_open: false,
             magnet_input: String::new(),
             preferences_tab: PrefTab::General,
-            preferences_armed: false,
-            preferences_rect: None,
             mode: UiMode::Music,
             llm_draft: settings.llm.clone(),
             settings,
@@ -205,6 +222,7 @@ impl App {
             muted: false,
             volume_open: false,
             loop_single: false,
+            shuffle: false,
             fullscreen: false,
             ui_alpha: 0.0,
             last_toolbar_hover: None,
@@ -212,6 +230,10 @@ impl App {
             ui_kind_music: None,
             error: None,
             frames: 0,
+            stats_frames: 0,
+            upload_ms: 0.0,
+            upload_max_ms: 0.0,
+            video_format: String::new(),
             last_stats: Instant::now(),
             stats: std::env::var_os("REPLAYER_STATS").is_some(),
         };
@@ -246,6 +268,7 @@ impl App {
             return;
         }
         std::mem::swap(&mut self.queue, &mut self.queue_inactive);
+        self.queue_drag = Default::default();
         self.queue_kind_music = music;
     }
     fn settings_button(&mut self, ui: &mut Ui, alpha: f32) {
@@ -277,8 +300,8 @@ impl App {
         }
         let bottom = volume_rect.min.y - 10.0;
         let top_limit = screen.min.y + BAR_TOP + 4.0;
-        let popup_h = (bottom - top_limit).clamp(60.0, 132.0);
-        let popup_w = 40.0;
+        let popup_h = (bottom - top_limit).clamp(100.0, 194.0);
+        let popup_w = 56.0;
         let px = (volume_rect.center().x - popup_w * 0.5)
             .clamp(screen.min.x + 4.0, screen.max.x - popup_w - 4.0);
         let popup = Rect::from_min_max(pos2(px, bottom - popup_h), pos2(px + popup_w, bottom));
@@ -297,22 +320,53 @@ impl App {
         painter.rect_stroke(
             popup,
             CornerRadius::same(10),
-            Stroke::new(1.0, Color32::from_rgb(48, 57, 73)),
+            Stroke::new(1.0, design::LINE),
             egui::StrokeKind::Outside,
         );
         let effective = if self.muted { 0.0 } else { self.vol };
+        painter.text(
+            pos2(popup.center().x, popup.min.y + 18.0),
+            egui::Align2::CENTER_CENTER,
+            format!("{:.0}%", effective * 100.0),
+            egui::FontId::proportional(11.0),
+            design::TEXT,
+        );
+        let slider_rect = Rect::from_min_max(
+            pos2(popup.center().x - 10.0, popup.min.y + 38.0),
+            pos2(popup.center().x + 10.0, popup.max.y - 44.0),
+        );
         let mut pui = root.new_child(
             UiBuilder::new()
                 .id_salt("volume-popup")
-                .max_rect(popup.shrink(12.0))
+                .max_rect(slider_rect)
                 .layout(Layout::top_down(Align::Center)),
         );
-        let (vrect, vresp) = vslider(&mut pui, 16.0, popup.height() - 24.0, effective, 3.5, 1.0);
+        let (vrect, vresp) = vslider(&mut pui, 20.0, slider_rect.height(), effective, 3.0, 1.0);
         if (vresp.dragged() || vresp.clicked())
             && let Some(pointer) = pui.input(|i| i.pointer.hover_pos())
         {
             let f = ((vrect.max.y - pointer.y) / vrect.height()).clamp(0.0, 1.0);
             *act = Act::Volume(f);
+        }
+        let mut mute = workspace::child(
+            root,
+            "volume-popup-mute",
+            Rect::from_center_size(
+                pos2(popup.center().x, popup.max.y - 22.0),
+                Vec2::splat(26.0),
+            ),
+        );
+        if icon_button(&mut mute, 26.0, 1.0, |p, r, c| {
+            draw_volume(p, r, c, self.muted, self.vol)
+        })
+        .on_hover_text(
+            self.settings
+                .language
+                .text("静音 / 恢复音量", "Mute / unmute"),
+        )
+        .clicked()
+        {
+            *act = Act::ToggleMute;
         }
     }
 
@@ -336,14 +390,26 @@ impl App {
         self.load_media_with_key(path, progressive, None);
     }
     fn load_media_with_key(&mut self, path: String, progressive: bool, key: Option<String>) {
+        self.workspace.page = if self.queue_kind_music {
+            workspace::Page::Listening
+        } else {
+            workspace::Page::Playing
+        };
+        self.settings_open = false;
+        self.update_library();
+        self.library.flush();
         self.online_music.autoplay = false;
         self.media_info = None;
+        self.artwork = None;
         self.subtitle_job = None;
         self.subtitles.clear();
         self.subtitle_status.clear();
         self.subtitle_skipped.clear();
         self.subtitle_metrics.clear();
         self.source = Some(PathBuf::from(&path));
+        self.lyrics =
+            crate::lyrics::Lyrics::load_for(std::path::Path::new(&path)).unwrap_or_default();
+        self.lyrics_follow = true;
         self.player = None;
         self.loading = true;
         self.video.clear();
@@ -400,12 +466,23 @@ impl App {
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.comic.poll(ctx, &self.settings);
         self.poll_online_music();
         let mut advance = false;
         if let Some(player) = &self.player {
             while let Some(event) = player.poll_event() {
                 match event {
                     Event::MediaInfo(info) => {
+                        self.mode = if info.kind == crate::media::Kind::Music {
+                            UiMode::Music
+                        } else {
+                            UiMode::Video
+                        };
+                        if self.workspace.page == workspace::Page::Playing
+                            && info.kind == crate::media::Kind::Music
+                        {
+                            self.workspace.page = workspace::Page::Listening;
+                        }
                         self.loading = false;
                         self.ui_kind_music = Some(info.kind == crate::media::Kind::Music);
                         if let Some(title) = &info.title {
@@ -435,6 +512,15 @@ impl eframe::App for App {
                                 .insert(source.to_string_lossy().into_owned(), Some(info.clone()));
                         }
                         self.media_info = Some(info);
+                        if let Some((path, position)) = self.workspace.resume.take()
+                            && self
+                                .source
+                                .as_ref()
+                                .is_some_and(|s| s.to_string_lossy() == path)
+                            && let Some(player) = &self.player
+                        {
+                            self.pending_seek = Some((player.seek(position), position));
+                        }
                     }
                     Event::Ended => advance = true,
                     Event::SeekCompleted { id, .. } => {
@@ -464,7 +550,7 @@ impl eframe::App for App {
             } else {
                 let next = self
                     .queue
-                    .next_index()
+                    .next_index_with_shuffle(self.shuffle)
                     .or_else(|| (!self.queue.items.is_empty()).then_some(0));
                 match next {
                     Some(next) if Some(next) != self.queue.current => self.play_queue(next),
@@ -485,6 +571,8 @@ impl eframe::App for App {
 
     fn ui(&mut self, root: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
+        self.fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(self.fullscreen));
+        window::drag_region(root);
         let screen = root.max_rect();
         let painter = root.painter().clone();
         let language = self.settings.language;
@@ -520,7 +608,7 @@ impl eframe::App for App {
             self.append_dialog = false;
         }
 
-        let music = self.is_music();
+        let music = false;
         let sidebar_width = if self.queue_open && !self.queue.items.is_empty() {
             (screen.width() * 0.38).clamp(220.0, 340.0)
         } else {
@@ -630,9 +718,22 @@ impl eframe::App for App {
         });
         if let Some(f) = due {
             self.frames += 1;
+            let upload_start = Instant::now();
             if let Err(error) = self.video.upload(&ctx, &f) {
                 self.error = Some(format!("render video: {error:#}"));
             }
+            if self.stats {
+                let ms = upload_start.elapsed().as_secs_f64() * 1000.0;
+                self.upload_ms += ms;
+                self.upload_max_ms = self.upload_max_ms.max(ms);
+                self.video_format = format!("{:?}", f.image().format());
+            }
+        }
+
+        self.update_library();
+        if self.workspace.page != workspace::Page::Playing || self.settings_open {
+            self.workspace_ui(root);
+            return;
         }
 
         // Only the top/bottom edge regions reveal the toolbars. Playback state
@@ -653,7 +754,12 @@ impl eframe::App for App {
             })
             .unwrap_or(false);
         let dragging_toolbar = self.ui_alpha > 0.02 && ctx.dragged_id().is_some();
-        if in_bar || self.scrubbing || dragging_toolbar || egui::Popup::is_any_open(&ctx) {
+        if in_bar
+            || self.volume_open
+            || self.scrubbing
+            || dragging_toolbar
+            || egui::Popup::is_any_open(&ctx)
+        {
             self.last_toolbar_hover = Some(Instant::now());
         }
         let show = music
@@ -739,6 +845,7 @@ impl eframe::App for App {
 
         // ---- keyboard ----
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.volume_open = false;
             if self.settings_open {
                 self.settings_open = false;
             } else if self.online_music.open {
@@ -773,283 +880,56 @@ impl eframe::App for App {
             }
         }
 
-        // ---- top bar ----
+        // Immersive video chrome shares the library's visual language.
         if a > 0.02 {
-            let top_rect = Rect::from_min_max(
-                pos2(screen.min.x, screen.min.y),
-                pos2(screen.max.x, screen.min.y + BAR_TOP),
+            let top_rect = Rect::from_min_size(screen.min, vec2(screen.width(), BAR_TOP));
+            painter.rect_filled(top_rect, 0, Color32::from_black_alpha((a * 200.0) as u8));
+            let mut header_content = top_rect.shrink2(vec2(20.0, 10.0));
+            header_content.max.x -= window::CONTROLS_WIDTH;
+            let mut back = workspace::child(
+                root,
+                "video-back",
+                Rect::from_min_size(screen.min + vec2(20.0, 12.0), Vec2::splat(32.0)),
             );
-            let mut tui = root.new_child(
-                UiBuilder::new()
-                    .id_salt("topbar")
-                    .max_rect(top_rect.shrink2(vec2(20.0, 12.0)))
-                    .layout(Layout::top_down(Align::Min)),
+            if icon_button(&mut back, 32.0, a, draw_back)
+                .on_hover_text(language.text("返回视频库", "Back to video library"))
+                .clicked()
+            {
+                self.navigate(workspace::Page::Video);
+            }
+            let mut title = workspace::child(
+                root,
+                "video-title",
+                Rect::from_min_max(
+                    screen.min + vec2(74.0, 16.0),
+                    pos2(header_content.max.x - 144.0, screen.min.y + 44.0),
+                ),
             );
-            tui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        if icon_button(ui, 26.0, a, draw_search)
-                            .on_hover_text(language.text("搜索音乐", "Search music"))
-                            .clicked()
-                        {
-                            self.online_music.open = true;
-                        }
-                        if self.player.is_none() {
-                            let music_mode = self.mode == UiMode::Music;
-                            if icon_button(ui, 26.0, a, |p, r, c| {
-                                draw_music(p, r, if music_mode { ACCENT } else { c })
-                            })
-                            .on_hover_text(language.text("音乐", "Music"))
-                            .clicked()
-                            {
-                                self.mode = UiMode::Music;
-                                self.set_active_queue(true);
-                            }
-                            let video_mode = self.mode == UiMode::Video;
-                            if icon_button(ui, 26.0, a, |p, r, c| {
-                                draw_video(p, r, if video_mode { ACCENT } else { c })
-                            })
-                            .on_hover_text(language.text("视频", "Video"))
-                            .clicked()
-                            {
-                                self.mode = UiMode::Video;
-                                self.set_active_queue(false);
-                            }
-                        }
-                    });
-                });
+            title.add(egui::Label::new(RichText::new(&self.title).size(18.0).strong()).truncate());
+            let mut open = workspace::child(
+                root,
+                "video-open",
+                Rect::from_min_max(
+                    pos2(header_content.max.x - 132.0, screen.min.y + 10.0),
+                    header_content.max,
+                ),
+            );
+            open.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if workspace::primary(ui, language.text("＋ 打开文件", "+ Open files")).clicked()
+                {
+                    act = Act::Open;
+                }
             });
         }
 
-        // ---- bottom bar (video): same layout and interactions as music ----
         if a > 0.02 && (self.player.is_some() || self.loading) && !music {
-            let mut scrubbing = self.scrubbing;
-            let mut scrub = self.scrub;
-            let bot_rect = Rect::from_min_max(
-                pos2(screen.min.x, screen.max.y - 108.0),
-                pos2(screen.max.x, screen.max.y),
-            );
-            painter.rect_filled(
-                bot_rect,
-                CornerRadius::same(0),
-                SURFACE.gamma_multiply(a * 0.96),
-            );
-            let mut bui = root.new_child(
-                UiBuilder::new()
-                    .id_salt("bottombar")
-                    .max_rect(bot_rect.shrink2(vec2(24.0, 10.0)))
-                    .layout(Layout::top_down(Align::Min)),
-            );
-            bui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                ui.label(RichText::new(fmt_time(if scrubbing { scrub } else { pos })).monospace());
-                let shown = if scrubbing { scrub } else { pos };
-                let frac = (shown / dur.max(0.001)).clamp(0.0, 1.0) as f32;
-                let (srect, sresp) = hslider(
-                    ui,
-                    (ui.available_width() - 66.0).max(80.0),
-                    18.0,
-                    frac,
-                    3.0,
-                    true,
-                    a,
-                );
-                if sresp.dragged()
-                    && let Some(pp) = ui.input(|i| i.pointer.hover_pos())
-                {
-                    let f = ((pp.x - srect.min.x) / srect.width()).clamp(0.0, 1.0);
-                    scrub = f as f64 * dur;
-                    scrubbing = true;
-                }
-                if sresp.drag_stopped() {
-                    act = Act::Seek(scrub);
-                    scrubbing = false;
-                } else if sresp.clicked()
-                    && let Some(pp) = ui.input(|i| i.pointer.hover_pos())
-                {
-                    let f = ((pp.x - srect.min.x) / srect.width()).clamp(0.0, 1.0);
-                    act = Act::Seek(f as f64 * dur);
-                }
-                ui.label(RichText::new(fmt_time(dur)).monospace());
-            });
-            let row = bui.available_rect_before_wrap();
-            let row = Rect::from_min_max(row.min, pos2(row.max.x, row.min.y + 46.0));
-            bui.allocate_rect(row, Sense::hover());
-            let mut left_ui = root.new_child(
-                UiBuilder::new()
-                    .id_salt("footer-settings")
-                    .max_rect(Rect::from_min_max(
-                        pos2(row.min.x, row.min.y),
-                        pos2(row.min.x + 26.0, row.max.y),
-                    ))
-                    .layout(Layout::left_to_right(Align::Center)),
-            );
-            self.settings_button(&mut left_ui, a);
-            let cluster = 30.0 + 16.0 + 46.0 + 16.0 + 30.0 + 16.0 + 26.0;
-            let mut transport = root.new_child(
-                UiBuilder::new()
-                    .id_salt("video-transport")
-                    .max_rect(Rect::from_center_size(
-                        pos2(row.center().x, row.center().y),
-                        vec2(cluster, row.height()),
-                    ))
-                    .layout(Layout::left_to_right(Align::Center)),
-            );
-            transport.spacing_mut().item_spacing.x = 16.0;
-            let has_prev = self.queue.previous_index().is_some() || pos > 3.0;
-            let has_next = self.queue.next_index().is_some();
-            if has_prev {
-                let prev = icon_button(&mut transport, 30.0, a, draw_prev);
-                if prev
-                    .on_hover_text(language.text("上一个", "Previous"))
-                    .clicked()
-                {
-                    act = Act::Previous;
-                }
-            } else {
-                disabled_icon_button(&mut transport, 30.0, draw_prev);
-            }
-            let play = play_circle_button(&mut transport, 46.0, playing);
-            let play = play.on_hover_text(if playing {
-                language.text("暂停", "Pause")
-            } else {
-                language.text("播放", "Play")
-            });
-            if play.clicked() {
-                act = Act::TogglePlay;
-            }
-            if has_next {
-                let next = icon_button(&mut transport, 30.0, a, draw_next);
-                if next
-                    .on_hover_text(language.text("下一个", "Next"))
-                    .clicked()
-                {
-                    act = Act::Next;
-                }
-            } else {
-                disabled_icon_button(&mut transport, 30.0, draw_next);
-            }
-            let effective = if self.muted { 0.0 } else { self.vol };
-            let volume = icon_button(&mut transport, 26.0, a, |p, r, c| {
-                draw_volume(p, r, c, self.muted, effective)
-            });
-            let volume = volume.on_hover_text(language.text("音量", "Volume"));
-            let volume_rect = volume.rect;
-            if volume.clicked() {
-                self.volume_open = !self.volume_open;
-            }
-            let mut right_ui = root.new_child(
-                UiBuilder::new()
-                    .id_salt("footer-right")
-                    .max_rect(Rect::from_min_max(
-                        pos2(row.max.x - 96.0, row.min.y),
-                        pos2(row.max.x, row.max.y),
-                    ))
-                    .layout(Layout::left_to_right(Align::Center)),
-            );
-            right_ui.spacing_mut().item_spacing.x = 8.0;
-            let caption = if self.subtitle_job.is_some() {
-                language.text("字幕 · 生成中", "Subtitles · generating")
-            } else {
-                language.text("字幕", "Subtitles")
-            };
-            let subtitles = icon_button(&mut right_ui, 26.0, a, draw_subtitles);
-            let subtitles = subtitles.on_hover_text(caption);
-            egui::Popup::menu(&subtitles).show(|ui| {
-                ui.set_max_width(300.0);
-                if !self.subtitle_status.is_empty() {
-                    ui.label(&self.subtitle_status);
-                    if !self.subtitle_metrics.is_empty() {
-                        ui.small(&self.subtitle_metrics);
-                    }
-                    ui.separator();
-                }
-                if !self.subtitle_skipped.is_empty() {
-                    ui.collapsing(
-                        format!(
-                            "{} ({})",
-                            language.text("已跳过的片段", "Skipped segments"),
-                            self.subtitle_skipped.len()
-                        ),
-                        |ui| {
-                            egui::ScrollArea::vertical()
-                                .max_height(180.0)
-                                .show(ui, |ui| {
-                                    for (start, end, error) in &self.subtitle_skipped {
-                                        ui.label(format!(
-                                            "{}–{}",
-                                            fmt_time(*start),
-                                            fmt_time(*end)
-                                        ));
-                                        ui.small(language.error(error));
-                                    }
-                                });
-                        },
-                    );
-                }
-                ui.checkbox(
-                    &mut self.subtitles_visible,
-                    language.text("显示字幕", "Show subtitles"),
-                );
-                if self.subtitle_job.is_some() {
-                    if ui
-                        .button(language.text("取消生成", "Cancel generation"))
-                        .clicked()
-                    {
-                        act = Act::CancelSubtitles;
-                        ui.close();
-                    }
-                } else if ui
-                    .add(egui::Button::new(if self.subtitles.is_empty() {
-                        language.text("生成 AI 字幕", "Generate AI subtitles")
-                    } else {
-                        language.text("重新生成字幕", "Regenerate subtitles")
-                    }))
-                    .on_hover_text(language.text(
-                        "将当前视频的音频分段发送到配置的模型服务",
-                        "Send audio chunks to the configured model service",
-                    ))
-                    .clicked()
-                {
-                    act = Act::GenerateSubtitles;
-                    ui.close();
-                }
-                if self.torrent_selected.is_some() && !self.torrent_progress.finished {
-                    ui.small(language.text("只读取已下载音频；数据不足时等待，不抢占播放下载", "Uses downloaded audio only; waits for missing data without competing with playback"));
-                }
-                if ui
-                    .add_enabled(
-                        !self.subtitles.is_empty(),
-                        egui::Button::new(language.text("导出 SRT…", "Export SRT…")),
-                    )
-                    .clicked()
-                {
-                    act = Act::ExportSubtitles;
-                    ui.close();
-                }
-            });
-            let fullscreen = icon_button(&mut right_ui, 28.0, a, draw_fullscreen);
-            if fullscreen
-                .on_hover_text(language.text("全屏", "Fullscreen"))
-                .clicked()
-            {
-                act = Act::ToggleFullscreen;
-            }
-            let queue = icon_button(&mut right_ui, 26.0, a, draw_queue);
-            if queue
-                .on_hover_text(language.text("播放队列", "Play queue"))
-                .clicked()
-            {
-                self.queue_open = !self.queue_open;
-            }
-            self.volume_popup(root, screen, volume_rect, &mut act);
-            self.scrub = scrub;
-            self.scrubbing = scrubbing;
+            self.video_transport(root, screen, a, &mut act);
         }
 
         if music {
             self.music_view(root, screen, playback_rect, &mut act);
         }
+        self.window_frame(root, a > 0.02);
         if sidebar_width > 0.0 {
             self.queue_sidebar(
                 root,
@@ -1214,6 +1094,74 @@ impl eframe::App for App {
             }
             ctx.request_repaint();
         }
+        self.apply_action(act, &ctx);
+
+        // ---- stats ----
+        if self.stats && self.last_stats.elapsed().as_secs_f64() >= 1.0 {
+            let elapsed = self.last_stats.elapsed().as_secs_f64();
+            let count = self.frames.saturating_sub(self.stats_frames);
+            eprintln!(
+                "[presentation] fps={:.2} upload_avg_ms={:.2} upload_max_ms={:.2} format={} hardware={}",
+                count as f64 / elapsed,
+                self.upload_ms / count.max(1) as f64,
+                self.upload_max_ms,
+                self.video_format,
+                self.player.as_ref().is_some_and(|p| p.snapshot().hardware)
+            );
+            self.stats_frames = self.frames;
+            self.upload_ms = 0.0;
+            self.upload_max_ms = 0.0;
+            self.last_stats = Instant::now();
+            if let Some(p) = &self.player {
+                eprintln!(
+                    "[stats] now={:.2} pos={:.2} dur={:.2} frames={} queued={} pend={:?} playing={} audio={}",
+                    p.sync_time(),
+                    p.position(),
+                    p.duration(),
+                    self.frames,
+                    p.queued(),
+                    p.pending_pts(),
+                    p.is_playing(),
+                    p.has_audio()
+                );
+            }
+        }
+
+        // ---- repaint pacing ----
+        let transitioning = self.player.as_ref().is_some_and(|p| {
+            matches!(
+                p.snapshot().state,
+                PlaybackState::Opening | PlaybackState::Seeking
+            )
+        });
+        let delay = if music {
+            if playing { 0.1 } else { 0.25 }
+        } else if (a - target).abs() > 0.001 {
+            1.0 / 60.0
+        } else if transitioning {
+            0.01
+        } else if playing {
+            let next = self
+                .player
+                .as_ref()
+                .and_then(|p| p.pending_pts())
+                .map(|pts| (pts - pos).clamp(0.0, 0.05))
+                .unwrap_or(0.01);
+            next.min(0.05)
+        } else if a > 0.02 && a < 1.0 {
+            0.03
+        } else {
+            0.25
+        };
+        ctx.request_repaint_after(Duration::from_secs_f64(delay));
+    }
+}
+
+impl App {
+    fn apply_action(&mut self, act: Act, ctx: &egui::Context) {
+        let language = self.settings.language;
+        let music = self.is_music();
+        let pos = self.player.as_ref().map_or(0.0, |p| p.position());
         match act {
             Act::TogglePlay => {
                 if let Some(p) = &self.player {
@@ -1258,7 +1206,7 @@ impl eframe::App for App {
                 }
             }
             Act::Next => {
-                if let Some(i) = self.queue.next_index() {
+                if let Some(i) = self.queue.next_index_with_shuffle(self.shuffle) {
                     self.play_queue(i);
                 }
             }
@@ -1373,52 +1321,6 @@ impl eframe::App for App {
             }
             Act::None => {}
         }
-
-        // ---- stats ----
-        if self.stats && self.last_stats.elapsed().as_secs_f64() >= 1.0 {
-            self.last_stats = Instant::now();
-            if let Some(p) = &self.player {
-                eprintln!(
-                    "[stats] now={:.2} pos={:.2} dur={:.2} frames={} queued={} pend={:?} playing={} audio={}",
-                    p.sync_time(),
-                    p.position(),
-                    p.duration(),
-                    self.frames,
-                    p.queued(),
-                    p.pending_pts(),
-                    p.is_playing(),
-                    p.has_audio()
-                );
-            }
-        }
-
-        // ---- repaint pacing ----
-        let transitioning = self.player.as_ref().is_some_and(|p| {
-            matches!(
-                p.snapshot().state,
-                PlaybackState::Opening | PlaybackState::Seeking
-            )
-        });
-        let delay = if music {
-            if playing { 0.1 } else { 0.25 }
-        } else if (a - target).abs() > 0.001 {
-            1.0 / 60.0
-        } else if transitioning {
-            0.01
-        } else if playing {
-            let next = self
-                .player
-                .as_ref()
-                .and_then(|p| p.pending_pts())
-                .map(|pts| (pts - pos).clamp(0.0, 0.05))
-                .unwrap_or(0.01);
-            next.min(0.05)
-        } else if a > 0.02 && a < 1.0 {
-            0.03
-        } else {
-            0.25
-        };
-        ctx.request_repaint_after(Duration::from_secs_f64(delay));
     }
 }
 
@@ -1488,13 +1390,11 @@ fn hslider(
     handle_on_hover: bool,
     alpha: f32,
 ) -> (Rect, Response) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
+    let (allocation, resp) =
+        ui.allocate_exact_size(vec2(width.max(1.0), height), Sense::click_and_drag());
+    let rect = allocation.shrink2(vec2(6.0_f32.min(allocation.width() * 0.25), 0.0));
     let hov = resp.hovered() || resp.dragged();
-    let th = if hov && handle_on_hover {
-        bar * 1.8
-    } else {
-        bar
-    };
+    let th = bar;
     let cy = rect.center().y;
     let p = ui.painter();
     let cr = CornerRadius::same((th * 0.5).clamp(0.0, 8.0) as u8);
@@ -1506,6 +1406,11 @@ fn hslider(
         cr,
         Color32::from_white_alpha((70.0 * alpha) as u8),
     );
+    let frac = if frac.is_finite() {
+        frac.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let fx = rect.min.x + rect.width() * frac;
     let fill = ACCENT.gamma_multiply(alpha);
     p.rect_filled(
@@ -1513,8 +1418,8 @@ fn hslider(
         cr,
         fill,
     );
-    if hov && handle_on_hover {
-        p.circle_filled(pos2(fx, cy), th * 0.95, fill);
+    if hov || !handle_on_hover {
+        p.circle_filled(pos2(fx, cy), 5.0_f32.min(height * 0.5), fill);
     }
     (rect, resp)
 }
@@ -1528,14 +1433,14 @@ fn icon_button(
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(
-            rect.expand(3.0),
+            rect,
             CornerRadius::same(6),
             Color32::from_white_alpha((38.0 * alpha) as u8),
         );
     }
     let base = if resp.hovered() { 255.0 } else { 225.0 };
     let c = Color32::from_white_alpha((base * alpha) as u8);
-    draw(ui.painter(), rect.shrink(size * 0.24), c);
+    draw(ui.painter(), rect.shrink(size * 0.18), c);
     resp
 }
 
@@ -1618,15 +1523,6 @@ fn draw_next(p: &Painter, r: Rect, c: Color32) {
     ));
 }
 
-fn disabled_icon_button(ui: &mut Ui, size: f32, draw: impl FnOnce(&Painter, Rect, Color32)) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    draw(
-        ui.painter(),
-        rect.shrink(size * 0.24),
-        Color32::from_white_alpha(70),
-    );
-}
-
 fn play_circle_button(ui: &mut Ui, size: f32, playing: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let fill = if resp.hovered() || resp.clicked() {
@@ -1635,50 +1531,111 @@ fn play_circle_button(ui: &mut Ui, size: f32, playing: bool) -> Response {
         ACCENT
     };
     ui.painter().circle_filled(rect.center(), size * 0.5, fill);
-    let icon = rect.shrink(size * 0.33);
+    let icon = rect.shrink(size * 0.28);
     if playing {
-        draw_pause(ui.painter(), icon, Color32::WHITE);
+        draw_pause(ui.painter(), icon, BACKGROUND);
     } else {
-        draw_play(ui.painter(), icon, Color32::WHITE);
+        draw_play(ui.painter(), icon, BACKGROUND);
     }
     resp
 }
 
+fn draw_back(p: &Painter, r: Rect, c: Color32) {
+    p.add(Shape::line(
+        vec![
+            pos2(r.center().x + r.width() * 0.18, r.min.y),
+            pos2(r.center().x - r.width() * 0.28, r.center().y),
+            pos2(r.center().x + r.width() * 0.18, r.max.y),
+        ],
+        Stroke::new(1.6, c),
+    ));
+}
+
+fn draw_shuffle(p: &Painter, r: Rect, c: Color32) {
+    let s = Stroke::new(1.5, c);
+    for flip in [false, true] {
+        let point = |x: f32, y: f32| {
+            pos2(
+                r.min.x + x * r.width(),
+                r.min.y + (if flip { 1.0 - y } else { y }) * r.height(),
+            )
+        };
+        p.add(Shape::line(
+            vec![
+                point(0.0, 0.2),
+                point(0.23, 0.2),
+                point(0.70, 0.8),
+                point(1.0, 0.8),
+            ],
+            s,
+        ));
+        p.add(Shape::line(
+            vec![point(0.80, 0.60), point(1.0, 0.8), point(0.80, 1.0)],
+            s,
+        ));
+    }
+}
+
+fn draw_seek_ten(p: &Painter, r: Rect, c: Color32, forward: bool) {
+    let center = r.center() + vec2(0.0, r.height() * 0.08);
+    let radius = r.width() * 0.46;
+    let point = |angle: f32| {
+        let x = angle.cos() * radius * if forward { -1.0 } else { 1.0 };
+        center + vec2(x, angle.sin() * radius)
+    };
+    let start = -std::f32::consts::FRAC_PI_2;
+    let points = (0..=36)
+        .map(|i| point(start + i as f32 / 36.0 * 5.35))
+        .collect();
+    p.add(Shape::line(points, Stroke::new(1.5, c)));
+    let tip = point(start);
+    let sign = if forward { -1.0 } else { 1.0 };
+    p.add(Shape::line(
+        vec![
+            tip + vec2(4.0 * sign, -3.0),
+            tip,
+            tip + vec2(4.0 * sign, 3.0),
+        ],
+        Stroke::new(1.5, c),
+    ));
+    p.text(
+        center,
+        egui::Align2::CENTER_CENTER,
+        "10",
+        egui::FontId::proportional(r.height() * 0.44),
+        c,
+    );
+}
+
 fn draw_repeat(p: &Painter, r: Rect, c: Color32, single: bool) {
-    let s = Stroke::new(2.0, c);
-    let aw = r.width() * 0.16;
-    let mx = r.center().x;
-    let (y0, y1) = (r.min.y, r.max.y);
-    p.line_segment([pos2(r.min.x, y0), pos2(mx - aw * 1.3, y0)], s);
-    p.line_segment([pos2(mx + aw * 1.3, y0), pos2(r.max.x, y0)], s);
-    p.line_segment([pos2(r.min.x, y1), pos2(mx - aw * 1.3, y1)], s);
-    p.line_segment([pos2(mx + aw * 1.3, y1), pos2(r.max.x, y1)], s);
-    p.line_segment([pos2(r.min.x, y0), pos2(r.min.x, y1)], s);
-    p.line_segment([pos2(r.max.x, y0), pos2(r.max.x, y1)], s);
-    p.add(Shape::convex_polygon(
-        vec![
-            pos2(mx - aw * 0.7, y0 - aw),
-            pos2(mx - aw * 0.7, y0 + aw),
-            pos2(mx + aw, y0),
-        ],
-        c,
-        Stroke::NONE,
-    ));
-    p.add(Shape::convex_polygon(
-        vec![
-            pos2(mx + aw * 0.7, y1 - aw),
-            pos2(mx + aw * 0.7, y1 + aw),
-            pos2(mx - aw, y1),
-        ],
-        c,
-        Stroke::NONE,
-    ));
+    let s = Stroke::new(1.5, c);
+    for flip in [false, true] {
+        let point = |x: f32, y: f32| {
+            pos2(
+                r.min.x + (if flip { 1.0 - x } else { x }) * r.width(),
+                r.min.y + (if flip { 1.0 - y } else { y }) * r.height(),
+            )
+        };
+        p.add(Shape::line(
+            vec![
+                point(0.0, 0.58),
+                point(0.0, 0.30),
+                point(0.18, 0.12),
+                point(0.92, 0.12),
+            ],
+            s,
+        ));
+        p.add(Shape::line(
+            vec![point(0.72, 0.0), point(0.92, 0.12), point(0.72, 0.30)],
+            s,
+        ));
+    }
     if single {
         p.text(
             r.center(),
             egui::Align2::CENTER_CENTER,
             "1",
-            egui::FontId::proportional(r.height() * 0.66),
+            egui::FontId::proportional(r.height() * 0.60),
             c,
         );
     }
@@ -1937,9 +1894,11 @@ fn vslider(
     bar: f32,
     alpha: f32,
 ) -> (Rect, Response) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
+    let (allocation, resp) =
+        ui.allocate_exact_size(vec2(width, height.max(1.0)), Sense::click_and_drag());
+    let rect = allocation.shrink2(vec2(0.0, 6.0_f32.min(allocation.height() * 0.25)));
     let hov = resp.hovered() || resp.dragged();
-    let th = if hov { bar * 1.6 } else { bar };
+    let th = bar;
     let cx = rect.center().x;
     let p = ui.painter();
     let cr = CornerRadius::same((th * 0.5).clamp(0.0, 8.0) as u8);
@@ -1951,6 +1910,11 @@ fn vslider(
         cr,
         Color32::from_white_alpha((70.0 * alpha) as u8),
     );
+    let frac = if frac.is_finite() {
+        frac.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let fy = rect.max.y - rect.height() * frac;
     let fill = ACCENT.gamma_multiply(alpha);
     p.rect_filled(
@@ -1959,7 +1923,7 @@ fn vslider(
         fill,
     );
     if hov {
-        p.circle_filled(pos2(cx, fy), th * 0.95, fill);
+        p.circle_filled(pos2(cx, fy), 5.0_f32.min(width * 0.5), fill);
     }
     (rect, resp)
 }

@@ -7,6 +7,10 @@ use std::{
     io::Write,
     path::Path,
 };
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
 struct Partial {
@@ -58,6 +62,10 @@ async fn enrich(path: &Path, track: &ResolvedTrack) -> Result<()> {
         .metadata
         .save(path)
         .context("Cannot save music metadata")?;
+    if let Some(text) = &track.lyrics {
+        // Standard sidecar name, interoperable with other players; optional data.
+        let _ = std::fs::write(path.with_extension("lrc"), text.as_bytes());
+    }
     if let Some(url) = &track.cover {
         // Preserve embedded/cached art; cover failure must not discard audio.
         if crate::media::probe_info(&path.to_string_lossy())
@@ -111,7 +119,11 @@ pub async fn download(
     directory: &Path,
     progress: Arc<AtomicU64>,
 ) -> Result<PathBuf> {
-    let track = source.resolve(song, quality).await?;
+    let mut track = source.resolve(song, quality).await?;
+    if track.lyrics.is_none() {
+        // Lyrics are best-effort: an unavailable endpoint never fails playback.
+        track.lyrics = source.lyrics(song).await.ok().flatten();
+    }
     ensure!(
         ["mp3", "flac", "m4a", "aac", "ogg", "opus", "wav"].contains(&track.extension.as_str()),
         "Unsupported audio format"

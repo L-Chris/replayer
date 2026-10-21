@@ -60,6 +60,11 @@ errors and cache cleanup, and play/seek generated encrypted FLAC through FFmpeg.
 
 ## Queue behavior
 
+Hold a queue item's title/metadata area for 450 ms before dragging to reorder.
+Releasing early or moving more than 6 points before the hold completes cancels
+the gesture. Cover/play and remove buttons keep their ordinary click behavior.
+Escape or dropping outside the list cancels the reorder.
+
 Open Files supports multiple selection and replaces the queue. Add Files and
 Shift-drop append without replacing the current item. Ordinary multi-file drop
 replaces the queue and begins the first item. Directories are not scanned.

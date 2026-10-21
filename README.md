@@ -2,9 +2,11 @@
 
 > 本项目由 Qwen3.8 Max 开发。
 
-使用 Rust、FFmpeg、egui/WGPU 和 CPAL 开发的桌面音视频播放器，目前主要在 Windows 上验证。
+使用 Rust、FFmpeg、egui/WGPU 和 CPAL 开发的桌面音视频播放器与漫画阅读器，目前主要在 Windows 上验证。
 
 ## 功能
+
+- 漫画模式：MangaYun 分源搜索、详情目录、收藏、历史与断点续读、收藏更新红点；条漫/左右分页、右侧章节栏，以及通过图像编辑模型逐页翻译和原译对照，详见 [漫画阅读](COMICS.md)。
 
 - 音乐与视频自动切换界面；音乐显示封面、标题、歌手和专辑，控件常驻。播放页与队列优先读取内嵌标签，缺失时读取在线音乐的本地元数据缓存。
 - 多文件打开、混合播放队列、上一首/下一首、播完自动继续及队列排序；详见 [音乐与通用播放](MUSIC_PLAYBACK.md)。
@@ -12,7 +14,7 @@
 
 - 播放、暂停、拖动定位、音量控制和全屏；`Space` 播放/暂停，左右方向键快进/快退，`F` 切换全屏，`Esc` 退出全屏，`M` 静音。
 - 顶部和底部工具栏自动隐藏，鼠标靠近边缘时显示。
-- Windows D3D11VA 硬件解码、软件回退，以及 GPU YUV/NV12 转色。
+- Windows D3D11VA 硬件解码、软件回退，以及 GPU YUV/NV12/P010 转色，支持 8/10/12/16 位 YUV420 源。
 - 中英文界面；语言设置同时控制 AI 字幕的目标语言。
 - 兼容 OpenAI Chat Completions 音频输入的字幕生成：默认 MP3、120 秒分段、2 路并发，支持播放位置优先调度、取消、进度显示和 SRT 导出。
 - 语言相关的字幕标点、两行排版、阅读速度检查和白字黑描边。
@@ -50,12 +52,14 @@ Cargo 开发流程，不再按功能创建新的可执行文件名：
 ./scripts/preview.ps1
 ./scripts/preview.ps1 -Media "path/to/song.flac"
 ./scripts/preview.ps1 -NoLaunch
+./scripts/preview.ps1 -Stats -Media "path/to/video.mkv"
 ```
 
 脚本会关闭本项目原有的 debug 预览、重新构建，再启动新版本；构建失败不会启动旧版本。
 QQ 音乐文件支持范围和密钥导入方式见 [音乐播放说明](MUSIC_PLAYBACK.md#qq-music-local-files)。
 
 设置 `REPLAYER_SOFTWARE=1` 可强制软件解码；`REPLAYER_STATS=1` 可输出播放诊断信息。
+预览脚本的 `-Stats` 将播放诊断（显示帧率、像素格式及上传耗时）保存到 `target/preview-stderr.log`。
 
 ## AI 字幕
 

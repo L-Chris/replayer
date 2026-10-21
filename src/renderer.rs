@@ -35,7 +35,14 @@ impl VideoRenderer {
         let aspect = frame.aspect();
         if matches!(
             source.format(),
-            Pixel::YUV420P | Pixel::YUVJ420P | Pixel::NV12
+            Pixel::YUV420P
+                | Pixel::YUVJ420P
+                | Pixel::NV12
+                | Pixel::P010LE
+                | Pixel::YUV420P10LE
+                | Pixel::YUV420P12LE
+                | Pixel::YUV420P16LE
+                | Pixel::P016LE
         ) && let Some(gpu) = &mut self.gpu
             && source.width() <= gpu.state.device.limits().max_texture_dimension_2d
             && source.height() <= gpu.state.device.limits().max_texture_dimension_2d
@@ -83,7 +90,7 @@ impl VideoRenderer {
 }
 
 struct Images {
-    key: (u32, u32, bool),
+    key: (u32, u32, Pixel),
     planes: [wgpu::Texture; 3],
     target: wgpu::Texture,
     bind: wgpu::BindGroup,
@@ -150,8 +157,10 @@ impl GpuVideo {
     fn upload(&mut self, frame: &frame::Video) -> egui::TextureId {
         let w = frame.width();
         let h = frame.height();
-        let nv12 = frame.format() == Pixel::NV12;
-        let key = (w, h, nv12);
+        let format = frame.format();
+        let nv12 = matches!(format, Pixel::NV12 | Pixel::P010LE | Pixel::P016LE);
+        let wide = sample_layout(format).0 > 8;
+        let key = (w, h, format);
         if self.images.as_ref().is_none_or(|i| i.key != key) {
             if let Some(old) = self.images.take() {
                 self.state.renderer.write().free_texture(&old.id);
@@ -174,11 +183,13 @@ impl GpuVideo {
             };
             let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
             let planes = [
-                make(w, h, wgpu::TextureFormat::R8Unorm, usage),
+                // Store each 16-bit sample as two normalized byte channels.
+                // Reconstructing after linear sampling preserves interpolation
+                // and works without optional R16Unorm device features.
                 make(
-                    w.div_ceil(2),
-                    h.div_ceil(2),
-                    if nv12 {
+                    w,
+                    h,
+                    if wide {
                         wgpu::TextureFormat::Rg8Unorm
                     } else {
                         wgpu::TextureFormat::R8Unorm
@@ -188,7 +199,23 @@ impl GpuVideo {
                 make(
                     w.div_ceil(2),
                     h.div_ceil(2),
-                    wgpu::TextureFormat::R8Unorm,
+                    if nv12 && wide {
+                        wgpu::TextureFormat::Rgba8Unorm
+                    } else if nv12 || wide {
+                        wgpu::TextureFormat::Rg8Unorm
+                    } else {
+                        wgpu::TextureFormat::R8Unorm
+                    },
+                    usage,
+                ),
+                make(
+                    w.div_ceil(2),
+                    h.div_ceil(2),
+                    if wide {
+                        wgpu::TextureFormat::Rg8Unorm
+                    } else {
+                        wgpu::TextureFormat::R8Unorm
+                    },
                     usage,
                 ),
             ];
@@ -313,29 +340,42 @@ fn color_matrix(frame: &frame::Video) -> [[f32; 4]; 4] {
         _ => (0.299, 0.114),
     };
     let full = frame.color_range() == Range::JPEG || frame.format() == Pixel::YUVJ420P;
-    let y = if full { 1.0 } else { 255.0 / 219.0 };
-    let c = if full { 1.0 } else { 255.0 / 224.0 };
-    let offset = if full { 0.0 } else { -16.0 / 255.0 * y };
+    let (depth, shift) = sample_layout(frame.format());
+    let max = ((1u32 << depth) - 1) as f32;
+    let unit = (1u32 << (depth - 8)) as f32;
+    let y = if full { 1.0 } else { max / (219.0 * unit) };
+    let c = if full { 1.0 } else { max / (224.0 * unit) };
+    let offset = if full { 0.0 } else { -16.0 * unit / max * y };
     let rv = 2.0 * (1.0 - kr) * c;
     let bu = 2.0 * (1.0 - kb) * c;
     let gu = -2.0 * kb * (1.0 - kb) / (1.0 - kr - kb) * c;
     let gv = -2.0 * kr * (1.0 - kr) / (1.0 - kr - kb) * c;
-    let center = 128.0 / 255.0;
+    let center = 128.0 * unit / max;
     [
         [y, 0.0, rv, offset - rv * center],
         [y, gu, gv, offset - (gu + gv) * center],
         [y, bu, 0.0, offset - bu * center],
         [
-            if frame.format() == Pixel::NV12 {
+            if matches!(frame.format(), Pixel::NV12 | Pixel::P010LE | Pixel::P016LE) {
                 1.0
             } else {
                 0.0
             },
-            0.0,
-            0.0,
+            if depth > 8 { 1.0 } else { 0.0 },
+            255.0 / (max * (1u32 << shift) as f32),
             0.0,
         ],
     ]
+}
+
+fn sample_layout(format: Pixel) -> (u32, u32) {
+    match format {
+        Pixel::P010LE => (10, 6),
+        Pixel::YUV420P10LE => (10, 0),
+        Pixel::YUV420P12LE => (12, 0),
+        Pixel::YUV420P16LE | Pixel::P016LE => (16, 0),
+        _ => (8, 0),
+    }
 }
 
 #[cfg(test)]
@@ -343,12 +383,28 @@ mod tests {
     use super::*;
     #[test]
     fn limited_range_black_and_white() {
-        let f = frame::Video::new(Pixel::YUV420P, 16, 16);
-        let matrix = color_matrix(&f);
-        for row in &matrix[..3] {
-            let convert = |y| row[0] * y + (row[1] + row[2]) * 128.0 / 255.0 + row[3];
-            assert!(convert(16.0 / 255.0).abs() < 0.0001);
-            assert!((convert(235.0 / 255.0) - 1.0).abs() < 0.0001);
+        for format in [
+            Pixel::YUV420P,
+            Pixel::NV12,
+            Pixel::P010LE,
+            Pixel::YUV420P10LE,
+            Pixel::YUV420P12LE,
+            Pixel::YUV420P16LE,
+            Pixel::P016LE,
+        ] {
+            let f = frame::Video::new(format, 16, 16);
+            let matrix = color_matrix(&f);
+            let (depth, _) = sample_layout(format);
+            let max = ((1u32 << depth) - 1) as f32;
+            let unit = (1u32 << (depth - 8)) as f32;
+            for row in &matrix[..3] {
+                let convert = |y| row[0] * y + (row[1] + row[2]) * 128.0 * unit / max + row[3];
+                assert!(convert(16.0 * unit / max).abs() < 0.0001, "{format:?}");
+                assert!(
+                    (convert(235.0 * unit / max) - 1.0).abs() < 0.0001,
+                    "{format:?}"
+                );
+            }
         }
     }
 
@@ -400,14 +456,41 @@ mod tests {
             (Pixel::YUV420P, 81, 90, 240, [254, 0, 0]),
             (Pixel::NV12, 81, 90, 240, [254, 0, 0]),
             (Pixel::NV12, 235, 128, 128, [255, 255, 255]),
+            (Pixel::P010LE, 16, 128, 128, [0, 0, 0]),
+            (Pixel::P010LE, 235, 128, 128, [255, 255, 255]),
+            (Pixel::P010LE, 81, 90, 240, [254, 0, 0]),
+            (Pixel::YUV420P10LE, 81, 90, 240, [254, 0, 0]),
+            (Pixel::YUV420P12LE, 235, 128, 128, [255, 255, 255]),
+            (Pixel::P016LE, 81, 90, 240, [254, 0, 0]),
+            (Pixel::YUV420P16LE, 16, 128, 128, [0, 0, 0]),
+            (Pixel::NV12, 235, 128, 128, [255, 255, 255]),
         ] {
             let mut frame = frame::Video::new(format, 7, 5);
-            frame.data_mut(0).fill(y);
-            if format == Pixel::NV12 {
+            let (depth, shift) = sample_layout(format);
+            let interleaved = matches!(format, Pixel::NV12 | Pixel::P010LE | Pixel::P016LE);
+            if depth > 8 {
+                let value = |v: u8| ((v as u16) << (depth - 8 + shift)).to_le_bytes();
+                for pair in frame.data_mut(0).as_chunks_mut::<2>().0 {
+                    pair.copy_from_slice(&value(y));
+                }
+                if interleaved {
+                    for pair in frame.data_mut(1).as_chunks_mut::<4>().0 {
+                        pair.copy_from_slice(&[value(u), value(v)].concat());
+                    }
+                } else {
+                    for (plane, value) in [(1, value(u)), (2, value(v))] {
+                        for pair in frame.data_mut(plane).as_chunks_mut::<2>().0 {
+                            pair.copy_from_slice(&value);
+                        }
+                    }
+                }
+            } else if interleaved {
+                frame.data_mut(0).fill(y);
                 for pair in frame.data_mut(1).as_chunks_mut::<2>().0 {
                     pair.copy_from_slice(&[u, v]);
                 }
             } else {
+                frame.data_mut(0).fill(y);
                 frame.data_mut(1).fill(u);
                 frame.data_mut(2).fill(v);
             }

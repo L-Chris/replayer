@@ -175,11 +175,81 @@ pub fn probe_info(path: &str) -> Option<Arc<Info>> {
     let prepared = crate::media_source::prepare(path, &stop, None).ok()?;
     ffmpeg_next::init().ok()?;
     let started = std::time::Instant::now();
-    let input = ffmpeg_next::format::input_with_interrupt_and_dictionary(
+    let mut input = ffmpeg_next::format::input_with_interrupt_and_dictionary(
         prepared.path(),
         move || started.elapsed() > std::time::Duration::from_secs(3),
         ffmpeg_next::Dictionary::new(),
     )
     .ok()?;
-    Some(Arc::new(info(&input, Path::new(path))))
+    let mut metadata = info(&input, Path::new(path));
+    if metadata.kind == Kind::Video {
+        metadata.artwork = video_thumbnail(&mut input, started);
+    }
+    Some(Arc::new(metadata))
+}
+
+/// Library artwork is decoded on the metadata worker, never the UI or playback
+/// threads. Limit both wall time and packet count for damaged/huge inputs.
+fn video_thumbnail(
+    input: &mut ffmpeg_next::format::context::Input,
+    started: std::time::Instant,
+) -> Option<Arc<Artwork>> {
+    use ffmpeg_next::{codec, frame, media::Type, software::scaling, util::format::Pixel};
+    let stream = input.streams().best(Type::Video)?;
+    let index = stream.index();
+    let mut decoder = codec::context::Context::from_parameters(stream.parameters())
+        .ok()?
+        .decoder()
+        .video()
+        .ok()?;
+    if decoder.width() == 0
+        || decoder.height() == 0
+        || u64::from(decoder.width()) * u64::from(decoder.height()) > 16_777_216
+    {
+        return None;
+    }
+    if input.duration() > 10_000_000 {
+        let _ = input.seek(5_000_000, ..);
+    }
+    for (stream, packet) in input.packets().take(180) {
+        if started.elapsed() > std::time::Duration::from_secs(3) {
+            break;
+        }
+        if stream.index() != index {
+            continue;
+        }
+        if decoder.send_packet(&packet).is_err() {
+            continue;
+        }
+        let mut decoded = frame::Video::empty();
+        if decoder.receive_frame(&mut decoded).is_ok() {
+            let width = 600;
+            let height = ((f64::from(decoded.height()) / f64::from(decoded.width()))
+                * f64::from(width))
+            .clamp(1.0, 600.0) as u32;
+            let mut scaler = scaling::context::Context::get(
+                decoded.format(),
+                decoded.width(),
+                decoded.height(),
+                Pixel::RGBA,
+                width,
+                height,
+                scaling::flag::Flags::BILINEAR,
+            )
+            .ok()?;
+            let mut output = frame::Video::empty();
+            scaler.run(&decoded, &mut output).ok()?;
+            let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+            for row in 0..height as usize {
+                let start = row * output.stride(0);
+                rgba.extend_from_slice(&output.data(0)[start..start + width as usize * 4]);
+            }
+            return Some(Arc::new(Artwork {
+                width: width as usize,
+                height: height as usize,
+                rgba,
+            }));
+        }
+    }
+    None
 }

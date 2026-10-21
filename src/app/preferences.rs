@@ -1,120 +1,97 @@
 use super::*;
 
 impl App {
-    pub(super) fn preferences(&mut self, ctx: &egui::Context) {
-        if !self.settings_open {
-            self.preferences_armed = false;
-            return;
+    pub(super) fn preferences(&mut self, _ctx: &egui::Context) {
+        if self.settings_open {
+            self.workspace.page = workspace::Page::Settings;
         }
-        let pressed_outside = self.preferences_armed
-            && ctx.input(|i| i.pointer.any_pressed())
-            && ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pointer| {
-                self.preferences_rect
-                    .is_some_and(|rect| !rect.contains(pointer))
-            });
-        if pressed_outside {
-            self.settings_open = false;
-            self.preferences_armed = false;
-            return;
-        }
-        self.preferences_armed = true;
+    }
+    pub(super) fn preferences_page(&mut self, ui: &mut Ui) {
         let language = self.settings.language;
-        let mut open = self.settings_open;
-        let mut closed = false;
-        let screen = ctx.content_rect();
-        let size = vec2(
-            (screen.width() - 64.0).clamp(320.0, 620.0),
-            (screen.height() - 160.0).clamp(260.0, 520.0),
+        ui.heading(language.text("设置", "Settings"));
+        ui.label(
+            RichText::new(language.text(
+                "管理播放体验与 AI 服务",
+                "Playback experience and AI services",
+            ))
+            .color(MUTED),
         );
-        let shown = egui::Window::new(language.text("设置", "Settings"))
-            .id(Id::new("preferences"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .title_bar(false)
-            .frame(egui::Frame::window(&ctx.style_of(egui::Theme::Dark)).inner_margin(20))
-            .fixed_size(size)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(language.text("设置", "Settings"))
-                            .size(14.0)
-                            .strong(),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if icon_button(ui, 20.0, 1.0, draw_close).clicked() {
-                            closed = true;
-                        }
-                    });
-                });
-                ui.separator();
-                let content_height = (size.y - 150.0).max(120.0);
-                ui.horizontal_top(|ui| {
-                    ui.vertical(|nav| {
-                        nav.set_width(88.0);
-                        nav.spacing_mut().item_spacing.y = 4.0;
-                        nav.selectable_value(
-                            &mut self.preferences_tab,
-                            PrefTab::General,
-                            language.text("通用", "General"),
-                        );
-                        nav.selectable_value(
-                            &mut self.preferences_tab,
-                            PrefTab::Subtitles,
-                            language.text("字幕", "Subtitles"),
-                        );
-                        nav.selectable_value(
-                            &mut self.preferences_tab,
-                            PrefTab::MusicSources,
-                            language.text("音乐源", "Music sources"),
-                        );
-                        nav.selectable_value(
-                            &mut self.preferences_tab,
-                            PrefTab::About,
-                            language.text("关于", "About"),
-                        );
-                    });
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .max_height(content_height)
-                        .show(ui, |ui| {
-                            // The scroll content inherits the row's horizontal
-                            // layout; force the section back to a vertical stack.
-                            ui.vertical(|ui| match self.preferences_tab {
-                                PrefTab::General => self.preferences_general(ui),
-                                PrefTab::Subtitles => self.preferences_subtitles(ui),
-                                PrefTab::MusicSources => self.preferences_music_sources(ui),
-                                PrefTab::About => self.about(ui, ctx),
-                            });
-                        });
-                });
-                ui.add_space(10.0);
-                if !self.config_message.is_empty() {
-                    ui.label(&self.config_message);
-                }
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(egui::Button::new(language.text("保存", "Save")).fill(ACCENT))
-                            .clicked()
-                        {
-                            self.save_preferences(language);
-                        }
-                        if ui.button(language.text("重置", "Reset")).clicked() {
-                            self.reset_preferences(language);
-                        }
-                    });
-                });
-                ui.add_space(2.0);
-            });
-        if let Some(inner) = shown {
-            self.preferences_rect = Some(inner.response.rect);
+        ui.add_space(20.0);
+        let rect = ui.available_rect_before_wrap();
+        let nav_width = if rect.width() > 680.0 { 155.0 } else { 110.0 };
+        let mut nav = workspace::child(
+            ui,
+            "settings-navigation",
+            Rect::from_min_size(rect.min, vec2(nav_width, rect.height())),
+        );
+        nav.spacing_mut().item_spacing.y = 10.0;
+        for (tab, zh, en) in [
+            (PrefTab::General, "外观与语言", "Appearance"),
+            (PrefTab::Subtitles, "AI 字幕", "AI subtitles"),
+            (PrefTab::MusicSources, "音乐源", "Music sources"),
+            (PrefTab::Comics, "漫画与图片翻译", "Comics & translation"),
+            (PrefTab::About, "关于", "About"),
+        ] {
+            nav.selectable_value(&mut self.preferences_tab, tab, language.text(zh, en));
         }
-        self.settings_open = open && !closed;
+        let body = Rect::from_min_max(
+            pos2(rect.min.x + nav_width + 22.0, rect.min.y),
+            pos2(rect.max.x, rect.max.y - 68.0),
+        );
+        let mut content = workspace::child(ui, "settings-content", body);
+        egui::ScrollArea::vertical()
+            .id_salt(("preferences-page", self.preferences_tab as u8))
+            .auto_shrink([false, false])
+            .show(&mut content, |ui| {
+                egui::Frame::new()
+                    .fill(SURFACE)
+                    .corner_radius(10)
+                    .inner_margin(20)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        match self.preferences_tab {
+                            PrefTab::General => self.preferences_general(ui),
+                            PrefTab::Subtitles => self.preferences_subtitles(ui),
+                            PrefTab::MusicSources => self.preferences_music_sources(ui),
+                            PrefTab::Comics => self.preferences_comics(ui),
+                            PrefTab::About => self.about(ui, &ui.ctx().clone()),
+                        }
+                    });
+            });
+        let mut footer = workspace::child(
+            ui,
+            "settings-footer",
+            Rect::from_min_max(pos2(body.min.x, rect.max.y - 57.0), rect.max),
+        );
+        footer.horizontal(|ui| {
+            if ui
+                .button(language.text("恢复默认", "Restore defaults"))
+                .clicked()
+            {
+                self.reset_preferences(language);
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if workspace::primary(ui, language.text("保存设置", "Save settings")).clicked()
+                {
+                    self.save_preferences(language);
+                }
+            });
+        });
+        if !self.config_message.is_empty() {
+            footer.small(&self.config_message);
+        }
     }
     fn save_preferences(&mut self, language: Language) {
+        if self.preferences_tab == PrefTab::Comics {
+            self.config_message = match self.settings.save() {
+                Ok(()) => {
+                    self.comic.reload_images();
+                    language.text("已保存", "Saved").into()
+                }
+                Err(error) => error.to_string(),
+            };
+            return;
+        }
         if self.preferences_tab != PrefTab::Subtitles {
             let previous = self.settings.music.clone();
             self.settings.music = self.online_music.draft.clone();
@@ -155,6 +132,16 @@ impl App {
         }
     }
     fn reset_preferences(&mut self, language: Language) {
+        if self.preferences_tab == PrefTab::Comics {
+            self.settings.comics = Default::default();
+            self.config_message = language
+                .text(
+                    "已恢复默认值，点击保存应用",
+                    "Defaults restored; save to apply",
+                )
+                .into();
+            return;
+        }
         if self.preferences_tab == PrefTab::MusicSources {
             self.online_music.draft = Default::default();
             self.config_message = language
@@ -354,10 +341,23 @@ impl App {
                 false,
             );
         });
-        ui.add(
-            egui::Slider::new(&mut self.settings.subtitle_concurrency, 1..=6)
-                .text(language.text("并发请求", "Parallel requests")),
-        );
+        ui.horizontal(|ui| {
+            ui.label(language.text("并发请求", "Parallel requests"));
+            let fraction = (self.settings.subtitle_concurrency.clamp(1, 6) - 1) as f32 / 5.0;
+            let (track, response) = hslider(ui, 120.0, 34.0, fraction, 3.0, false, 1.0);
+            if (response.clicked() || response.dragged())
+                && let Some(p) = response.interact_pointer_pos()
+            {
+                self.settings.subtitle_concurrency =
+                    (((p.x - track.min.x) / track.width()).clamp(0.0, 1.0) * 5.0).round() as usize
+                        + 1;
+            }
+            ui.add(
+                egui::DragValue::new(&mut self.settings.subtitle_concurrency)
+                    .range(1..=6)
+                    .speed(1.0),
+            );
+        });
         ui.small(
             RichText::new(language.text(
                 "模型配置与并发数用于下一次生成",
