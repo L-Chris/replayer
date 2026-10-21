@@ -248,7 +248,9 @@ fn video_thumbnail(
         next_sample = position + 0.5;
         let lit = art
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| u16::from(p[0]) + u16::from(p[1]) + u16::from(p[2]) > 72)
             .count();
         (lit > art.width * art.height / 100 || samples >= 12).then_some(art)

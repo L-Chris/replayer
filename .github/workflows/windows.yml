@@ -33,6 +33,8 @@ jobs:
             target
             .deps/ffmpeg-ci.zip
           key: windows-x64-${{ hashFiles('Cargo.lock', 'scripts/setup-windows.ps1') }}
+          restore-keys: |
+            windows-x64-
       - name: Set up verified FFmpeg and LLVM
         shell: pwsh
         run: ./scripts/setup-windows.ps1

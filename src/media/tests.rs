@@ -45,7 +45,7 @@ fn video_thumbnails_handle_short_clips_black_leaders_and_portrait_aspect() {
             "distorted thumbnail: {art:?}"
         );
         assert_eq!(art.rgba.len(), art.width * art.height * 4);
-        assert!(art.rgba.chunks_exact(4).any(|p| p[2] > 100));
+        assert!(art.rgba.as_chunks::<4>().0.iter().any(|p| p[2] > 100));
     }
     std::fs::remove_dir_all(root).unwrap();
 }
