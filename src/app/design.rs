@@ -8,6 +8,261 @@ pub const TEXT: Color32 = Color32::from_rgb(238, 240, 236);
 pub const LINE: Color32 = Color32::from_rgb(42, 48, 50);
 pub const BORDER: Color32 = Color32::from_rgb(62, 71, 74);
 pub const SELECTED: Color32 = Color32::from_rgb(37, 55, 50);
+pub const FIELD: Color32 = Color32::from_rgb(30, 35, 39);
+pub const HOVER: Color32 = Color32::from_rgb(32, 43, 40);
+pub const CONTROL_HEIGHT: f32 = 34.0;
+pub const CARD_PADDING: f32 = 8.0;
+
+/// Keep the frame in every state: egui's frameless inactive selectable loses
+/// its stroke margins, making the label and its neighbours move on hover.
+pub fn selectable_value<'a, T: PartialEq>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    value: T,
+    label: impl egui::IntoAtoms<'a>,
+) -> egui::Response {
+    let selected = *current == value;
+    let mut response = ui
+        .scope(|ui| {
+            if !selected {
+                let inactive = &mut ui.visuals_mut().widgets.inactive;
+                inactive.weak_bg_fill = Color32::TRANSPARENT;
+                inactive.bg_stroke.color = Color32::TRANSPARENT;
+            }
+            ui.add(egui::Button::selectable(selected, label).frame_when_inactive(true))
+        })
+        .inner
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() && !selected {
+        *current = value;
+        response.mark_changed();
+    }
+    response
+}
+
+pub fn control_width(ui: &egui::Ui, label: &str, with_icon: bool) -> f32 {
+    let text =
+        ui.painter()
+            .layout_no_wrap(label.into(), TextStyle::Button.resolve(ui.style()), TEXT);
+    (text.size().x
+        + if with_icon && !label.is_empty() {
+            24.0
+        } else {
+            0.0
+        }
+        + 24.0)
+        .ceil()
+        .max(CONTROL_HEIGHT)
+}
+
+pub fn combo_width(ui: &egui::Ui, label: &str) -> f32 {
+    let text =
+        ui.painter()
+            .layout_no_wrap(label.into(), TextStyle::Button.resolve(ui.style()), TEXT);
+    (text.size().x
+        + 2.0 * ui.spacing().button_padding.x
+        + ui.spacing().icon_width
+        + ui.spacing().icon_spacing)
+        .ceil()
+}
+
+pub fn card_content(rect: egui::Rect) -> egui::Rect {
+    rect.shrink(CARD_PADDING)
+}
+
+/// Reserve the same gutter for short and long lists, so switching tabs never
+/// changes the content width or the number of card columns.
+pub fn scroll() -> egui::ScrollArea {
+    egui::ScrollArea::vertical()
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+        .auto_shrink([false, false])
+}
+
+pub fn text_edit(value: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(value)
+        .font(FontId::proportional(14.0))
+        .margin(egui::Margin::symmetric(12, 7))
+        .min_size(vec2(40.0, CONTROL_HEIGHT))
+        .vertical_align(egui::Align::Center)
+        .desired_width(f32::INFINITY)
+        .background_color(FIELD)
+}
+
+pub fn search_field(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    width: f32,
+    hint: &str,
+) -> egui::Response {
+    let mut response = ui.add(
+        text_edit(value)
+            .hint_text(hint)
+            .desired_width(width)
+            .margin(egui::Margin {
+                left: 36,
+                right: 34,
+                top: 7,
+                bottom: 7,
+            }),
+    );
+    super::draw_search(
+        ui.painter(),
+        egui::Rect::from_center_size(
+            egui::pos2(response.rect.min.x + 18.0, response.rect.center().y),
+            vec2(15.0, 15.0),
+        ),
+        MUTED,
+    );
+    if !value.is_empty() {
+        let rect = egui::Rect::from_center_size(
+            egui::pos2(response.rect.max.x - 17.0, response.rect.center().y),
+            vec2(26.0, 26.0),
+        );
+        let clear = ui
+            .interact(rect, response.id.with("clear"), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        super::draw_close(
+            ui.painter(),
+            rect.shrink(7.0),
+            if clear.hovered() { TEXT } else { MUTED },
+        );
+        if clear.clicked() {
+            value.clear();
+            response.mark_changed();
+            response.request_focus();
+        }
+    }
+    response
+}
+
+pub fn heart(p: &egui::Painter, rect: egui::Rect, color: Color32, filled: bool) {
+    let side = rect.width().min(rect.height());
+    let rect = egui::Rect::from_center_size(rect.center(), vec2(side, side));
+    let curves = [
+        [(0.5, 0.91), (0.39, 0.82), (0.06, 0.58), (0.06, 0.31)],
+        [(0.06, 0.31), (0.06, 0.07), (0.34, 0.02), (0.5, 0.23)],
+        [(0.5, 0.23), (0.66, 0.02), (0.94, 0.07), (0.94, 0.31)],
+        [(0.94, 0.31), (0.94, 0.58), (0.61, 0.82), (0.5, 0.91)],
+    ];
+    let mut points = Vec::with_capacity(40);
+    for curve in curves {
+        for step in 0..10 {
+            let t = step as f32 / 10.0;
+            let u = 1.0 - t;
+            let weights = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+            let (mut x, mut y) = (0.0, 0.0);
+            for (point, weight) in curve.into_iter().zip(weights) {
+                x += point.0 * weight;
+                y += point.1 * weight;
+            }
+            points.push(rect.min + vec2(x * side, y * side));
+        }
+    }
+    p.add(egui::epaint::PathShape {
+        points,
+        closed: true,
+        fill: if filled { color } else { Color32::TRANSPARENT },
+        stroke: Stroke::new(1.5, color).into(),
+    });
+}
+
+pub fn favorite_at(
+    ui: &egui::Ui,
+    id: egui::Id,
+    rect: egui::Rect,
+    selected: bool,
+) -> egui::Response {
+    let side = rect.width().min(rect.height());
+    let rect = egui::Rect::from_center_size(rect.center(), vec2(side, side));
+    let response = ui
+        .interact(rect, id, egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            selected,
+            "Favorite",
+        )
+    });
+    if response.hovered() || response.has_focus() {
+        ui.painter().rect_filled(rect, 7, SELECTED);
+    }
+    heart(
+        ui.painter(),
+        egui::Rect::from_center_size(rect.center(), vec2(20.0, 20.0)),
+        if selected { ACCENT } else { TEXT },
+        selected,
+    );
+    response
+}
+
+/// Paint before the card contents so hover changes only the background.
+pub fn card_hover(ui: &egui::Ui, response: &egui::Response, radius: u8) {
+    if response.contains_pointer() && ui.is_enabled() {
+        ui.painter().rect_filled(response.rect, radius, HOVER);
+    }
+    response
+        .clone()
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+}
+
+pub fn tabs(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bool {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), egui::Sense::hover());
+    ui.painter().line_segment(
+        [rect.left_bottom(), rect.right_bottom()],
+        Stroke::new(1.0, LINE),
+    );
+    let mut x = rect.min.x;
+    let mut changed = false;
+    for (index, label) in labels.iter().enumerate() {
+        let text = ui.painter().layout_no_wrap(
+            (*label).into(),
+            FontId::proportional(14.0),
+            if *selected == index { ACCENT } else { MUTED },
+        );
+        let width = (text.size().x + 20.0).max(54.0);
+        let tab = egui::Rect::from_min_size(egui::pos2(x, rect.min.y), vec2(width, 36.0));
+        let response = ui
+            .interact(tab, ui.id().with(("tab", index)), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::SelectableLabel,
+                ui.is_enabled(),
+                *selected == index,
+                *label,
+            )
+        });
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(tab.shrink2(vec2(0.0, 3.0)), 6, SURFACE);
+        }
+        ui.painter().galley(
+            egui::pos2(
+                tab.center().x - text.size().x * 0.5,
+                tab.center().y - text.size().y * 0.5,
+            ),
+            text,
+            TEXT,
+        );
+        if *selected == index {
+            ui.painter().line_segment(
+                [
+                    egui::pos2(x + 8.0, rect.max.y - 1.0),
+                    egui::pos2(x + width - 8.0, rect.max.y - 1.0),
+                ],
+                Stroke::new(2.0, ACCENT),
+            );
+        }
+        if response.clicked() {
+            changed |= *selected != index;
+            *selected = index;
+        }
+        x += width + 6.0;
+    }
+    changed
+}
 
 /// Crop artwork to fill a tile without stretching, using the same corner radius
 /// for music covers, video thumbnails and compact transport artwork.
@@ -55,7 +310,7 @@ pub fn apply(ctx: &egui::Context) {
         // row of a clipped child or scroll viewport. Keep every state identical.
         widgets.expansion = 0.0;
     }
-    style.visuals.widgets.inactive.weak_bg_fill = SURFACE;
+    style.visuals.widgets.inactive.weak_bg_fill = FIELD;
     style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(37, 44, 45);
     style.visuals.widgets.active.weak_bg_fill = SELECTED;
     style.visuals.widgets.open.weak_bg_fill = SELECTED;
@@ -66,6 +321,8 @@ pub fn apply(ctx: &egui::Context) {
     style.spacing.item_spacing = vec2(12.0, 10.0);
     style.spacing.button_padding = vec2(14.0, 8.0);
     style.spacing.interact_size = vec2(34.0, 34.0);
+    // Let dropdown captions determine their width instead of the default 200pt.
+    style.spacing.combo_width = 0.0;
     style.spacing.slider_rail_height = 4.0;
     style.spacing.scroll = egui::style::ScrollStyle {
         bar_width: 6.0,
@@ -95,6 +352,7 @@ pub type Icon = fn(&egui::Painter, egui::Rect, Color32);
 
 #[derive(Clone, Copy)]
 pub enum Control {
+    Primary,
     Outline,
     Quiet,
     Circle,
@@ -110,15 +368,10 @@ pub fn control(
 ) -> egui::Response {
     let font = TextStyle::Button.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(label.into(), font, TEXT);
-    let icon_space = if icon.is_some() && !label.is_empty() {
-        24.0
-    } else {
-        0.0
-    };
     let width = if width > 0.0 {
         width
     } else {
-        (galley.size().x + icon_space + 24.0).max(34.0)
+        control_width(ui, label, icon.is_some())
     };
     let (rect, response) = ui.allocate_exact_size(vec2(width, 34.0), egui::Sense::click());
     response.widget_info(|| {
@@ -127,6 +380,17 @@ pub fn control(
     let hovered = response.hovered() || response.has_focus();
     let fill = if hovered { SELECTED } else { SURFACE };
     match kind {
+        Control::Primary => {
+            ui.painter().rect_filled(
+                rect,
+                8,
+                if hovered {
+                    ACCENT.gamma_multiply(1.08)
+                } else {
+                    ACCENT
+                },
+            );
+        }
         Control::Circle => {
             ui.painter().circle_filled(rect.center(), 16.0, fill);
             ui.painter()
@@ -146,7 +410,9 @@ pub fn control(
         }
         Control::Quiet => {}
     }
-    let color = if hovered {
+    let color = if matches!(kind, Control::Primary) {
+        BACKGROUND
+    } else if hovered {
         TEXT
     } else {
         Color32::from_rgb(204, 211, 211)
@@ -178,7 +444,7 @@ pub fn control(
             color,
         );
     }
-    response
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 pub fn segmented(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bool {
@@ -194,11 +460,13 @@ pub fn segmented(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bo
             rect.min + vec2(2.0 + index as f32 * width, 2.0),
             vec2(width, 30.0),
         );
-        let response = ui.interact(
-            segment,
-            ui.id().with(("segment", index)),
-            egui::Sense::click(),
-        );
+        let response = ui
+            .interact(
+                segment,
+                ui.id().with(("segment", index)),
+                egui::Sense::click(),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::Button,
@@ -245,6 +513,75 @@ pub fn segmented_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selectable_hover_and_selection_preserve_text_and_neighbour_positions() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            apply(&ctx);
+            ctx.set_pixels_per_point(scale);
+            let mut selected = 1;
+            let mut baseline = None;
+            let mut targets = [egui::Pos2::ZERO; 2];
+            // Include a second frame per state: native buttons use last frame's
+            // interaction state when allocating their frame and text.
+            for phase in 0..8 {
+                if phase == 6 {
+                    selected = 0;
+                }
+                for _ in 0..2 {
+                    let mut bounds = Vec::new();
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(600.0, 200.0),
+                            )),
+                            events: match phase {
+                                1 | 2 | 6 => vec![egui::Event::PointerMoved(targets[0])],
+                                3 | 4 | 7 => vec![egui::Event::PointerMoved(targets[1])],
+                                _ => vec![egui::Event::PointerGone],
+                            },
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                bounds.push(
+                                    selectable_value(ui, &mut selected, 0, "Local music").rect,
+                                );
+                                bounds.push(
+                                    selectable_value(ui, &mut selected, 1, "Online search").rect,
+                                );
+                                bounds.push(ui.button("Next control").rect);
+                            });
+                        },
+                    );
+                    targets = [bounds[0].center(), bounds[1].center()];
+                    let text_positions: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape {
+                                Some(text.pos)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    let geometry = (bounds, text_positions);
+                    if let Some(baseline) = &baseline {
+                        assert_eq!(
+                            &geometry, baseline,
+                            "layout shifted at scale={scale}, phase={phase}"
+                        );
+                    } else {
+                        baseline = Some(geometry);
+                    }
+                    output.textures_delta.clear();
+                }
+            }
+        }
+    }
 
     #[test]
     fn first_row_button_border_is_not_clipped_at_different_scales() {
@@ -309,22 +646,17 @@ mod tests {
                 },
                 |ui| {
                     let outer = ui.available_rect_before_wrap();
-                    let result = egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .scroll_bar_visibility(
-                            egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
-                        )
-                        .show(ui, |ui| {
-                            let mut right = 0.0_f32;
-                            for _ in 0..20 {
-                                let (row, _) = ui.allocate_exact_size(
-                                    vec2(ui.available_width(), 32.0),
-                                    egui::Sense::hover(),
-                                );
-                                right = right.max(row.max.x);
-                            }
-                            right
-                        });
+                    let result = scroll().show(ui, |ui| {
+                        let mut right = 0.0_f32;
+                        for _ in 0..20 {
+                            let (row, _) = ui.allocate_exact_size(
+                                vec2(ui.available_width(), 32.0),
+                                egui::Sense::hover(),
+                            );
+                            right = right.max(row.max.x);
+                        }
+                        right
+                    });
                     if time > 0.4 {
                         assert!(
                             outer.max.x - result.inner_rect.max.x >= 14.0,
@@ -338,5 +670,170 @@ mod tests {
             );
             output.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn switching_between_empty_and_long_lists_preserves_content_width() {
+        for width in [354.0, 628.0, 1030.0] {
+            let ctx = egui::Context::default();
+            apply(&ctx);
+            let mut widths = Vec::new();
+            for (frame, count) in [0, 1, 60, 0, 60].into_iter().enumerate() {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(width, 240.0),
+                        )),
+                        time: Some(frame as f64),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let result = scroll().id_salt(("tab", frame)).show(ui, |ui| {
+                            let available = ui.available_width();
+                            for _ in 0..count {
+                                ui.allocate_exact_size(vec2(available, 48.0), egui::Sense::hover());
+                            }
+                            available
+                        });
+                        widths.push(result.inner);
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            assert!(
+                widths.iter().all(|value| (value - widths[0]).abs() < 0.1),
+                "content shifted at {width}: {widths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn search_fields_password_fields_and_buttons_share_height_and_baseline() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            apply(&ctx);
+            ctx.set_pixels_per_point(scale);
+            let mut value = String::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        vec2(600.0, 180.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.horizontal(|ui| {
+                        let field = search_field(ui, &mut value, 220.0, "Search comics");
+                        let button = control(ui, "Search", None, Control::Primary, 80.0);
+                        assert!(
+                            (field.rect.height() - CONTROL_HEIGHT).abs() < 0.1,
+                            "scale={scale}: {:?}",
+                            field.rect
+                        );
+                        assert!((field.rect.center().y - button.rect.center().y).abs() < 0.1);
+                        assert!(!field.rect.intersects(button.rect));
+                    });
+                    let password = ui.add(text_edit(&mut value).password(true));
+                    assert!((password.rect.height() - CONTROL_HEIGHT).abs() < 0.1);
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn heart_keeps_its_proportions_in_wide_and_tall_slots() {
+        for size in [vec2(16.0, 30.0), vec2(30.0, 16.0), vec2(20.0, 20.0)] {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                heart(
+                    ui.painter(),
+                    egui::Rect::from_min_size(egui::pos2(20.0, 20.0), size),
+                    ACCENT,
+                    false,
+                )
+            });
+            let bounds = output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::Shape::Path(path) = &shape.shape {
+                        Some(egui::Rect::from_points(&path.points))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert!(
+                (bounds.width() / bounds.height() - 1.0).abs() < 0.12,
+                "distorted heart: {bounds:?}"
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn favorite_click_does_not_open_the_parent_card_and_hover_shows_a_hand() {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        let mut opened = 0;
+        let mut favorites = 0;
+        let position = egui::pos2(112.0, 42.0);
+        for events in [
+            vec![],
+            vec![egui::Event::PointerMoved(position)],
+            vec![egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+            vec![egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        ] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        vec2(300.0, 300.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let rect =
+                        egui::Rect::from_min_size(egui::pos2(20.0, 20.0), vec2(120.0, 200.0));
+                    let card = ui.interact(rect, ui.id().with("card"), egui::Sense::click());
+                    card_hover(ui, &card, 8);
+                    let fav = favorite_at(
+                        ui,
+                        ui.id().with("favorite"),
+                        egui::Rect::from_center_size(position, vec2(32.0, 32.0)),
+                        false,
+                    );
+                    if card.clicked() {
+                        opened += 1;
+                    }
+                    if fav.clicked() {
+                        favorites += 1;
+                    }
+                },
+            );
+            if ctx.input(|i| i.pointer.hover_pos().is_some()) {
+                assert_eq!(
+                    output.platform_output.cursor_icon,
+                    egui::CursorIcon::PointingHand
+                );
+            }
+            output.textures_delta.clear();
+        }
+        assert_eq!(opened, 0);
+        assert_eq!(favorites, 1);
     }
 }

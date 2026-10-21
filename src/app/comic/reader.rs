@@ -251,8 +251,7 @@ impl State {
                         ReadingMode::LeftToRight,
                         ReadingMode::RightToLeft,
                     ] {
-                        if ui
-                            .selectable_value(&mut reader.mode, mode, mode_name(mode, l))
+                        if design::selectable_value(ui, &mut reader.mode, mode, mode_name(mode, l))
                             .changed()
                         {
                             reader.restore = true;
@@ -473,7 +472,7 @@ impl State {
                 .and_then(|lib| lib.get(&reader.book.key()))
                 .cloned();
             if let Some(entry) = entry {
-                let mut scroll = egui::ScrollArea::vertical()
+                let mut scroll = design::scroll()
                     .id_salt("reader_chapters")
                     .auto_shrink([false, false]);
                 if reader.sidebar_follow {
@@ -487,6 +486,7 @@ impl State {
                         let current = index == reader.index;
                         let (row, response) = ui
                             .allocate_exact_size(vec2(ui.available_width(), 70.0), Sense::click());
+                        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
                         if current || response.hovered() {
                             ui.painter().rect_filled(
                                 row,
@@ -714,7 +714,7 @@ impl State {
                 pos2(footer.min.x + status_width + 16.0, cy - 17.0),
                 pos2(x, cy + 17.0),
             );
-            let button_width = if compact { 76.0 } else { 104.0 };
+            let button_width = 34.0;
             let total = self
                 .library
                 .as_ref()
@@ -728,14 +728,12 @@ impl State {
             previous.add_enabled_ui(reader.index > 0, |ui| {
                 if design::control(
                     ui,
-                    l.text(
-                        if compact { "上章" } else { "上一章" },
-                        if compact { "Prev" } else { "Previous" },
-                    ),
-                    Some(reader_chevron_left),
+                    "",
+                    Some(draw_prev),
                     design::Control::Quiet,
                     button_width,
                 )
+                .on_hover_text(l.text("上一章", "Previous chapter"))
                 .clicked()
                 {
                     chapter_action = Some(reader.index - 1);
@@ -752,20 +750,15 @@ impl State {
             next.add_enabled_ui(reader.index + 1 < total, |ui| {
                 let response = design::control(
                     ui,
-                    l.text(if compact { "下章" } else { "下一章" }, "Next"),
-                    None,
+                    "",
+                    Some(draw_next),
                     design::Control::Quiet,
                     button_width,
                 );
-                reader_chevron_right(
-                    ui.painter(),
-                    Rect::from_center_size(
-                        pos2(response.rect.max.x - 14.0, response.rect.center().y),
-                        vec2(12.0, 14.0),
-                    ),
-                    design::TEXT,
-                );
-                if response.clicked() {
+                if response
+                    .on_hover_text(l.text("下一章", "Next chapter"))
+                    .clicked()
+                {
                     chapter_action = Some(reader.index + 1);
                 }
             });
@@ -937,18 +930,6 @@ fn reader_slot(ui: &mut Ui, id: &str, rect: Rect) -> Ui {
     workspace::child(ui, id, rect)
 }
 
-fn reader_chevron_left(p: &Painter, r: Rect, c: Color32) {
-    p.add(Shape::line(
-        vec![r.right_top(), r.left_center(), r.right_bottom()],
-        Stroke::new(1.5, c),
-    ));
-}
-fn reader_chevron_right(p: &Painter, r: Rect, c: Color32) {
-    p.add(Shape::line(
-        vec![r.left_top(), r.right_center(), r.left_bottom()],
-        Stroke::new(1.5, c),
-    ));
-}
 fn reader_plus(p: &Painter, r: Rect, c: Color32) {
     p.line_segment([r.left_center(), r.right_center()], Stroke::new(1.5, c));
     p.line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.5, c));
@@ -968,7 +949,7 @@ fn reader_chapters(p: &Painter, r: Rect, c: Color32) {
         ));
     }
 }
-fn reader_book(p: &Painter, r: Rect, c: Color32) {
+pub(super) fn reader_book(p: &Painter, r: Rect, c: Color32) {
     p.rect_stroke(r, 2, Stroke::new(1.3, c), egui::StrokeKind::Inside);
     p.line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.3, c));
 }

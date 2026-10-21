@@ -66,10 +66,8 @@ impl App {
         if !ui.is_rect_visible(rect) {
             return;
         }
-        if !self.metadata_cache.contains_key(&record.path) {
-            self.metadata_cache.insert(record.path.clone(), None);
-            let _ = self.metadata_requests.send(record.path.clone());
-        }
+        self.metadata_cache
+            .request(&record.path, &self.metadata_requests);
         let art = self
             .metadata_cache
             .get(&record.path)
@@ -114,71 +112,95 @@ impl App {
 
     pub(super) fn media_cards(&mut self, ui: &mut Ui, records: &[Record]) {
         let columns = (ui.available_width() / 180.0).floor().clamp(1.0, 5.0) as usize;
-        let width = (ui.available_width() - 12.0 * (columns - 1) as f32) / columns as f32;
+        let width =
+            (ui.available_width() - 12.0 * columns.saturating_sub(1) as f32) / columns as f32;
+        let mut play = None;
+        let mut favorite = None;
         for row in records.chunks(columns) {
             ui.horizontal_top(|ui| {
                 for record in row {
                     ui.push_id(&record.path, |ui| {
-                        ui.allocate_ui_with_layout(
-                            vec2(width, width + 62.0),
-                            Layout::top_down(Align::Min),
-                            |ui| {
-                                let (rect, resp) = ui
-                                    .allocate_exact_size(vec2(width, width * 0.92), Sense::click());
-                                self.record_art(ui, rect, record);
-                                resp.context_menu(|ui| {
-                                    if ui
-                                        .button(
-                                            self.settings
-                                                .language
-                                                .text("收藏 / 取消收藏", "Toggle favorite"),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.library.toggle_favorite(
-                                            &record.path,
-                                            &record.title,
-                                            record.music,
-                                        );
-                                        ui.close();
-                                    }
-                                });
-                                if resp.clicked() {
-                                    self.play_record(record.clone(), true);
-                                }
-                                let title = ui.add(
-                                    egui::Label::new(RichText::new(&record.title).strong())
-                                        .truncate()
-                                        .sense(Sense::click()),
-                                );
-                                if title.clicked() {
-                                    self.play_record(record.clone(), true);
-                                }
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(if record.artist.is_empty() {
-                                            self.settings
-                                                .language
-                                                .text(
-                                                    if record.music { "音乐" } else { "视频" },
-                                                    if record.music { "Music" } else { "Video" },
-                                                )
-                                                .to_owned()
-                                        } else {
-                                            record.artist.clone()
-                                        })
-                                        .color(MUTED)
-                                        .small(),
-                                    )
-                                    .truncate(),
-                                );
-                            },
+                        let art_height = (width - 2.0 * design::CARD_PADDING)
+                            * if record.music { 1.0 } else { 9.0 / 16.0 };
+                        let (card, response) = ui.allocate_exact_size(
+                            vec2(width, art_height + 62.0 + 2.0 * design::CARD_PADDING),
+                            Sense::click(),
                         );
+                        design::card_hover(ui, &response, 10);
+                        let content = design::card_content(card);
+                        let art =
+                            Rect::from_min_size(content.min, vec2(content.width(), art_height));
+                        self.record_art(ui, art, record);
+                        let mut text = child(
+                            ui,
+                            "media-card-label",
+                            Rect::from_min_max(pos2(content.min.x, art.max.y + 8.0), content.max),
+                        );
+                        text.style_mut().interaction.selectable_labels = false;
+                        text.spacing_mut().item_spacing.y = 3.0;
+                        text.add(
+                            egui::Label::new(RichText::new(&record.title).strong()).truncate(),
+                        );
+                        let subtitle = if record.artist.is_empty() {
+                            self.settings
+                                .language
+                                .text(
+                                    if record.music { "音乐" } else { "视频" },
+                                    if record.music { "Music" } else { "Video" },
+                                )
+                                .to_owned()
+                        } else {
+                            record.artist.clone()
+                        };
+                        text.add(
+                            egui::Label::new(RichText::new(subtitle).small().color(MUTED))
+                                .truncate(),
+                        );
+                        let fav = Rect::from_min_size(
+                            pos2(art.max.x - 40.0, art.min.y + 8.0),
+                            Vec2::splat(32.0),
+                        );
+                        ui.painter()
+                            .rect_filled(fav, 7, Color32::from_black_alpha(170));
+                        if design::favorite_at(ui, ui.id().with("favorite"), fav, record.favorite)
+                            .on_hover_text(
+                                self.settings
+                                    .language
+                                    .text("收藏 / 取消收藏", "Toggle favorite"),
+                            )
+                            .clicked()
+                        {
+                            favorite = Some(record.clone());
+                        }
+                        response.context_menu(|ui| {
+                            if ui
+                                .button(
+                                    self.settings
+                                        .language
+                                        .text("收藏 / 取消收藏", "Toggle favorite"),
+                                )
+                                .clicked()
+                            {
+                                favorite = Some(record.clone());
+                                ui.close();
+                            }
+                        });
+                        if response.clicked() {
+                            play = Some(record.clone());
+                        }
                     });
                 }
             });
         }
+        if let Some(record) = favorite {
+            self.library
+                .toggle_favorite(&record.path, &record.title, record.music);
+        }
+        if let Some(record) = play {
+            self.play_record(record, true);
+        }
     }
+
     pub(super) fn media_library(&mut self, ui: &mut Ui) {
         let l = self.settings.language;
         let page = self.workspace.page;
@@ -196,7 +218,7 @@ impl App {
                     (0, "本地音乐", "Local music"),
                     (1, "在线搜索", "Online search"),
                 ] {
-                    ui.selectable_value(&mut self.workspace.music_tab, i, l.text(zh, en));
+                    design::selectable_value(ui, &mut self.workspace.music_tab, i, l.text(zh, en));
                 }
             });
             ui.add_space(12.0);
@@ -249,87 +271,85 @@ impl App {
             .color(MUTED),
         );
         ui.add_space(12.0);
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if page == Page::Video {
-                    self.media_cards(ui, &records);
-                } else {
-                    if page == Page::Music && !records.is_empty() {
+        design::scroll().auto_shrink([false, false]).show(ui, |ui| {
+            if page == Page::Video {
+                self.media_cards(ui, &records);
+            } else {
+                if page == Page::Music && !records.is_empty() {
+                    ui.label(
+                        RichText::new(l.text("最近聆听", "Recently listened"))
+                            .size(20.0)
+                            .strong(),
+                    );
+                    ui.add_space(10.0);
+                    self.media_cards(ui, &records.iter().take(4).cloned().collect::<Vec<_>>());
+                    ui.add_space(16.0);
+                }
+                if !records.is_empty() {
+                    ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(l.text("最近聆听", "Recently listened"))
+                            RichText::new(l.text("全部歌曲", "All tracks"))
                                 .size(20.0)
                                 .strong(),
                         );
-                        ui.add_space(10.0);
-                        self.media_cards(ui, &records.iter().take(4).cloned().collect::<Vec<_>>());
-                        ui.add_space(16.0);
-                    }
-                    if !records.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(l.text("全部歌曲", "All tracks"))
-                                    .size(20.0)
-                                    .strong(),
-                            );
-                            if primary(ui, l.text("播放全部", "Play all")).clicked() {
-                                self.play_record(records[0].clone(), false);
-                            }
-                        });
-                        ui.add_space(12.0);
-                    }
-                    let (header, _) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-                    for (x, text) in [
-                        (13.0, "#"),
-                        (94.0, l.text("标题 / 艺术家", "Title / artist")),
-                    ] {
-                        ui.painter().text(
-                            pos2(header.min.x + x, header.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            text,
-                            egui::FontId::proportional(12.0),
-                            MUTED,
-                        );
-                    }
-                    if header.width() > 530.0 {
-                        ui.painter().text(
-                            pos2(
-                                header.min.x + header.width() * 0.5 + 12.0,
-                                header.center().y,
-                            ),
-                            egui::Align2::LEFT_CENTER,
-                            l.text("专辑", "Album"),
-                            egui::FontId::proportional(12.0),
-                            MUTED,
-                        );
-                    }
-                    for (index, record) in records.iter().enumerate() {
-                        self.track_row(ui, record, index);
-                    }
+                        if primary(ui, l.text("播放全部", "Play all")).clicked() {
+                            self.play_record(records[0].clone(), false);
+                        }
+                    });
+                    ui.add_space(12.0);
                 }
-                if records.is_empty() {
-                    ui.add_space(44.0);
-                    ui.label(
-                        RichText::new(l.text("这里还没有内容", "Nothing here yet"))
-                            .size(22.0)
-                            .strong(),
-                    );
-                    ui.label(
-                        RichText::new(l.text(
-                            "打开文件后自动加入资料库，也可以直接拖入窗口",
-                            "Open files to add them to your library, or drag them into this window",
-                        ))
-                        .color(MUTED),
+                let (header, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+                for (x, text) in [
+                    (13.0, "#"),
+                    (94.0, l.text("标题 / 艺术家", "Title / artist")),
+                ] {
+                    ui.painter().text(
+                        pos2(header.min.x + x, header.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        text,
+                        egui::FontId::proportional(12.0),
+                        MUTED,
                     );
                 }
-                if page == Page::Favorites {
-                    ui.add_space(20.0);
-                    if self.comic.favorite_preview(ui, &self.settings) {
-                        self.navigate(Page::Comic);
-                    }
+                if header.width() > 530.0 {
+                    ui.painter().text(
+                        pos2(
+                            header.min.x + header.width() * 0.5 + 12.0,
+                            header.center().y,
+                        ),
+                        egui::Align2::LEFT_CENTER,
+                        l.text("专辑", "Album"),
+                        egui::FontId::proportional(12.0),
+                        MUTED,
+                    );
                 }
-            });
+                for (index, record) in records.iter().enumerate() {
+                    self.track_row(ui, record, index);
+                }
+            }
+            if records.is_empty() {
+                ui.add_space(44.0);
+                ui.label(
+                    RichText::new(l.text("这里还没有内容", "Nothing here yet"))
+                        .size(22.0)
+                        .strong(),
+                );
+                ui.label(
+                    RichText::new(l.text(
+                        "打开文件后自动加入资料库，也可以直接拖入窗口",
+                        "Open files to add them to your library, or drag them into this window",
+                    ))
+                    .color(MUTED),
+                );
+            }
+            if page == Page::Favorites {
+                ui.add_space(20.0);
+                if self.comic.favorite_preview(ui, &self.settings) {
+                    self.navigate(Page::Comic);
+                }
+            }
+        });
     }
     fn track_row(&mut self, ui: &mut Ui, record: &Record, index: usize) {
         let current = self
@@ -338,6 +358,7 @@ impl App {
             .is_some_and(|s| s.to_string_lossy() == record.path);
         let (r, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::click());
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
         if current || response.hovered() {
             ui.painter()
                 .rect_filled(r, 7, if current { SELECTED } else { SURFACE });
@@ -357,6 +378,7 @@ impl App {
             (&record.path, "track-title"),
             Rect::from_min_max(r.min + vec2(94.0, 10.0), pos2(r.min.x + end, r.max.y - 7.0)),
         );
+        text.style_mut().interaction.selectable_labels = false;
         text.add(
             egui::Label::new(RichText::new(&record.title).color(if current {
                 ACCENT
@@ -377,34 +399,30 @@ impl App {
             );
             album.add(egui::Label::new(RichText::new(&record.album).color(MUTED)).truncate());
         }
-        let mut end_ui = child(
-            ui,
-            (&record.path, "track-actions"),
-            Rect::from_min_max(pos2(r.max.x - 90.0, r.min.y + 13.0), r.max),
-        );
-        end_ui.horizontal(|ui| {
-            if record.duration > 0.0 {
-                ui.label(
-                    RichText::new(fmt_time(record.duration))
-                        .small()
-                        .color(MUTED),
-                );
-            }
-            let (rr, resp) = ui.allocate_exact_size(vec2(26.0, 30.0), Sense::click());
-            glyph(
-                ui.painter(),
-                rr.shrink(5.0),
-                if record.favorite { ACCENT } else { MUTED },
-                Glyph::Heart,
+        let favorite_rect =
+            Rect::from_center_size(pos2(r.max.x - 24.0, r.center().y), Vec2::splat(32.0));
+        if record.duration > 0.0 {
+            ui.painter().text(
+                pos2(favorite_rect.min.x - 12.0, r.center().y),
+                egui::Align2::RIGHT_CENTER,
+                fmt_time(record.duration),
+                egui::FontId::proportional(12.0),
+                MUTED,
             );
-            if resp
-                .on_hover_text(self.settings.language.text("收藏", "Favorite"))
-                .clicked()
-            {
-                self.library
-                    .toggle_favorite(&record.path, &record.title, record.music);
-            }
-        });
+        }
+        let resp = design::favorite_at(
+            ui,
+            ui.id().with((&record.path, "favorite")),
+            favorite_rect,
+            record.favorite,
+        );
+        if resp
+            .on_hover_text(self.settings.language.text("收藏", "Favorite"))
+            .clicked()
+        {
+            self.library
+                .toggle_favorite(&record.path, &record.title, record.music);
+        }
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &record.title)
         });

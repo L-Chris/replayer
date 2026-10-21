@@ -161,7 +161,7 @@ impl App {
         ui.add_space(12.0);
         ui.label("ChKSz API Key");
         ui.add(
-            egui::TextEdit::singleline(&mut self.online_music.draft.api_key)
+            design::text_edit(&mut self.online_music.draft.api_key)
                 .password(true)
                 .hint_text(l.text("留空使用 CHKSZ_API_KEY", "Empty: use CHKSZ_API_KEY")),
         );
@@ -176,7 +176,7 @@ impl App {
         ui.add_space(12.0);
         ui.label(l.text("下载目录", "Download directory"));
         ui.add(
-            egui::TextEdit::singleline(&mut self.online_music.draft.directory)
+            design::text_edit(&mut self.online_music.draft.directory)
                 .desired_width(f32::INFINITY)
                 .hint_text(l.text("留空使用应用音乐目录", "Empty: use the app music directory")),
         );
@@ -226,7 +226,12 @@ impl App {
                 .show_ui(ui, |ui| {
                     for provider in &providers {
                         let d = provider.descriptor();
-                        ui.selectable_value(&mut self.settings.music.source, d.id.into(), d.name);
+                        design::selectable_value(
+                            ui,
+                            &mut self.settings.music.source,
+                            d.id.into(),
+                            d.name,
+                        );
                     }
                 });
             if ui.button(l.text("音乐源设置", "Source settings")).clicked() {
@@ -266,7 +271,12 @@ impl App {
                 )
                 .show_ui(ui, |ui| {
                     for q in descriptor.qualities {
-                        ui.selectable_value(&mut self.settings.music.quality, q.id.into(), q.name);
+                        design::selectable_value(
+                            ui,
+                            &mut self.settings.music.quality,
+                            q.id.into(),
+                            q.name,
+                        );
                     }
                 });
         });
@@ -278,13 +288,22 @@ impl App {
             }
         }
         let mut search_page = None;
+        let search_width = design::control_width(ui, l.text("搜索", "Search"), false);
         ui.horizontal(|ui| {
-            let input = ui.add(
-                egui::TextEdit::singleline(&mut self.online_music.keyword)
-                    .hint_text(l.text("歌曲 / 歌手", "Song / artist"))
-                    .desired_width((ui.available_width() - 90.0).max(100.0)),
+            let input = design::search_field(
+                ui,
+                &mut self.online_music.keyword,
+                (ui.available_width() - search_width - 12.0).max(100.0),
+                l.text("歌曲 / 歌手", "Song / artist"),
             );
-            if (ui.button(l.text("搜索", "Search")).clicked()
+            if (design::control(
+                ui,
+                l.text("搜索", "Search"),
+                None,
+                design::Control::Primary,
+                search_width,
+            )
+            .clicked()
                 || (input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))))
                 && !self.online_music.keyword.trim().is_empty()
             {
@@ -308,7 +327,7 @@ impl App {
                 "Search by keyword; no results yet",
             ));
         }
-        egui::ScrollArea::vertical()
+        design::scroll()
             .id_salt("music_results")
             .max_height((size.y - 340.0).clamp(100.0, 420.0))
             .show(ui, |ui| {

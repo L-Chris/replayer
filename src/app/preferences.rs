@@ -29,17 +29,22 @@ impl App {
             (PrefTab::General, "外观与语言", "Appearance"),
             (PrefTab::Subtitles, "AI 字幕", "AI subtitles"),
             (PrefTab::MusicSources, "音乐源", "Music sources"),
-            (PrefTab::Comics, "漫画与图片翻译", "Comics & translation"),
+            (PrefTab::Comics, "漫画相关", "Comics"),
             (PrefTab::About, "关于", "About"),
         ] {
-            nav.selectable_value(&mut self.preferences_tab, tab, language.text(zh, en));
+            design::selectable_value(
+                &mut nav,
+                &mut self.preferences_tab,
+                tab,
+                language.text(zh, en),
+            );
         }
         let body = Rect::from_min_max(
             pos2(rect.min.x + nav_width + 22.0, rect.min.y),
             pos2(rect.max.x, rect.max.y - 68.0),
         );
         let mut content = workspace::child(ui, "settings-content", body);
-        egui::ScrollArea::vertical()
+        design::scroll()
             .id_salt(("preferences-page", self.preferences_tab as u8))
             .auto_shrink([false, false])
             .show(&mut content, |ui| {
@@ -184,8 +189,18 @@ impl App {
             .color(MUTED),
         );
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.settings.language, Language::Chinese, "简体中文");
-            ui.selectable_value(&mut self.settings.language, Language::English, "English");
+            design::selectable_value(
+                ui,
+                &mut self.settings.language,
+                Language::Chinese,
+                "简体中文",
+            );
+            design::selectable_value(
+                ui,
+                &mut self.settings.language,
+                Language::English,
+                "English",
+            );
         });
         ui.add_space(8.0);
         ui.separator();
@@ -279,7 +294,8 @@ impl App {
                     effort
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(
+                    design::selectable_value(
+                        ui,
                         &mut self.llm_draft.reasoning_effort,
                         String::new(),
                         language.text("跟随 .env", "Use .env"),
@@ -287,7 +303,8 @@ impl App {
                     for effort in [
                         "default", "none", "minimal", "low", "medium", "high", "xhigh", "max",
                     ] {
-                        ui.selectable_value(
+                        design::selectable_value(
+                            ui,
                             &mut self.llm_draft.reasoning_effort,
                             effort.to_owned(),
                             effort,
@@ -305,13 +322,24 @@ impl App {
                     &self.llm_draft.audio_format
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(
+                    design::selectable_value(
+                        ui,
                         &mut self.llm_draft.audio_format,
                         String::new(),
                         language.text("跟随 .env", "Use .env"),
                     );
-                    ui.selectable_value(&mut self.llm_draft.audio_format, "mp3".into(), "MP3");
-                    ui.selectable_value(&mut self.llm_draft.audio_format, "wav".into(), "WAV");
+                    design::selectable_value(
+                        ui,
+                        &mut self.llm_draft.audio_format,
+                        "mp3".into(),
+                        "MP3",
+                    );
+                    design::selectable_value(
+                        ui,
+                        &mut self.llm_draft.audio_format,
+                        "wav".into(),
+                        "WAV",
+                    );
                 });
             egui::ComboBox::from_label(language.text("音频编码", "Audio encoding"))
                 .selected_text(if self.llm_draft.audio_encoding.is_empty() {
@@ -320,13 +348,15 @@ impl App {
                     &self.llm_draft.audio_encoding
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(
+                    design::selectable_value(
+                        ui,
                         &mut self.llm_draft.audio_encoding,
                         String::new(),
                         language.text("跟随 .env", "Use .env"),
                     );
                     for value in ["auto", "data_url", "base64"] {
-                        ui.selectable_value(
+                        design::selectable_value(
+                            ui,
                             &mut self.llm_draft.audio_encoding,
                             value.to_owned(),
                             value,
@@ -371,11 +401,10 @@ impl App {
 fn field(ui: &mut Ui, label: &str, value: &mut String, hint: &str, password: bool) {
     ui.label(label);
     ui.add(
-        egui::TextEdit::singleline(value)
+        design::text_edit(value)
             .id_salt(label)
             .hint_text(hint)
             .password(password)
-            .desired_width(f32::INFINITY)
-            .margin(vec2(10.0, 9.0)),
+            .desired_width(f32::INFINITY),
     );
 }

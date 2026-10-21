@@ -16,12 +16,15 @@ impl App {
         let left_w = (screen.width() * 0.26).clamp(200.0, 340.0);
         let cover = Rect::from_min_size(bar.min + vec2(20.0, 18.0), Vec2::splat(64.0));
         root.painter().rect_filled(cover, 7, BACKGROUND);
+        let response = root.interact(cover, Id::new("mini-cover"), Sense::click());
+        if self.player.is_some() {
+            design::card_hover(root, &response, 7);
+        }
         if let Some(art) = &self.artwork {
-            design::cover(root, art, cover, 7);
+            design::cover(root, art, cover.shrink(3.0), 5);
         } else {
             draw_music(root.painter(), cover.shrink(19.0), MUTED);
         }
-        let response = root.interact(cover, Id::new("mini-cover"), Sense::click());
         if response
             .on_hover_text(l.text("展开播放页", "Now playing"))
             .clicked()
@@ -59,11 +62,6 @@ impl App {
         metadata
             .add(egui::Label::new(RichText::new(&track_label).size(14.0).strong()).truncate())
             .on_hover_text(&track_label);
-        let mut favorite = child(
-            root,
-            "mini-favorite",
-            Rect::from_min_size(bar.min + vec2(98.0, 55.0), Vec2::splat(24.0)),
-        );
         let path = self
             .source
             .as_ref()
@@ -75,10 +73,13 @@ impl App {
                 .iter()
                 .any(|r| r.path == *path && r.favorite)
         });
-        favorite.add_enabled_ui(path.is_some(), |ui| {
-            if icon_button(ui, 24.0, 1.0, |p, r, c| {
-                glyph(p, r, if selected { ACCENT } else { c }, Glyph::Heart)
-            })
+        if path.is_some() {
+            if design::favorite_at(
+                root,
+                Id::new("mini-favorite"),
+                Rect::from_min_size(bar.min + vec2(96.0, 52.0), Vec2::splat(32.0)),
+                selected,
+            )
             .on_hover_text(l.text("收藏歌曲", "Favorite track"))
             .clicked()
                 && let Some(path) = &path
@@ -86,7 +87,14 @@ impl App {
                 self.library
                     .toggle_favorite(path, &self.title, self.is_music());
             }
-        });
+        } else {
+            design::heart(
+                root.painter(),
+                Rect::from_min_size(bar.min + vec2(102.0, 58.0), Vec2::splat(20.0)),
+                MUTED,
+                false,
+            );
+        }
         let playing = self.player.as_ref().is_some_and(|p| p.is_playing());
         let (position, duration) = self
             .player

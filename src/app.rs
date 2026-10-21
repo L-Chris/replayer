@@ -19,6 +19,7 @@ mod comic;
 mod design;
 mod library;
 mod magnets;
+mod metadata;
 mod music;
 mod online_music;
 mod preferences;
@@ -76,7 +77,7 @@ pub struct App {
     queue_drag: queue_drag::QueueDrag,
     metadata_requests: Sender<String>,
     metadata_results: Receiver<MetadataResult>,
-    metadata_cache: HashMap<String, Option<Arc<crate::media::Info>>>,
+    metadata_cache: metadata::Cache,
     art_textures: HashMap<String, egui::TextureHandle>,
     media_info: Option<Arc<crate::media::Info>>,
     artwork: Option<egui::TextureHandle>,
@@ -155,12 +156,14 @@ impl App {
             Sender<MetadataResult>,
             Receiver<MetadataResult>,
         ) = unbounded();
+        let metadata_ctx = cc.egui_ctx.clone();
         thread::spawn(move || {
             while let Ok(path) = metadata_requests_rx.recv() {
                 let art = crate::media::probe_info(&path);
                 if metadata_results_tx.send((path, art)).is_err() {
                     break;
                 }
+                metadata_ctx.request_repaint();
             }
         });
         let mut app = Self {
@@ -175,7 +178,7 @@ impl App {
             queue_drag: Default::default(),
             metadata_requests,
             metadata_results,
-            metadata_cache: HashMap::new(),
+            metadata_cache: Default::default(),
             art_textures: HashMap::new(),
             media_info: None,
             artwork: None,
@@ -508,8 +511,8 @@ impl eframe::App for App {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                         }
                         if let Some(source) = &self.source {
-                            self.metadata_cache
-                                .insert(source.to_string_lossy().into_owned(), Some(info.clone()));
+                            let path = source.to_string_lossy().into_owned();
+                            self.metadata_cache.playback(path, info.clone());
                         }
                         self.media_info = Some(info);
                         if let Some((path, position)) = self.workspace.resume.take()
@@ -581,7 +584,7 @@ impl eframe::App for App {
         self.poll_torrent();
         self.poll_qq_key();
         while let Ok((path, art)) = self.metadata_results.try_recv() {
-            self.metadata_cache.insert(path, art);
+            self.metadata_cache.complete(path, art);
         }
         let dropped = ctx.input(|i| {
             i.raw
@@ -1441,7 +1444,7 @@ fn icon_button(
     let base = if resp.hovered() { 255.0 } else { 225.0 };
     let c = Color32::from_white_alpha((base * alpha) as u8);
     draw(ui.painter(), rect.shrink(size * 0.18), c);
-    resp
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 fn draw_play(p: &Painter, r: Rect, c: Color32) {

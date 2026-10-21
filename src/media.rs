@@ -4,6 +4,9 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(test)]
+mod tests;
+
 /// Metadata accompanying downloaded audio. No credentials or remote URLs are stored.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -194,9 +197,10 @@ fn video_thumbnail(
     input: &mut ffmpeg_next::format::context::Input,
     started: std::time::Instant,
 ) -> Option<Arc<Artwork>> {
-    use ffmpeg_next::{codec, frame, media::Type, software::scaling, util::format::Pixel};
+    use ffmpeg_next::{codec, frame, media::Type};
     let stream = input.streams().best(Type::Video)?;
     let index = stream.index();
+    let time_base: f64 = stream.time_base().into();
     let mut decoder = codec::context::Context::from_parameters(stream.parameters())
         .ok()?
         .decoder()
@@ -208,10 +212,48 @@ fn video_thumbnail(
     {
         return None;
     }
-    if input.duration() > 10_000_000 {
-        let _ = input.seek(5_000_000, ..);
+    // Skip logos/black leaders and sample near 10% (at most 30 seconds).
+    // Seeking lands on a keyframe, so also discard frames before the target.
+    let mut target = if input.duration() > 10_000_000 {
+        (input.duration() / 10).min(30_000_000)
+    } else {
+        0
+    };
+    if target > 0 && input.seek(target, ..).is_err() {
+        target = 0;
     }
-    for (stream, packet) in input.packets().take(180) {
+    let target = target as f64 / 1_000_000.0;
+    let mut fallback = None;
+    let mut samples = 0;
+    let mut next_sample = target;
+    let mut choose = |decoded: &frame::Video| {
+        let position = decoded
+            .timestamp()
+            .or_else(|| decoded.pts())
+            .map(|pts| pts as f64 * time_base)
+            .unwrap_or(target);
+        if (position < target && fallback.is_some())
+            || (position >= target && position < next_sample)
+        {
+            return None;
+        }
+        let art = thumbnail_image(decoded)?;
+        if fallback.is_none() || (position >= target && samples == 0) {
+            fallback = Some(art.clone());
+        }
+        if position < target {
+            return None;
+        }
+        samples += 1;
+        next_sample = position + 0.5;
+        let lit = art
+            .rgba
+            .chunks_exact(4)
+            .filter(|p| u16::from(p[0]) + u16::from(p[1]) + u16::from(p[2]) > 72)
+            .count();
+        (lit > art.width * art.height / 100 || samples >= 12).then_some(art)
+    };
+    for (stream, packet) in input.packets().take(1024) {
         if started.elapsed() > std::time::Duration::from_secs(3) {
             break;
         }
@@ -222,34 +264,55 @@ fn video_thumbnail(
             continue;
         }
         let mut decoded = frame::Video::empty();
-        if decoder.receive_frame(&mut decoded).is_ok() {
-            let width = 600;
-            let height = ((f64::from(decoded.height()) / f64::from(decoded.width()))
-                * f64::from(width))
-            .clamp(1.0, 600.0) as u32;
-            let mut scaler = scaling::context::Context::get(
-                decoded.format(),
-                decoded.width(),
-                decoded.height(),
-                Pixel::RGBA,
-                width,
-                height,
-                scaling::flag::Flags::BILINEAR,
-            )
-            .ok()?;
-            let mut output = frame::Video::empty();
-            scaler.run(&decoded, &mut output).ok()?;
-            let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
-            for row in 0..height as usize {
-                let start = row * output.stride(0);
-                rgba.extend_from_slice(&output.data(0)[start..start + width as usize * 4]);
+        while decoder.receive_frame(&mut decoded).is_ok() {
+            if let Some(art) = choose(&decoded) {
+                return Some(art);
             }
-            return Some(Arc::new(Artwork {
-                width: width as usize,
-                height: height as usize,
-                rgba,
-            }));
         }
     }
-    None
+    // Short clips can end before the decoder emits any reordered frames.
+    if started.elapsed() <= std::time::Duration::from_secs(3) {
+        let _ = decoder.send_eof();
+        let mut decoded = frame::Video::empty();
+        while decoder.receive_frame(&mut decoded).is_ok() {
+            if let Some(art) = choose(&decoded) {
+                return Some(art);
+            }
+        }
+    }
+    fallback
+}
+
+fn thumbnail_image(decoded: &ffmpeg_next::frame::Video) -> Option<Arc<Artwork>> {
+    use ffmpeg_next::{frame, software::scaling, util::format::Pixel};
+    if decoded.width() == 0 || decoded.height() == 0 {
+        return None;
+    }
+    let scale = (600.0 / f64::from(decoded.width()))
+        .min(600.0 / f64::from(decoded.height()))
+        .min(1.0);
+    let width = (f64::from(decoded.width()) * scale).round().max(1.0) as u32;
+    let height = (f64::from(decoded.height()) * scale).round().max(1.0) as u32;
+    let mut scaler = scaling::context::Context::get(
+        decoded.format(),
+        decoded.width(),
+        decoded.height(),
+        Pixel::RGBA,
+        width,
+        height,
+        scaling::flag::Flags::BILINEAR,
+    )
+    .ok()?;
+    let mut output = frame::Video::empty();
+    scaler.run(decoded, &mut output).ok()?;
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    for row in 0..height as usize {
+        let start = row * output.stride(0);
+        rgba.extend_from_slice(&output.data(0)[start..start + width as usize * 4]);
+    }
+    Some(Arc::new(Artwork {
+        width: width as usize,
+        height: height as usize,
+        rgba,
+    }))
 }

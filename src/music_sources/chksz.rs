@@ -130,19 +130,19 @@ impl MusicSource for Chksz {
         match self.platform {
             Platform::Netease => Descriptor {
                 id: "chksz-163",
-                name: "ChKSz · 网易云 / NetEase",
+                name: "网易云",
                 qualities: NETEASE_QUALITY,
                 default_quality: "lossless",
             },
             Platform::Qq => Descriptor {
                 id: "chksz-qq",
-                name: "ChKSz · QQ Music",
+                name: "QQ音乐",
                 qualities: QUALITY,
                 default_quality: "flac",
             },
             Platform::Kugou => Descriptor {
                 id: "chksz-kugou",
-                name: "ChKSz · 酷狗 / Kugou",
+                name: "酷狗",
                 qualities: QUALITY,
                 default_quality: "flac",
             },

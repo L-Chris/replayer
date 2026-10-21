@@ -107,17 +107,14 @@ impl App {
         }
         if let Some(update) = &self.updater.update {
             ui.label(RichText::new(format!("v{}", update.version)).strong());
-            egui::ScrollArea::vertical()
-                .max_height(180.0)
-                .show(ui, |ui| {
-                    let notes =
-                        updater::localized_notes(&update.notes, language == Language::Chinese);
-                    ui.label(if notes.is_empty() {
-                        language.text("此版本暂无更新说明", "No release notes available")
-                    } else {
-                        notes
-                    });
+            design::scroll().max_height(180.0).show(ui, |ui| {
+                let notes = updater::localized_notes(&update.notes, language == Language::Chinese);
+                ui.label(if notes.is_empty() {
+                    language.text("此版本暂无更新说明", "No release notes available")
+                } else {
+                    notes
                 });
+            });
         }
         ui.add_space(10.0);
         ui.small(RichText::new("Rust · FFmpeg · egui / WGPU").color(MUTED));

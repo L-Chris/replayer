@@ -27,7 +27,7 @@ impl App {
                             self.subtitle_skipped.len()
                         ),
                         |ui| {
-                            egui::ScrollArea::vertical()
+                            design::scroll()
                                 .max_height(180.0)
                                 .show(ui, |ui| {
                                     for (start, end, error) in &self.subtitle_skipped {

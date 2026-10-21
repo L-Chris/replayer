@@ -223,24 +223,11 @@ impl App {
             ));
             top.horizontal(|ui| {
                 let width = ui.available_width().clamp(100.0, 530.0);
-                let input = ui.add(
-                    egui::TextEdit::singleline(&mut self.workspace.query)
-                        .hint_text(language.text("搜索媒体、音乐或漫画", "Search your media"))
-                        .desired_width(width)
-                        .margin(egui::Margin {
-                            left: 36,
-                            right: 12,
-                            top: 9,
-                            bottom: 9,
-                        }),
-                );
-                draw_search(
-                    ui.painter(),
-                    Rect::from_center_size(
-                        pos2(input.rect.min.x + 18.0, input.rect.center().y),
-                        Vec2::splat(15.0),
-                    ),
-                    MUTED,
+                let input = design::search_field(
+                    ui,
+                    &mut self.workspace.query,
+                    width,
+                    language.text("搜索媒体、音乐或漫画", "Search your media"),
                 );
                 if input.lost_focus()
                     && ui.input(|i| i.key_pressed(Key::Enter))
@@ -265,7 +252,12 @@ impl App {
                 Page::Home => self.home_page(&mut ui),
                 Page::Comic => {
                     if !self.comic.detail_open() {
-                        page_heading(&mut ui, language.text("漫画", "Comics"), None);
+                        ui.label(
+                            RichText::new(language.text("漫画", "Comics"))
+                                .size(29.0)
+                                .strong(),
+                        );
+                        ui.add_space(4.0);
                     }
                     self.comic
                         .ui(&mut ui, &mut self.settings, &mut self.settings_open);
@@ -463,11 +455,7 @@ pub(super) fn child(root: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, r
     ui
 }
 pub(super) fn primary(ui: &mut Ui, label: &str) -> Response {
-    ui.add(
-        egui::Button::new(RichText::new(label).color(BACKGROUND).strong())
-            .fill(ACCENT)
-            .stroke(Stroke::NONE),
-    )
+    design::control(ui, label, None, design::Control::Primary, 0.0)
 }
 fn page_heading(ui: &mut Ui, title: &str, subtitle: Option<&str>) {
     ui.label(RichText::new(title).size(29.0).strong());
@@ -503,7 +491,9 @@ fn nav_item(ui: &mut Ui, label: &str, icon: Glyph, selected: bool, narrow: bool)
             color,
         );
     }
-    response.on_hover_text(label)
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(label)
 }
 fn glyph(p: &Painter, r: Rect, c: Color32, g: Glyph) {
     let s = Stroke::new(1.6, c);
@@ -564,21 +554,7 @@ fn glyph(p: &Painter, r: Rect, c: Color32, g: Glyph) {
             p.line_segment([pos2(r.min.x, r.max.y), r.max], s);
         }
         Glyph::Heart => {
-            let points = [
-                (0.5, 0.95),
-                (0.08, 0.50),
-                (0.03, 0.27),
-                (0.15, 0.08),
-                (0.34, 0.06),
-                (0.5, 0.23),
-                (0.66, 0.06),
-                (0.85, 0.08),
-                (0.97, 0.27),
-                (0.92, 0.50),
-                (0.5, 0.95),
-            ]
-            .map(|(x, y)| pos2(r.min.x + r.width() * x, r.min.y + r.height() * y));
-            p.add(Shape::line(points.to_vec(), s));
+            design::heart(p, r, c, false);
         }
     }
 }

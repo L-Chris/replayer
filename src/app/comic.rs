@@ -12,6 +12,8 @@ use std::collections::{HashSet, VecDeque};
 mod catalog;
 mod preferences;
 mod reader;
+#[cfg(test)]
+mod visual_tests;
 
 const PAGE_CONCURRENCY: usize = 4;
 
@@ -197,6 +199,7 @@ impl State {
             .cloned();
         let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
         ui.painter().rect_filled(rect, 12, SURFACE);
+        design::card_hover(ui, &response, 12);
         let mut inner = workspace::child(ui, "continue-comic", rect.shrink(18.0));
         inner.style_mut().interaction.selectable_labels = false;
         inner.label(
@@ -215,7 +218,9 @@ impl State {
                     picture.paint(ui, cover);
                 }
                 ui.vertical(|ui| {
-                    ui.set_max_width((width - cover_width - 60.0).max(60.0));
+                    ui.set_max_width(
+                        (width - cover_width - if width > 500.0 { 230.0 } else { 60.0 }).max(60.0),
+                    );
                     ui.add(
                         egui::Label::new(RichText::new(&entry.book.title).size(20.0).strong())
                             .truncate(),
@@ -233,7 +238,26 @@ impl State {
                     }
                 });
             });
-            if response.clicked() {
+            let mut resume_clicked = false;
+            if width > 500.0 {
+                let mut action = workspace::child(
+                    ui,
+                    "comic-resume-action",
+                    Rect::from_center_size(
+                        pos2(rect.max.x - 94.0, rect.center().y),
+                        vec2(152.0, 34.0),
+                    ),
+                );
+                resume_clicked = design::control(
+                    &mut action,
+                    l.text("继续阅读", "Continue reading"),
+                    Some(reader::reader_book),
+                    design::Control::Primary,
+                    152.0,
+                )
+                .clicked();
+            }
+            if response.clicked() || resume_clicked {
                 self.resume(entry, settings);
                 return true;
             }
@@ -1021,14 +1045,24 @@ impl State {
             ui.colored_label(Color32::LIGHT_RED, error);
             return;
         }
-        match self.view {
-            View::Catalog => self.catalog(ui, settings),
-            View::Detail => self.detail_ui(ui, settings),
-            View::Reader => {
-                self.reader_ui(ui, settings, settings_open);
-                return;
-            }
+        if self.view == View::Reader {
+            self.reader_ui(ui, settings, settings_open);
+            return;
         }
+        let footer_height = if self.status.is_empty() { 0.0 } else { 48.0 }
+            + if self.translation_total > 0 {
+                48.0
+            } else {
+                0.0
+            };
+        ui.scope(|ui| {
+            ui.set_max_height((ui.available_height() - footer_height).max(100.0));
+            match self.view {
+                View::Catalog => self.catalog(ui, settings),
+                View::Detail => self.detail_ui(ui, settings),
+                View::Reader => {}
+            }
+        });
         if !self.status.is_empty() {
             ui.separator();
             ui.horizontal_wrapped(|ui| {

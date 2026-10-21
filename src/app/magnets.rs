@@ -118,6 +118,9 @@ impl App {
                 ));
                 ui.add(
                     egui::TextEdit::multiline(&mut self.magnet_input)
+                        .font(egui::FontId::proportional(14.0))
+                        .margin(egui::Margin::symmetric(12,7))
+                        .background_color(design::FIELD)
                         .hint_text("magnet:?xt=urn:btih:…")
                         .desired_rows(3)
                         .desired_width(f32::INFINITY),
@@ -142,7 +145,7 @@ impl App {
                     ui.spinner();
                 }
                 ui.label(&self.torrent_status);
-                egui::ScrollArea::vertical()
+                design::scroll()
                     .max_height(200.0)
                     .show(ui, |ui| {
                         for file in &self.torrent_files {

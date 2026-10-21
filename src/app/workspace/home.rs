@@ -11,74 +11,75 @@ impl App {
                 "Your music, films and stories, together.",
             )),
         );
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let records = self.records();
-                let video = records.iter().find(|r| !r.music).cloned();
-                let music = records.iter().find(|r| r.music).cloned();
-                let width = ui.available_width();
-                let height = (width * 0.29).clamp(180.0, 290.0);
-                if width < 640.0 {
-                    self.continue_card(ui, video.as_ref().or(music.as_ref()), width, height);
-                } else {
-                    ui.horizontal_top(|ui| {
-                        let large = (width * 0.62 - 8.0).max(180.0);
-                        self.continue_card(ui, video.as_ref().or(music.as_ref()), large, height);
-                        ui.add_space(2.0);
-                        let small_width = (width - large - 16.0).max(100.0);
-                        if video.is_some() && music.is_some() {
-                            self.continue_card(ui, music.as_ref(), small_width, height);
-                        } else if self
-                            .comic
-                            .continue_tile(ui, small_width, height, &self.settings)
-                        {
-                            self.navigate(Page::Comic);
-                        }
-                    });
-                }
-                ui.add_space(22.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(l.text("最近打开", "Recently opened"))
-                            .size(21.0)
-                            .strong(),
-                    );
-                    for (i, zh, en) in [
-                        (0, "全部", "All"),
-                        (1, "音乐", "Music"),
-                        (2, "视频", "Video"),
-                        (3, "漫画", "Comics"),
-                    ] {
-                        ui.selectable_value(&mut self.workspace.filter, i, l.text(zh, en));
-                    }
-                });
-                ui.add_space(12.0);
-                if self.workspace.filter != 3 {
-                    let filtered: Vec<_> = records
-                        .into_iter()
-                        .filter(|r| {
-                            self.workspace.filter == 0 || r.music == (self.workspace.filter == 1)
-                        })
-                        .take(8)
-                        .collect();
-                    self.media_cards(ui, &filtered);
-                }
-                if self.workspace.filter == 0 || self.workspace.filter == 3 {
-                    ui.add_space(18.0);
-                    if self.comic.home_preview(ui, &self.settings) {
+        design::scroll().auto_shrink([false, false]).show(ui, |ui| {
+            let records = self.records();
+            let video = records.iter().find(|r| !r.music).cloned();
+            let music = records.iter().find(|r| r.music).cloned();
+            let width = ui.available_width();
+            let height = (width * 0.29).clamp(180.0, 290.0);
+            if width < 640.0 {
+                self.continue_card(ui, video.as_ref().or(music.as_ref()), width, height);
+            } else {
+                ui.horizontal_top(|ui| {
+                    let large = (width * 0.62 - 8.0).max(180.0);
+                    self.continue_card(ui, video.as_ref().or(music.as_ref()), large, height);
+                    ui.add_space(2.0);
+                    let small_width = (width - large - 16.0).max(100.0);
+                    if video.is_some() && music.is_some() {
+                        self.continue_card(ui, music.as_ref(), small_width, height);
+                    } else if self
+                        .comic
+                        .continue_tile(ui, small_width, height, &self.settings)
+                    {
                         self.navigate(Page::Comic);
                     }
+                });
+            }
+            ui.add_space(22.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(l.text("最近打开", "Recently opened"))
+                        .size(21.0)
+                        .strong(),
+                );
+                for (i, zh, en) in [
+                    (0, "全部", "All"),
+                    (1, "音乐", "Music"),
+                    (2, "视频", "Video"),
+                    (3, "漫画", "Comics"),
+                ] {
+                    design::selectable_value(ui, &mut self.workspace.filter, i, l.text(zh, en));
                 }
             });
+            ui.add_space(12.0);
+            if self.workspace.filter != 3 {
+                let filtered: Vec<_> = records
+                    .into_iter()
+                    .filter(|r| {
+                        self.workspace.filter == 0 || r.music == (self.workspace.filter == 1)
+                    })
+                    .take(8)
+                    .collect();
+                self.media_cards(ui, &filtered);
+            }
+            if self.workspace.filter == 0 || self.workspace.filter == 3 {
+                ui.add_space(18.0);
+                if self.comic.home_preview(ui, &self.settings) {
+                    self.navigate(Page::Comic);
+                }
+            }
+        });
     }
     fn continue_card(&mut self, ui: &mut Ui, record: Option<&Record>, width: f32, height: f32) {
         let l = self.settings.language;
         let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
         ui.painter().rect_filled(rect, 12, SURFACE);
+        design::card_hover(ui, &response, 12);
         if let Some(record) = record {
-            self.record_art(ui, rect, record);
-            let overlay = Rect::from_min_max(pos2(rect.min.x, rect.max.y - 104.0), rect.max);
+            let content = design::card_content(rect);
+            self.record_art(ui, content, record);
+            let overlay =
+                Rect::from_min_max(pos2(content.min.x, content.max.y - 104.0), content.max);
             ui.painter()
                 .rect_filled(overlay, 0, Color32::from_black_alpha(205));
             let mut text = child(
@@ -109,9 +110,9 @@ impl App {
             if record.duration > 0.0 {
                 ui.painter().rect_filled(
                     Rect::from_min_size(
-                        pos2(rect.min.x + 18.0, rect.max.y - 8.0),
+                        pos2(content.min.x + 18.0, content.max.y - 8.0),
                         vec2(
-                            (width - 36.0)
+                            (content.width() - 36.0)
                                 * (record.position / record.duration).clamp(0.0, 1.0) as f32,
                             3.0,
                         ),
@@ -147,6 +148,9 @@ impl App {
                 ))
                 .color(MUTED),
             );
+            if response.clicked() && !self.dialog_open {
+                self.open_dialog();
+            }
         }
     }
 }

@@ -19,7 +19,7 @@ impl App {
             "Empty endpoint: IMAGE_BASE_URL / LLM_BASE_URL",
         ));
         ui.add(
-            egui::TextEdit::singleline(&mut settings.image_base_url)
+            design::text_edit(&mut settings.image_base_url)
                 .hint_text("https://api.example.com/v1")
                 .desired_width(f32::INFINITY),
         );
@@ -28,12 +28,12 @@ impl App {
             "Image editing model (IMAGE_MODEL)",
         ));
         ui.add(
-            egui::TextEdit::singleline(&mut settings.image_model)
+            design::text_edit(&mut settings.image_model)
                 .hint_text(l.text("留空使用 .env", "Empty: use .env")),
         );
         ui.label("API Key");
         ui.add(
-            egui::TextEdit::singleline(&mut settings.image_key)
+            design::text_edit(&mut settings.image_key)
                 .password(true)
                 .hint_text("IMAGE_API_KEY / LLM_API_KEY"),
         );
@@ -50,13 +50,14 @@ impl App {
                     _ => l.text("跟随界面语言", "Follow interface"),
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(
+                    design::selectable_value(
+                        ui,
                         &mut settings.target,
                         "auto".into(),
                         l.text("跟随界面语言", "Follow interface"),
                     );
-                    ui.selectable_value(&mut settings.target, "zh-CN".into(), "简体中文");
-                    ui.selectable_value(&mut settings.target, "en-US".into(), "English");
+                    design::selectable_value(ui, &mut settings.target, "zh-CN".into(), "简体中文");
+                    design::selectable_value(ui, &mut settings.target, "en-US".into(), "English");
                 });
         });
         ui.horizontal(|ui| {
@@ -69,7 +70,8 @@ impl App {
                 })
                 .show_ui(ui, |ui| {
                     for quality in ["", "low", "medium", "high"] {
-                        ui.selectable_value(
+                        design::selectable_value(
+                            ui,
                             &mut settings.image_quality,
                             quality.into(),
                             if quality.is_empty() {
