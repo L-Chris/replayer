@@ -64,3 +64,8 @@ cargo build --locked --release
 
 Use `-SkipInstaller` to create only the portable ZIP. Dependency URLs and checksums
 are pinned in `scripts/setup-windows.ps1`. Update them together when upgrading FFmpeg.
+
+The verified FFmpeg 9.0.2 archive is mirrored in the `deps-ffmpeg-9.0.2`
+prerelease because upstream daily archives expire. This dependency release is
+excluded from stable application update discovery. Its bytes and SHA-256 match
+the original pinned upstream archive; do not replace it with a different build.

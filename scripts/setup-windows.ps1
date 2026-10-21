@@ -4,7 +4,8 @@ $dependencies = Join-Path $root '.deps'
 $archive = Join-Path $dependencies 'ffmpeg-ci.zip'
 $destination = Join-Path $dependencies 'ffmpeg-ci'
 $expected = '74e35908a759dbebca48c1f382ea0366f3d9d270e4bf4660503803052896b807'
-$url = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-19-13-11/ffmpeg-n9.0.2-win64-lgpl-shared-9.0.zip'
+# Keep the original verified archive; upstream daily builds expire after 14 days.
+$url = 'https://github.com/L-Chris/replayer/releases/download/deps-ffmpeg-9.0.2/ffmpeg-ci.zip'
 New-Item -ItemType Directory -Force -Path $dependencies | Out-Null
 if (-not (Test-Path -LiteralPath $archive) -or (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) {
     Invoke-WebRequest -Uri $url -OutFile $archive

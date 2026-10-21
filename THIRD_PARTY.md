@@ -11,11 +11,14 @@ separate DLLs and can be replaced with ABI-compatible builds.
 
 CI dependency source, build scripts and configuration:
 
-- https://github.com/BtbN/FFmpeg-Builds/tree/autobuild-2026-09-19-13-11
-- https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-09-19-13-11
+- https://github.com/BtbN/FFmpeg-Builds
+- https://github.com/L-Chris/replayer/releases/tag/deps-ffmpeg-9.0.2
+- https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
 - https://ffmpeg.org/legal.html
 
 The pinned archive and SHA-256 are recorded in `scripts/setup-windows.ps1`.
+The dependency release mirrors the unmodified, checksum-verified BtbN archive
+from `autobuild-2026-09-19-13-11`; upstream daily releases expire after 14 days.
 See the upstream build repository for bundled codec libraries, notices and source
 retrieval instructions. Replayer does not modify the FFmpeg libraries.
 
