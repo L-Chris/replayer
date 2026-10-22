@@ -51,6 +51,13 @@ pub struct Chapter {
     pub name: String,
     pub url: String,
     pub order: i64,
+    pub kind: ChapterKind,
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ChapterKind {
+    #[default]
+    Chapter,
+    Volume,
 }
 impl Chapter {
     pub fn key(&self) -> &str {

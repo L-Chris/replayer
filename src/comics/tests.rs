@@ -495,6 +495,7 @@ fn library_updates_history_and_url_migration_survive_restart() {
         name: name.into(),
         url: format!("https://example.com/{id}"),
         order: 0,
+        ..Default::default()
     };
     let mut library = library::Library::open(&path).unwrap();
     library

@@ -1681,6 +1681,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
+name = "fast_image_resize"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9c50201dc184ba6553da1695aac20a042efffbe2d84542cee31917c86c3ab1e"
+dependencies = [
+ "bytemuck",
+ "cfg-if",
+ "document-features",
+ "image",
+ "num-traits",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4522,7 +4536,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "replayer"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -4537,6 +4551,7 @@ dependencies = [
  "image",
  "librqbit",
  "regex",
+ "replayer-image",
  "reqwest 0.12.28",
  "rfd",
  "rtrb",
@@ -4554,6 +4569,15 @@ dependencies = [
  "unicode-width",
  "uuid",
  "winresource",
+]
+
+[[package]]
+name = "replayer-image"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fast_image_resize",
+ "image",
 ]
 
 [[package]]

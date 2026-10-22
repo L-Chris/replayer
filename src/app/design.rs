@@ -94,25 +94,52 @@ pub fn search_field(
     width: f32,
     hint: &str,
 ) -> egui::Response {
-    let mut response = ui.add(
-        text_edit(value)
-            .hint_text(hint)
-            .desired_width(width)
-            .margin(egui::Margin {
-                left: 36,
-                right: 34,
-                top: 7,
-                bottom: 7,
-            }),
-    );
-    super::draw_search(
-        ui.painter(),
-        egui::Rect::from_center_size(
-            egui::pos2(response.rect.min.x + 18.0, response.rect.center().y),
-            vec2(15.0, 15.0),
-        ),
-        MUTED,
-    );
+    search_field_content(ui, value, width, hint, true)
+}
+
+/// Text and clear button inside a search field that supplies its own frame.
+pub fn search_input(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    width: f32,
+    hint: &str,
+) -> egui::Response {
+    search_field_content(ui, value, width, hint, false)
+}
+
+fn search_field_content(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    width: f32,
+    hint: &str,
+    decorated: bool,
+) -> egui::Response {
+    let margin = egui::Margin {
+        left: if decorated { 36 } else { 12 },
+        right: 34,
+        top: 7,
+        bottom: 7,
+    };
+    let input = text_edit(value)
+        .hint_text(hint)
+        .desired_width(width)
+        .margin(margin);
+    let input = if decorated {
+        input
+    } else {
+        input.frame(egui::Frame::new().inner_margin(margin))
+    };
+    let mut response = ui.add(input);
+    if decorated {
+        super::draw_search(
+            ui.painter(),
+            egui::Rect::from_center_size(
+                egui::pos2(response.rect.min.x + 18.0, response.rect.center().y),
+                vec2(15.0, 15.0),
+            ),
+            MUTED,
+        );
+    }
     if !value.is_empty() {
         let rect = egui::Rect::from_center_size(
             egui::pos2(response.rect.max.x - 17.0, response.rect.center().y),
@@ -355,7 +382,6 @@ pub enum Control {
     Primary,
     Outline,
     Quiet,
-    Circle,
 }
 
 /// Navigation back actions use the same icon-only target in every workspace.
@@ -405,11 +431,6 @@ pub fn control(
                     ACCENT
                 },
             );
-        }
-        Control::Circle => {
-            ui.painter().circle_filled(rect.center(), 16.0, fill);
-            ui.painter()
-                .circle_stroke(rect.center(), 15.5, Stroke::new(1.0, BORDER));
         }
         Control::Outline => {
             ui.painter().rect_filled(rect, 8, fill);

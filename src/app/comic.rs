@@ -4,25 +4,42 @@ use crate::{
         self as domain, Book, Chapter, Detail, ReadingMode, SearchGroup,
         cache::{Bitmap, CachedImage},
         library::{Entry, Library, Progress},
-        source::{ComicSource, MangaYun},
+        source::{ComicSource, ImagePolicy, Sources},
     },
     jobs::Job,
 };
 use std::collections::{HashSet, VecDeque};
 mod catalog;
+mod images;
 mod preferences;
 mod reader;
 #[cfg(test)]
 mod visual_tests;
 
-const PAGE_CONCURRENCY: usize = 4;
+const COVER_RATIO: f32 = 3.0 / 4.0;
 
-fn page_requests(current: usize, count: usize, visible: Vec<usize>) -> Vec<usize> {
+fn chapter_neighbors(chapters: &[Chapter], index: usize) -> [Option<usize>; 2] {
+    let Some(current) = chapters.get(index) else {
+        return [None, None];
+    };
+    let same = |i: &usize| chapters[*i].kind == current.kind;
+    [
+        (0..index).rev().find(same),
+        (index + 1..chapters.len()).find(same),
+    ]
+}
+
+fn page_requests(
+    current: usize,
+    count: usize,
+    visible: Vec<usize>,
+    policy: ImagePolicy,
+) -> Vec<usize> {
     let mut requested = Vec::new();
     for index in std::iter::once(current)
         .chain(visible)
-        .chain((1..=3).map(|ahead| current.saturating_add(ahead)))
-        .chain(current.checked_sub(1))
+        .chain((1..=policy.ahead).map(|ahead| current.saturating_add(ahead)))
+        .chain((1..=policy.behind).filter_map(|behind| current.checked_sub(behind)))
     {
         if index < count && !requested.contains(&index) {
             requested.push(index);
@@ -55,40 +72,58 @@ struct Picture {
     tiles: Vec<egui::TextureHandle>,
 }
 impl Picture {
+    fn cover(&self, ui: &Ui, rect: Rect, radius: u8) {
+        if self.tiles.len() == 1 {
+            design::cover(ui, &self.tiles[0], rect, radius);
+        } else if let Some(tile) = self.tiles.first() {
+            let width = tile.size()[0] as f32;
+            let scale = (rect.width() / width).max(rect.height() / self.height);
+            let image =
+                Rect::from_center_size(rect.center(), vec2(width * scale, self.height * scale));
+            self.paint_with(
+                &ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())),
+                image,
+            );
+        }
+    }
     fn bytes(&self) -> usize {
         self.tiles
             .iter()
             .map(|t| t.size()[0] * t.size()[1] * 4)
             .sum()
     }
+    #[cfg(test)]
     fn new(ctx: &egui::Context, id: &str, bitmap: Bitmap) -> Self {
-        let tiles = bitmap
+        Self::prepared(ctx, id, &images::Prepared::bitmap(bitmap))
+    }
+    fn prepared(ctx: &egui::Context, id: &str, image: &images::Prepared) -> Self {
+        let tiles = image
             .tiles
-            .into_iter()
+            .iter()
             .enumerate()
             .map(|(i, tile)| {
                 ctx.load_texture(
                     format!("{id}-{i}"),
-                    egui::ColorImage::from_rgba_unmultiplied(
-                        [tile.width() as usize, tile.height() as usize],
-                        tile.as_raw(),
-                    ),
+                    tile.clone(),
                     egui::TextureOptions::LINEAR,
                 )
             })
             .collect();
         Self {
-            height: bitmap.height as f32,
+            height: image.height as f32,
             tiles,
         }
     }
     fn paint(&self, ui: &Ui, rect: Rect) {
+        self.paint_with(ui.painter(), rect);
+    }
+    fn paint_with(&self, painter: &Painter, rect: Rect) {
         let mut y = rect.min.y;
         for tile in &self.tiles {
             let height = rect.height() * tile.size()[1] as f32 / self.height;
             let part = Rect::from_min_size(pos2(rect.min.x, y), vec2(rect.width(), height));
-            if ui.clip_rect().intersects(part) {
-                ui.painter().image(
+            if painter.clip_rect().intersects(part) {
+                painter.image(
                     tile.id(),
                     part,
                     Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
@@ -104,10 +139,26 @@ struct Asset {
     hash: String,
     original: Picture,
     translated: Option<Picture>,
+    last_used: Instant,
 }
 struct ImageResult {
-    original: CachedImage,
-    translated: Option<CachedImage>,
+    original: Arc<images::Prepared>,
+    translated: Option<Arc<images::Prepared>>,
+}
+struct PageJob {
+    job: Job<ImageResult>,
+    last_requested: Instant,
+}
+impl PageJob {
+    fn new(job: Job<ImageResult>) -> Self {
+        Self {
+            job,
+            last_requested: Instant::now(),
+        }
+    }
+    fn poll(&self) -> Option<anyhow::Result<ImageResult>> {
+        self.job.poll()
+    }
 }
 struct Reader {
     book: Book,
@@ -125,13 +176,67 @@ struct Reader {
     dirty: bool,
     completed: bool,
     assets: HashMap<usize, Asset>,
-    jobs: HashMap<usize, Job<ImageResult>>,
+    visible: Vec<usize>,
+    jobs: HashMap<usize, PageJob>,
     errors: HashMap<usize, String>,
     sizes: HashMap<usize, (f32, f32)>,
     pages_job: Option<Job<Vec<String>>>,
     pages_error: Option<String>,
     last_saved: Instant,
     toolbar_until: Instant,
+}
+impl Reader {
+    fn maintain_requests(&mut self, requested: &[usize], concurrency: usize, now: Instant) {
+        for (index, job) in &mut self.jobs {
+            if requested.contains(index) {
+                job.last_requested = now;
+            }
+        }
+        // Normal scroll oscillations should not discard a nearly-complete image.
+        self.jobs.retain(|_, job| {
+            now.saturating_duration_since(job.last_requested) < Duration::from_millis(800)
+        });
+        // A distant seek must still get a foreground slot immediately.
+        if !self.assets.contains_key(&self.current)
+            && !self.jobs.contains_key(&self.current)
+            && !self.errors.contains_key(&self.current)
+            && self.jobs.len() >= concurrency
+        {
+            let victim = self
+                .jobs
+                .keys()
+                .max_by_key(|index| {
+                    requested
+                        .iter()
+                        .position(|i| i == *index)
+                        .unwrap_or(usize::MAX)
+                })
+                .copied();
+            if let Some(index) = victim {
+                self.jobs.remove(&index);
+            }
+        }
+    }
+    fn trim_assets(&mut self) {
+        let mut bytes: usize = self
+            .assets
+            .values()
+            .map(|asset| {
+                asset.original.bytes() + asset.translated.as_ref().map_or(0, Picture::bytes)
+            })
+            .sum();
+        while bytes > 128 * 1024 * 1024 {
+            let victim = self
+                .assets
+                .iter()
+                .filter(|(index, _)| **index != self.current)
+                .min_by_key(|(index, asset)| (self.visible.contains(index), asset.last_used))
+                .map(|(index, _)| *index);
+            let Some(index) = victim else { break };
+            let asset = self.assets.remove(&index).unwrap();
+            bytes -= asset.original.bytes() + asset.translated.as_ref().map_or(0, Picture::bytes);
+        }
+    }
 }
 #[derive(Clone)]
 struct TranslationRequest {
@@ -151,7 +256,7 @@ struct TranslationJob {
 }
 pub(super) struct State {
     library: Option<Library>,
-    source: Option<Arc<dyn ComicSource>>,
+    source: Option<Arc<Sources>>,
     sites: Vec<domain::Site>,
     site_job: Option<Job<Vec<domain::Site>>>,
     init_error: Option<String>,
@@ -160,16 +265,17 @@ pub(super) struct State {
     keyword: String,
     site_filter: String,
     groups: Vec<SearchGroup>,
-    search: Option<Job<Vec<SearchGroup>>>,
+    search: Vec<(domain::Site, Job<Vec<SearchGroup>>)>,
     selected: Option<Book>,
     detail_job: Option<Job<Detail>>,
     reader: Option<Reader>,
     status: String,
     covers: HashMap<String, Picture>,
-    cover_jobs: HashMap<String, Job<CachedImage>>,
+    cover_jobs: HashMap<String, Job<Arc<images::Prepared>>>,
     cover_errors: HashSet<String>,
     reverse: bool,
     unread_only: bool,
+    chapter_filter: Option<domain::ChapterKind>,
     update_queue: VecDeque<Book>,
     update_job: Option<(String, Job<Detail>)>,
     update_done: usize,
@@ -211,11 +317,13 @@ impl State {
         if let Some(entry) = entry {
             self.ensure_cover(&entry.book);
             inner.horizontal_top(|ui| {
-                let cover_width = (width * 0.32).min((height - 80.0) / 1.5);
-                let (cover, _) =
-                    ui.allocate_exact_size(vec2(cover_width, cover_width * 1.5), Sense::hover());
+                let cover_width = (width * 0.32).min((height - 80.0) * COVER_RATIO);
+                let (cover, _) = ui.allocate_exact_size(
+                    vec2(cover_width, cover_width / COVER_RATIO),
+                    Sense::hover(),
+                );
                 if let Some(picture) = self.covers.get(&entry.book.key()) {
-                    picture.paint(ui, cover);
+                    picture.cover(ui, cover, 8);
                 }
                 ui.vertical(|ui| {
                     ui.set_max_width(
@@ -299,14 +407,30 @@ impl State {
         self.view = View::Catalog;
         self.tab = Tab::Search;
         self.keyword = keyword;
+        self.search.clear();
+        self.groups.clear();
+        self.status.clear();
         if !self.keyword.trim().is_empty()
             && let Some(source) = self.source.clone()
         {
             let keyword = self.keyword.trim().to_owned();
             self.groups.clear();
-            self.search = Some(Job::spawn(
-                move |_| async move { source.search(&keyword).await },
-            ));
+            self.search = source
+                .providers()
+                .into_iter()
+                .map(|(site, provider)| {
+                    let keyword = keyword.clone();
+                    let provider_id = site.id.clone();
+                    (
+                        site,
+                        Job::spawn(move |_| async move {
+                            let mut groups = provider.search(&keyword).await?;
+                            Sources::qualify(&provider_id, &mut groups);
+                            Ok(groups)
+                        }),
+                    )
+                })
+                .collect();
         }
     }
     pub(super) fn home_preview(
@@ -370,7 +494,7 @@ impl State {
     }
     pub fn new() -> Self {
         let library = Library::open(&domain::root().join("library.sqlite"));
-        let source = MangaYun::connect();
+        let source = Sources::connect();
         let init_error = library
             .as_ref()
             .err()
@@ -381,7 +505,10 @@ impl State {
             Job::spawn(move |_| async move { source.sites().await })
         });
         Self {
-            sites: Vec::new(),
+            sites: vec![domain::Site {
+                id: "komiic:komiic".into(),
+                name: "Komiic".into(),
+            }],
             site_job,
             library: library.ok(),
             source: source.ok(),
@@ -391,7 +518,7 @@ impl State {
             keyword: String::new(),
             site_filter: String::new(),
             groups: Vec::new(),
-            search: None,
+            search: Vec::new(),
             selected: None,
             detail_job: None,
             reader: None,
@@ -401,6 +528,7 @@ impl State {
             cover_errors: HashSet::new(),
             reverse: false,
             unread_only: false,
+            chapter_filter: Some(domain::ChapterKind::Chapter),
             update_queue: VecDeque::new(),
             update_job: None,
             update_done: 0,
@@ -471,17 +599,33 @@ impl State {
                 self.sites = sites;
             }
         }
-        if let Some(result) = self.search.as_ref().and_then(Job::poll) {
-            self.search = None;
-            match result {
-                Ok(groups) => self.groups = groups,
-                Err(error) => self.status = error.to_string(),
+        let mut pending = Vec::new();
+        for (site, job) in self.search.drain(..) {
+            match job.poll() {
+                Some(Ok(groups)) => self.groups.extend(groups),
+                Some(Err(error)) => {
+                    let provider = site.id.clone();
+                    let mut groups = vec![SearchGroup {
+                        site,
+                        books: vec![],
+                        error: Some(error.to_string()),
+                    }];
+                    Sources::qualify(&provider, &mut groups);
+                    self.groups.extend(groups);
+                }
+                None => pending.push((site, job)),
             }
         }
+        self.search = pending;
         if let Some(result) = self.detail_job.as_ref().and_then(Job::poll) {
             self.detail_job = None;
             match result {
                 Ok(detail) => {
+                    if let Some(kind) = self.chapter_filter
+                        && !detail.chapters.iter().any(|c| c.kind == kind)
+                    {
+                        self.chapter_filter = detail.chapters.first().map(|c| c.kind);
+                    }
                     self.selected = Some(detail.book.clone());
                     if let Some(lib) = &mut self.library
                         && let Err(error) = lib.refresh(detail)
@@ -513,29 +657,23 @@ impl State {
                 reader.jobs.remove(&index);
                 match result {
                     Ok(result) => {
-                        let size = (
-                            result.original.bitmap.width as f32,
-                            result.original.bitmap.height as f32,
-                        );
+                        let size = (result.original.width as f32, result.original.height as f32);
                         if index <= reader.current && reader.sizes.get(&index) != Some(&size) {
                             reader.restore = true;
                         }
                         reader.sizes.insert(index, size);
                         let asset = Asset {
-                            path: result.original.path,
-                            hash: result.original.hash,
-                            original: Picture::new(
+                            path: result.original.path.clone(),
+                            hash: result.original.hash.clone(),
+                            original: Picture::prepared(
                                 ctx,
                                 &format!("comic-{index}"),
-                                result.original.bitmap,
+                                &result.original,
                             ),
                             translated: result.translated.map(|image| {
-                                Picture::new(
-                                    ctx,
-                                    &format!("comic-translated-{index}"),
-                                    image.bitmap,
-                                )
+                                Picture::prepared(ctx, &format!("comic-translated-{index}"), &image)
                             }),
+                            last_used: Instant::now(),
                         };
                         reader.assets.insert(index, asset);
                         if index == reader.current {
@@ -547,29 +685,7 @@ impl State {
                     }
                 }
             }
-            let current = reader.current;
-            reader
-                .assets
-                .retain(|index, _| index.abs_diff(current) <= 4);
-            while reader
-                .assets
-                .values()
-                .map(|a| a.original.bytes() + a.translated.as_ref().map_or(0, Picture::bytes))
-                .sum::<usize>()
-                > 128 * 1024 * 1024
-            {
-                let farthest = reader
-                    .assets
-                    .keys()
-                    .filter(|index| **index != current)
-                    .max_by_key(|index| index.abs_diff(current))
-                    .copied();
-                if let Some(index) = farthest {
-                    reader.assets.remove(&index);
-                } else {
-                    break;
-                }
-            }
+            reader.trim_assets();
             if reader.dirty && reader.last_saved.elapsed() > Duration::from_secs(1) {
                 self.flush();
             }
@@ -589,7 +705,7 @@ impl State {
                         self.covers.remove(&old);
                     }
                     self.covers
-                        .insert(key.clone(), Picture::new(ctx, &key, image.bitmap));
+                        .insert(key.clone(), Picture::prepared(ctx, &key, &image));
                 }
                 Err(_) => {
                     self.cover_errors.insert(key);
@@ -641,7 +757,7 @@ impl State {
             }
         }
         self.poll_translations(ctx, settings);
-        if self.search.is_some()
+        if !self.search.is_empty()
             || self.detail_job.is_some()
             || self.update_job.is_some()
             || self.translation.is_some()
@@ -689,6 +805,15 @@ impl State {
         self.reader = None;
         self.view = View::Detail;
         self.selected = Some(book.clone());
+        self.chapter_filter = Some(domain::ChapterKind::Chapter);
+        if let Some(entry) = self.selected_entry()
+            && !entry
+                .chapters
+                .iter()
+                .any(|c| c.kind == domain::ChapterKind::Chapter)
+        {
+            self.chapter_filter = entry.chapters.first().map(|c| c.kind);
+        }
         self.status.clear();
         if let Some(source) = self.source.clone() {
             self.detail_job = Some(Job::spawn(
@@ -729,12 +854,13 @@ impl State {
                 1.0
             },
             display: Display::Original,
-            sidebar: true,
+            sidebar: false,
             sidebar_follow: true,
             restore: true,
             dirty: false,
             completed: false,
             assets: HashMap::new(),
+            visible: Vec::new(),
             jobs: HashMap::new(),
             errors: HashMap::new(),
             sizes: HashMap::new(),
@@ -754,6 +880,7 @@ impl State {
             .as_ref()
             .and_then(|p| entry.chapters.iter().position(|c| c.key() == p.chapter))
             .unwrap_or(0);
+        self.chapter_filter = entry.chapters.get(index).map(|c| c.kind);
         self.selected = Some(entry.book);
         self.read_chapter(index, settings, true);
     }
@@ -768,23 +895,26 @@ impl State {
             return;
         }
         let Some(source) = &self.source else { return };
-        let Ok(url) = source.image_request(&book.site, &book.cover) else {
+        let Ok(url) = source.book_image_request(book, &book.cover) else {
             return;
         };
         let directory = domain::root().join("cache/covers");
         let cache_key = format!("cover:{}", book.cover);
         self.cover_jobs.insert(
             key,
-            Job::spawn(move |_| async move {
-                domain::cache::fetch(&directory, &cache_key, url, 240).await
-            }),
+            Job::spawn(move |_| async move { images::fetch(directory, cache_key, url, 240).await }),
         );
     }
     fn ensure_page(&mut self, index: usize, settings: &crate::settings::Settings) {
         let Some(reader) = &mut self.reader else {
             return;
         };
-        if reader.jobs.len() >= PAGE_CONCURRENCY
+        let policy = self
+            .source
+            .as_ref()
+            .map(|source| source.image_policy(&reader.book))
+            .unwrap_or_default();
+        if reader.jobs.len() >= policy.concurrency
             || reader.assets.contains_key(&index)
             || reader.jobs.contains_key(&index)
             || reader.errors.contains_key(&index)
@@ -795,7 +925,7 @@ impl State {
             return;
         };
         let Some(source) = &self.source else { return };
-        let url = match source.image_request(&reader.book.site, url) {
+        let url = match source.book_image_request(&reader.book, url) {
             Ok(url) => url,
             Err(error) => {
                 reader.errors.insert(index, error.to_string());
@@ -813,24 +943,26 @@ impl State {
         let directory = domain::root();
         reader.jobs.insert(
             index,
-            Job::spawn(move |_| async move {
-                let original =
-                    domain::cache::fetch(&directory.join("cache/pages"), &key, url, 1800).await?;
-                let translated = configuration.and_then(|config| {
-                    domain::cache::load(
+            PageJob::new(Job::spawn(move |_| async move {
+                let original = images::fetch(directory.join("cache/pages"), key, url, 1800).await?;
+                let translated = if let Some(config) = configuration {
+                    images::load(
                         directory.join("translations").join(format!(
                             "{}.png",
                             config.cache_key(&original.hash, &context)
                         )),
                         1800,
                     )
+                    .await
                     .ok()
-                });
+                } else {
+                    None
+                };
                 Ok(ImageResult {
                     original,
                     translated,
                 })
-            }),
+            })),
         );
     }
     fn queue_translation(&mut self, all: bool, settings: &crate::settings::Settings) {
@@ -912,12 +1044,12 @@ impl State {
                             let translated = path;
                             reader.jobs.insert(
                                 active.request.index,
-                                Job::spawn(move |_| async move {
+                                PageJob::new(Job::spawn(move |_| async move {
                                     Ok(ImageResult {
-                                        original: domain::cache::load(original, 1800)?,
-                                        translated: Some(domain::cache::load(translated, 1800)?),
+                                        original: images::load(original, 1800).await?,
+                                        translated: Some(images::load(translated, 1800).await?),
                                     })
-                                }),
+                                })),
                             );
                         }
                     }
@@ -958,7 +1090,7 @@ impl State {
                 let Some(url) = reader.urls.get(request.index) else {
                     return;
                 };
-                let url = match source.image_request(&reader.book.site, url) {
+                let url = match source.book_image_request(&reader.book, url) {
                     Ok(url) => url,
                     Err(error) => {
                         self.status = error.to_string();
@@ -1118,12 +1250,21 @@ mod tests {
 
     #[test]
     fn page_loading_prioritizes_current_then_visible_then_read_ahead() {
-        assert_eq!(page_requests(5, 20, vec![4, 5, 6]), vec![5, 4, 6, 7, 8]);
-        assert_eq!(page_requests(0, 20, vec![0]), vec![0, 1, 2, 3]);
-        assert_eq!(page_requests(19, 20, vec![19]), vec![19, 18]);
-        assert!(page_requests(0, 0, vec![]).is_empty());
-        let new = page_requests(12, 20, vec![12]);
-        let old = page_requests(0, 20, vec![0]);
+        assert_eq!(
+            page_requests(5, 20, vec![4, 5, 6], ImagePolicy::default()),
+            vec![5, 4, 6, 7, 8]
+        );
+        assert_eq!(
+            page_requests(0, 20, vec![0], ImagePolicy::default()),
+            vec![0, 1, 2, 3]
+        );
+        assert_eq!(
+            page_requests(19, 20, vec![19], ImagePolicy::default()),
+            vec![19, 18]
+        );
+        assert!(page_requests(0, 0, vec![], ImagePolicy::default()).is_empty());
+        let new = page_requests(12, 20, vec![12], ImagePolicy::default());
+        let old = page_requests(0, 20, vec![0], ImagePolicy::default());
         assert!(
             old.iter().all(|index| !new.contains(index)),
             "jumping must release every stale prefetch slot"

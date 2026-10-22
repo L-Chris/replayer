@@ -5,9 +5,16 @@ use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 
 mod dm5;
+mod komiic;
+mod sources;
+pub use komiic::Komiic;
+pub use sources::Sources;
 
 /// UI and storage use normalized records, never provider-specific JSON.
 pub trait ComicSource: Send + Sync {
+    fn image_policy(&self, _book: &Book) -> ImagePolicy {
+        ImagePolicy::default()
+    }
     fn sites(&self) -> BoxFuture<'_, Result<Vec<Site>>>;
     fn search<'a>(&'a self, keyword: &'a str) -> BoxFuture<'a, Result<Vec<SearchGroup>>>;
     fn detail<'a>(&'a self, book: &'a Book) -> BoxFuture<'a, Result<Detail>>;
@@ -21,12 +28,36 @@ pub trait ComicSource: Send + Sync {
     fn image_request(&self, site: &str, url: &str) -> Result<ImageRequest> {
         Ok(self.image_url(site, url)?.into())
     }
+    fn book_image_request(&self, book: &Book, url: &str) -> Result<ImageRequest> {
+        self.image_request(&book.site, url)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ImagePolicy {
+    pub concurrency: usize,
+    pub ahead: usize,
+    pub behind: usize,
+    pub retain_cache_on_refresh: bool,
+}
+impl Default for ImagePolicy {
+    fn default() -> Self {
+        Self {
+            concurrency: 4,
+            ahead: 3,
+            behind: 1,
+            retain_cache_on_refresh: false,
+        }
+    }
 }
 
 pub struct ImageRequest {
     pub url: reqwest::Url,
     pub fallback: Option<reqwest::Url>,
     pub referer: Option<reqwest::Url>,
+    pub headers: reqwest::header::HeaderMap,
+    pub refresh: Option<BoxFuture<'static, Result<ImageRequest>>>,
+    pub on_status: Option<Arc<dyn Fn(reqwest::StatusCode) -> Result<()> + Send + Sync>>,
     resolver: Option<BoxFuture<'static, Result<ImageRequest>>>,
 }
 impl From<reqwest::Url> for ImageRequest {
@@ -35,6 +66,9 @@ impl From<reqwest::Url> for ImageRequest {
             url,
             fallback: None,
             referer: None,
+            headers: reqwest::header::HeaderMap::new(),
+            refresh: None,
+            on_status: None,
             resolver: None,
         }
     }

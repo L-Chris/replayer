@@ -1,5 +1,10 @@
 # Bundled components
 
+Comic preview resizing uses `fast_image_resize` 6.1.0 (MIT OR Apache-2.0),
+Copyright Kirill Kuzminykh. The MIT license is bundled in
+`licenses/fast_image_resize-MIT.txt`.
+Source: https://github.com/Cykooz/fast_image_resize .
+
 Comic library storage uses `rusqlite` 0.40.2 (MIT), which embeds SQLite through
 `libsqlite3-sys` with the bundled feature. SQLite is in the public domain.
 The rusqlite license is bundled in `licenses/rusqlite-MIT.txt`.

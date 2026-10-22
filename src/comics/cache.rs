@@ -1,60 +1,18 @@
 use super::*;
 use anyhow::{Result, anyhow, ensure};
 use std::{
-    io::Cursor,
     path::{Path, PathBuf},
     sync::OnceLock,
     time::Duration,
 };
+#[cfg(test)]
+mod tests;
 
-pub struct Bitmap {
-    pub width: usize,
-    pub height: usize,
-    pub tiles: Vec<image::RgbaImage>,
-}
+pub use replayer_image::{Bitmap, decode, read_image};
 pub struct CachedImage {
     pub path: PathBuf,
     pub hash: String,
     pub bitmap: Bitmap,
-}
-pub fn read_image(bytes: &[u8]) -> Result<image::DynamicImage> {
-    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(16384);
-    limits.max_image_height = Some(65536);
-    limits.max_alloc = Some(256 * 1024 * 1024);
-    reader.limits(limits);
-    reader
-        .decode()
-        .map_err(|_| anyhow!("图片损坏或尺寸过大 / Invalid or oversized image"))
-}
-pub fn decode(bytes: &[u8], max_width: u32) -> Result<Bitmap> {
-    let mut image = read_image(bytes)?;
-    let scale = (max_width as f64 / image.width() as f64)
-        .min(1.0)
-        .min((16.0 * 1024.0 * 1024.0 / (image.width() as f64 * image.height() as f64)).sqrt());
-    if scale < 1.0 {
-        image = image.resize_exact(
-            (image.width() as f64 * scale).max(1.0) as u32,
-            (image.height() as f64 * scale).max(1.0) as u32,
-            image::imageops::FilterType::Triangle,
-        );
-    }
-    let width = image.width();
-    let height = image.height();
-    let tiles = (0..height)
-        .step_by(2048)
-        .map(|y| {
-            image
-                .crop_imm(0, y, width, (height - y).min(2048))
-                .to_rgba8()
-        })
-        .collect();
-    Ok(Bitmap {
-        width: width as usize,
-        height: height as usize,
-        tiles,
-    })
 }
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -80,14 +38,32 @@ pub fn load(path: PathBuf, width: u32) -> Result<CachedImage> {
         path,
     })
 }
-fn client() -> Result<&'static reqwest::Client> {
+/// Bound CPU/memory-heavy image work independently of HTTP concurrency. A
+/// cancelled waiter leaves its running worker holding the permit until done.
+pub async fn background<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    static SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+    let permit = SLOTS.acquire().await?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await?
+}
+fn client(tickets: bool) -> Result<&'static reqwest::Client> {
     static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
-    CLIENT
+    static TICKET_CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    (if tickets { &TICKET_CLIENT } else { &CLIENT })
         .get_or_init(|| {
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(8))
                 .timeout(Duration::from_secs(30))
-                .redirect(reqwest::redirect::Policy::limited(4))
+                .redirect(if tickets {
+                    reqwest::redirect::Policy::none()
+                } else {
+                    reqwest::redirect::Policy::limited(4)
+                })
                 .user_agent(concat!(
                     "replayer/",
                     env!("CARGO_PKG_VERSION"),
@@ -103,10 +79,13 @@ fn client() -> Result<&'static reqwest::Client> {
 async fn download(
     url: reqwest::Url,
     referer: Option<&reqwest::Url>,
+    headers: &reqwest::header::HeaderMap,
     timeout: Duration,
     width: u32,
+    path: &Path,
 ) -> Result<(Vec<u8>, Bitmap)> {
-    let mut request = client()?.get(url).timeout(timeout);
+    let client = client(headers.contains_key("x-image-ticket"))?;
+    let mut request = client.get(url).headers(headers.clone()).timeout(timeout);
     if let Some(referer) = referer {
         request = request.header(reqwest::header::REFERER, referer.as_str());
     }
@@ -114,17 +93,87 @@ async fn download(
         .send()
         .await
         .map_err(|_| anyhow!("图片连接失败或超时 / Image request timed out"))?;
-    ensure!(
-        response.status().is_success(),
-        "图片 HTTP {}，可刷新章节重试 / Image request failed",
-        response.status().as_u16()
-    );
+    if !response.status().is_success() {
+        return Err(ImageStatus(response.status()).into());
+    }
     let bytes = source::limited_body(response, 40 * 1024 * 1024).await?;
-    tokio::task::spawn_blocking(move || {
+    // Persist completed downloads before decoding. Cancelling a display job must
+    // not discard bytes already received from a quota-limited source.
+    let path = path.to_owned();
+    let bytes = tokio::task::spawn_blocking(move || {
+        atomic_write(&path, &bytes)?;
+        Ok::<_, anyhow::Error>(bytes)
+    })
+    .await??;
+    background(move || {
         let bitmap = decode(&bytes, width)?;
         Ok((bytes, bitmap))
     })
-    .await?
+    .await
+}
+
+#[derive(Debug)]
+struct ImageStatus(reqwest::StatusCode);
+impl std::fmt::Display for ImageStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "图片 HTTP {}，可刷新章节重试 / Image request failed",
+            self.0.as_u16()
+        )
+    }
+}
+impl std::error::Error for ImageStatus {}
+
+async fn download_request(
+    mut request: source::ImageRequest,
+    width: u32,
+    path: &Path,
+) -> Result<(Vec<u8>, Bitmap)> {
+    // A ticket can expire while queued. Refresh once on 403, never on other failures.
+    for attempt in 0..2 {
+        let timeout = Duration::from_secs(if request.fallback.is_some() { 10 } else { 30 });
+        match download(
+            request.url.clone(),
+            request.referer.as_ref(),
+            &request.headers,
+            timeout,
+            width,
+            path,
+        )
+        .await
+        {
+            Ok(image) => return Ok(image),
+            Err(error) => {
+                if let Some(status) = error.downcast_ref::<ImageStatus>() {
+                    if let Some(callback) = &request.on_status {
+                        callback(status.0)?;
+                    }
+                    if status.0 == reqwest::StatusCode::FORBIDDEN
+                        && attempt == 0
+                        && let Some(refresh) = request.refresh.take()
+                    {
+                        request = refresh.await?;
+                        continue;
+                    }
+                }
+                if let Some(url) = request.fallback {
+                    return download(
+                        url,
+                        None,
+                        &Default::default(),
+                        Duration::from_secs(30),
+                        width,
+                        path,
+                    )
+                    .await
+                    .map_err(|fallback| anyhow!("{error}; {fallback}"));
+                }
+                return Err(error);
+            }
+        }
+    }
+    anyhow::bail!("图片凭证已失效 / Image ticket expired")
 }
 
 pub async fn fetch(
@@ -135,35 +184,24 @@ pub async fn fetch(
 ) -> Result<CachedImage> {
     let path = directory.join(format!("{}.img", digest(key.as_bytes())));
     let cached_path = path.clone();
-    if let Some(image) = tokio::task::spawn_blocking(move || {
+    if let Some(image) = background(move || {
         if cached_path.exists() {
             match load(cached_path.clone(), width) {
-                Ok(image) => return Some(image),
+                Ok(image) => return Ok(Some(image)),
                 Err(_) => {
                     let _ = std::fs::remove_file(&cached_path);
                 }
             }
         }
-        None
+        Ok(None)
     })
     .await?
     {
         return Ok(image);
     }
     let request = request.into().resolve().await?;
-    let timeout = Duration::from_secs(if request.fallback.is_some() { 10 } else { 30 });
-    let (bytes, bitmap) =
-        match download(request.url, request.referer.as_ref(), timeout, width).await {
-            Ok(bytes) => bytes,
-            Err(direct_error) => match request.fallback {
-                Some(url) => download(url, None, Duration::from_secs(30), width)
-                    .await
-                    .map_err(|fallback_error| anyhow!("{direct_error}; {fallback_error}"))?,
-                None => return Err(direct_error),
-            },
-        };
+    let (bytes, bitmap) = download_request(request, width, &path).await?;
     tokio::task::spawn_blocking(move || {
-        atomic_write(&path, &bytes)?;
         Ok(CachedImage {
             hash: digest(&bytes),
             path,

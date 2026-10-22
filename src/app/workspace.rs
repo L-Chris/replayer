@@ -167,10 +167,6 @@ impl App {
             );
             header.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
-                let (mark, _) = ui.allocate_exact_size(vec2(23.0, 26.0), Sense::hover());
-                draw_play(ui.painter(), mark.shrink(3.0), ACCENT);
-                ui.label(RichText::new("replayer").size(20.0).strong());
-                ui.separator();
                 if design::back_button(ui, language.text("返回音乐库", "Back to music library"))
                     .clicked()
                 {

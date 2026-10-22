@@ -95,6 +95,7 @@ impl App {
             let directory = domain::root().join("cache");
             match std::fs::remove_dir_all(&directory) {
                 Ok(()) => {
+                    images::clear();
                     self.comic.covers.clear();
                     self.comic.cover_jobs.clear();
                     self.comic.cover_errors.clear();
