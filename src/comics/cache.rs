@@ -100,10 +100,17 @@ fn client() -> Result<&'static reqwest::Client> {
         .map_err(|error| anyhow!("{error}"))
 }
 
-async fn download(url: reqwest::Url, timeout: Duration, width: u32) -> Result<(Vec<u8>, Bitmap)> {
-    let response = client()?
-        .get(url)
-        .timeout(timeout)
+async fn download(
+    url: reqwest::Url,
+    referer: Option<&reqwest::Url>,
+    timeout: Duration,
+    width: u32,
+) -> Result<(Vec<u8>, Bitmap)> {
+    let mut request = client()?.get(url).timeout(timeout);
+    if let Some(referer) = referer {
+        request = request.header(reqwest::header::REFERER, referer.as_str());
+    }
+    let response = request
         .send()
         .await
         .map_err(|_| anyhow!("图片连接失败或超时 / Image request timed out"))?;
@@ -143,17 +150,18 @@ pub async fn fetch(
     {
         return Ok(image);
     }
-    let request = request.into();
+    let request = request.into().resolve().await?;
     let timeout = Duration::from_secs(if request.fallback.is_some() { 10 } else { 30 });
-    let (bytes, bitmap) = match download(request.url, timeout, width).await {
-        Ok(bytes) => bytes,
-        Err(direct_error) => match request.fallback {
-            Some(url) => download(url, Duration::from_secs(30), width)
-                .await
-                .map_err(|fallback_error| anyhow!("{direct_error}; {fallback_error}"))?,
-            None => return Err(direct_error),
-        },
-    };
+    let (bytes, bitmap) =
+        match download(request.url, request.referer.as_ref(), timeout, width).await {
+            Ok(bytes) => bytes,
+            Err(direct_error) => match request.fallback {
+                Some(url) => download(url, None, Duration::from_secs(30), width)
+                    .await
+                    .map_err(|fallback_error| anyhow!("{direct_error}; {fallback_error}"))?,
+                None => return Err(direct_error),
+            },
+        };
     tokio::task::spawn_blocking(move || {
         atomic_write(&path, &bytes)?;
         Ok(CachedImage {

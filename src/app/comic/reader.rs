@@ -116,10 +116,7 @@ impl State {
                     ui.label(RichText::new("replayer").size(20.0).strong());
                     ui.separator();
                 }
-                if icon_button(ui, 26.0, 1.0, reader_back)
-                    .on_hover_text(l.text("返回目录", "Back to chapters"))
-                    .clicked()
-                {
+                if design::back_button(ui, l.text("返回目录", "Back to chapters")).clicked() {
                     back = true;
                 }
                 ui.add(egui::Label::new(RichText::new(&reader.book.title).strong()).truncate());
@@ -978,23 +975,4 @@ fn reader_translate_chapter(p: &Painter, r: Rect, c: Color32) {
     reader_document(p, r.translate(vec2(2.0, 1.0)).shrink(1.0), c);
     p.line_segment([r.left_bottom(), r.left_top()], Stroke::new(1.2, c));
     p.line_segment([r.left_top(), r.right_top()], Stroke::new(1.2, c));
-}
-fn reader_back(p: &Painter, r: Rect, c: Color32) {
-    let s = Stroke::new(1.6, c);
-    let center = r.center();
-    p.line_segment([pos2(r.min.x, center.y), pos2(r.max.x, center.y)], s);
-    p.line_segment(
-        [
-            pos2(r.min.x, center.y),
-            center + vec2(0.0, -r.height() * 0.4),
-        ],
-        s,
-    );
-    p.line_segment(
-        [
-            pos2(r.min.x, center.y),
-            center + vec2(0.0, r.height() * 0.4),
-        ],
-        s,
-    );
 }

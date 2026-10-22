@@ -36,6 +36,11 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; Remove the two obsolete bundled DLLs when upgrading an existing installation.
+Type: files; Name: "{app}\avdevice-63.dll"
+Type: files; Name: "{app}\avfilter-12.dll"
+
 [Icons]
 Name: "{group}\replayer"; Filename: "{app}\replayer.exe"; IconFilename: "{app}\replayer.exe"; IconIndex: 0
 Name: "{autodesktop}\replayer"; Filename: "{app}\replayer.exe"; IconFilename: "{app}\replayer.exe"; IconIndex: 0; Tasks: desktopicon

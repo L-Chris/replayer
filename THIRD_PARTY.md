@@ -8,6 +8,9 @@ Sources: https://github.com/rusqlite/rusqlite and https://sqlite.org/copyright.h
 Windows packages include FFmpeg shared libraries from the BtbN LGPL shared build.
 The FFmpeg license is included as `FFmpeg-LICENSE.txt`; the libraries remain
 separate DLLs and can be replaced with ABI-compatible builds.
+Packages include only `avcodec`, `avformat`, `avutil`, `swresample` and `swscale`.
+Device capture (`avdevice`) and filter graphs (`avfilter`) are not used or bundled;
+packaging checks the executable and DLL import tables for excluded FFmpeg dependencies.
 
 CI dependency source, build scripts and configuration:
 

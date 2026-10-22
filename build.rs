@@ -26,15 +26,15 @@ fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
     let profile_dir = Path::new(&out_dir).join("../../..");
 
-    let Ok(entries) = fs::read_dir(&bin) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("dll")
-            && let Some(name) = path.file_name()
-        {
-            let _ = fs::copy(&path, profile_dir.join(name));
-        }
+    for name in [
+        "avcodec-63.dll",
+        "avformat-63.dll",
+        "avutil-61.dll",
+        "swresample-7.dll",
+        "swscale-10.dll",
+    ] {
+        // A running preview may lock an existing DLL during cargo check/test.
+        // Packaging validates the required runtime files separately.
+        let _ = fs::copy(bin.join(name), profile_dir.join(name));
     }
 }

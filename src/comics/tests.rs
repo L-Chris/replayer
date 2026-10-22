@@ -134,10 +134,10 @@ fn image_relay_fallback_is_cached_and_does_not_repeat_failed_direct_requests() {
                 let image = cache::fetch(
                     &directory,
                     path,
-                    source::ImageRequest {
-                        url: format!("{base}/{path}").parse().unwrap(),
-                        fallback: Some(format!("{base}/image").parse().unwrap()),
-                    },
+                    source::ImageRequest::from(
+                        format!("{base}/{path}").parse::<reqwest::Url>().unwrap(),
+                    )
+                    .with_fallback(format!("{base}/image").parse().unwrap()),
                     240,
                 )
                 .await
@@ -327,6 +327,56 @@ fn tall_images_are_tiled_and_translation_preserves_canvas_dimensions() {
     assert_eq!((image.width(), image.height()), (500, 5200));
     assert_eq!(count.load(Ordering::Relaxed), bands.len());
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[ignore = "Contacts MangaYun/DM5 and downloads three public pages from the regression chapter"]
+fn live_dm5_empty_aggregator_falls_back_and_loads_first_middle_last_pages() {
+    runtime().block_on(async {
+        let source = source::MangaYun::connect().unwrap();
+        let book = Book {
+            provider: "mangayun".into(),
+            site: "dm5".into(),
+            ..Default::default()
+        };
+        let chapter = Chapter {
+            url: "https://www.dm5.com/m1845402/".into(),
+            ..Default::default()
+        };
+        let started = std::time::Instant::now();
+        let pages = source.pages(&book, &chapter, false).await.unwrap();
+        assert_eq!(pages.len(), 56);
+        println!(
+            "DM5 chapter: {} pages, list loaded in {:?}",
+            pages.len(),
+            started.elapsed()
+        );
+        let directory = std::path::Path::new("target/comic-review/live-cache");
+        for index in [0, 27, 55] {
+            let started = std::time::Instant::now();
+            let image = cache::fetch(
+                directory,
+                &format!("dm5-1845402:{index}"),
+                source.image_request("dm5", &pages[index]).unwrap(),
+                1800,
+            )
+            .await
+            .unwrap();
+            assert!(image.bitmap.width > 100 && image.bitmap.height > 100);
+            println!(
+                "Page {}: {}x{} in {:?}",
+                index + 1,
+                image.bitmap.width,
+                image.bitmap.height,
+                started.elapsed()
+            );
+            std::fs::copy(
+                image.path,
+                format!("target/comic-review/page-{:02}.jpg", index + 1),
+            )
+            .unwrap();
+        }
+    });
 }
 
 #[test]

@@ -203,7 +203,7 @@ impl App {
                 ],
                 Stroke::new(1.0, LINE),
             );
-            let mut lyrics = control_slot(root, "mini-lyrics", pos2(bar.max.x - 182.0, cy), 28.0);
+            let mut lyrics = control_slot(root, "mini-lyrics", pos2(bar.max.x - 146.0, cy), 28.0);
             if icon_button(&mut lyrics, 28.0, 1.0, draw_subtitles)
                 .on_hover_text(l.text("\u{5c55}\u{5f00}\u{6b4c}\u{8bcd}", "Show lyrics"))
                 .clicked()
@@ -212,13 +212,6 @@ impl App {
                 self.workspace.listening_tab = 0;
                 self.workspace.page = Page::Listening;
             }
-            root.painter().text(
-                pos2(bar.max.x - 160.0, cy),
-                egui::Align2::LEFT_CENTER,
-                l.text("\u{6b4c}\u{8bcd}", "Lyrics"),
-                egui::FontId::proportional(12.0),
-                MUTED,
-            );
         }
     }
 

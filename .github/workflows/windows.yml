@@ -76,8 +76,13 @@ jobs:
           & "$env:FFMPEG_DIR/bin/ffmpeg.exe" -v error -y -f lavfi -i 'testsrc2=size=320x180:rate=24:duration=4' -c:v mpeg4 $media
           if ($LASTEXITCODE -ne 0) { throw 'Smoke media creation failed.' }
           $env:REPLAYER_SOFTWARE = '1'
-          $process = Start-Process -FilePath (Join-Path $installDir 'replayer.exe') -ArgumentList @('--selftest', ('"' + $media + '"')) -WindowStyle Hidden -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Installed player selftest failed: $($process.ExitCode)" }
+          $savedPath = $env:PATH
+          try {
+            # Prevent missing package DLLs from being supplied by the build environment.
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+            $process = Start-Process -FilePath (Join-Path $installDir 'replayer.exe') -ArgumentList @('--selftest', ('"' + $media + '"')) -WorkingDirectory $installDir -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Installed player selftest failed: $($process.ExitCode)" }
+          } finally { $env:PATH = $savedPath }
       - uses: actions/upload-artifact@v4
         with:
           name: replayer-${{ env.APP_VERSION }}-windows-x86_64

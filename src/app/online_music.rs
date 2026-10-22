@@ -210,7 +210,7 @@ impl App {
         }
         let size = ui.available_size();
         let previous_source = self.settings.music.source.clone();
-        let selected = providers
+        let mut selected = providers
             .iter()
             .position(|p| p.descriptor().id == previous_source)
             .unwrap_or(0);
@@ -220,7 +220,8 @@ impl App {
         {
             self.settings.music.source = providers[0].descriptor().id.into();
         }
-        ui.horizontal_wrapped(|ui| {
+        let old_quality = self.settings.music.quality.clone();
+        ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("music_provider")
                 .selected_text(providers[selected].descriptor().name)
                 .show_ui(ui, |ui| {
@@ -234,31 +235,18 @@ impl App {
                         );
                     }
                 });
-            if ui.button(l.text("音乐源设置", "Source settings")).clicked() {
-                self.online_music.open = false;
-                self.settings_open = true;
-                self.preferences_tab = PrefTab::MusicSources;
-                self.config_message.clear();
+            selected = providers
+                .iter()
+                .position(|p| p.descriptor().id == self.settings.music.source)
+                .unwrap_or(0);
+            let descriptor = providers[selected].descriptor();
+            if !descriptor
+                .qualities
+                .iter()
+                .any(|q| q.id == self.settings.music.quality)
+            {
+                self.settings.music.quality = descriptor.default_quality.into();
             }
-        });
-        let selected = providers
-            .iter()
-            .position(|p| p.descriptor().id == self.settings.music.source)
-            .unwrap_or(0);
-        let descriptor = providers[selected].descriptor();
-        let changed = previous_source != self.settings.music.source;
-        if changed {
-            self.online_music.clear_search();
-        }
-        if !descriptor
-            .qualities
-            .iter()
-            .any(|q| q.id == self.settings.music.quality)
-        {
-            self.settings.music.quality = descriptor.default_quality.into();
-        }
-        let old_quality = self.settings.music.quality.clone();
-        ui.horizontal(|ui| {
             ui.label(l.text("音质", "Quality"));
             egui::ComboBox::from_id_salt("music_quality")
                 .selected_text(
@@ -280,6 +268,10 @@ impl App {
                     }
                 });
         });
+        let changed = previous_source != self.settings.music.source;
+        if changed {
+            self.online_music.clear_search();
+        }
         if changed || old_quality != self.settings.music.quality {
             self.online_music.draft.source = self.settings.music.source.clone();
             self.online_music.draft.quality = self.settings.music.quality.clone();

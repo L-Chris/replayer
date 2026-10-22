@@ -21,8 +21,7 @@ try {
     Copy-Item -LiteralPath 'assets/branding/replayer.ico' -Destination $stage
     $ffmpeg = $env:FFMPEG_DIR
     if (-not $ffmpeg) { $ffmpeg = Join-Path $root '.deps/ffmpeg-n9.0.1-84-g946fcce07b-win64-lgpl-shared-9.0' }
-    $dlls = @(Get-ChildItem -LiteralPath (Join-Path $ffmpeg 'bin') -Filter '*.dll')
-    if ($dlls.Count -lt 6) { throw 'FFmpeg runtime DLLs are missing.' }
+    $dlls = @(& "$PSScriptRoot/ffmpeg-runtime.ps1" -Binary $Binary -RuntimeDirectory (Join-Path $ffmpeg 'bin'))
     $dlls | Copy-Item -Destination $stage
     Copy-Item -LiteralPath 'README.md' -Destination $stage
     Copy-Item -LiteralPath 'SUBTITLES.md' -Destination $stage

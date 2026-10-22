@@ -120,8 +120,7 @@ impl App {
             ui.horizontal_top(|ui| {
                 for record in row {
                     ui.push_id(&record.path, |ui| {
-                        let art_height = (width - 2.0 * design::CARD_PADDING)
-                            * if record.music { 1.0 } else { 9.0 / 16.0 };
+                        let art_height = width - 2.0 * design::CARD_PADDING;
                         let (card, response) = ui.allocate_exact_size(
                             vec2(width, art_height + 62.0 + 2.0 * design::CARD_PADDING),
                             Sense::click(),

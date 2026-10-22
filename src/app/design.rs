@@ -358,6 +358,21 @@ pub enum Control {
     Circle,
 }
 
+/// Navigation back actions use the same icon-only target in every workspace.
+pub fn back_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
+    let response = control(
+        ui,
+        "",
+        Some(super::draw_back),
+        Control::Quiet,
+        CONTROL_HEIGHT,
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip)
+    });
+    response.on_hover_text(tooltip)
+}
+
 /// Toolbar controls share a fixed hit height and paint entirely inside it.
 pub fn control(
     ui: &mut egui::Ui,

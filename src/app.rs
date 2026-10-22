@@ -892,11 +892,17 @@ impl eframe::App for App {
             let mut back = workspace::child(
                 root,
                 "video-back",
-                Rect::from_min_size(screen.min + vec2(20.0, 12.0), Vec2::splat(32.0)),
+                Rect::from_min_size(
+                    screen.min + vec2(20.0, 12.0),
+                    Vec2::splat(design::CONTROL_HEIGHT),
+                ),
             );
-            if icon_button(&mut back, 32.0, a, draw_back)
-                .on_hover_text(language.text("返回视频库", "Back to video library"))
-                .clicked()
+            back.multiply_opacity(a);
+            if design::back_button(
+                &mut back,
+                language.text("返回视频库", "Back to video library"),
+            )
+            .clicked()
             {
                 self.navigate(workspace::Page::Video);
             }

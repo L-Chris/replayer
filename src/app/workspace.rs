@@ -171,13 +171,11 @@ impl App {
                 draw_play(ui.painter(), mark.shrink(3.0), ACCENT);
                 ui.label(RichText::new("replayer").size(20.0).strong());
                 ui.separator();
-                if icon_button(ui, 28.0, 1.0, draw_back)
-                    .on_hover_text(language.text("返回音乐库", "Back to music library"))
+                if design::back_button(ui, language.text("返回音乐库", "Back to music library"))
                     .clicked()
                 {
                     self.navigate(Page::Music);
                 }
-                ui.label(language.text("音乐库", "Music library"));
             });
             let labels = [
                 language.text("歌词", "Lyrics"),

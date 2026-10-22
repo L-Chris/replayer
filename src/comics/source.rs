@@ -4,6 +4,8 @@ use futures_util::{StreamExt, future::BoxFuture};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 
+mod dm5;
+
 /// UI and storage use normalized records, never provider-specific JSON.
 pub trait ComicSource: Send + Sync {
     fn sites(&self) -> BoxFuture<'_, Result<Vec<Site>>>;
@@ -24,12 +26,41 @@ pub trait ComicSource: Send + Sync {
 pub struct ImageRequest {
     pub url: reqwest::Url,
     pub fallback: Option<reqwest::Url>,
+    pub referer: Option<reqwest::Url>,
+    resolver: Option<BoxFuture<'static, Result<ImageRequest>>>,
 }
 impl From<reqwest::Url> for ImageRequest {
     fn from(url: reqwest::Url) -> Self {
         Self {
             url,
             fallback: None,
+            referer: None,
+            resolver: None,
+        }
+    }
+}
+impl ImageRequest {
+    pub fn with_fallback(mut self, url: reqwest::Url) -> Self {
+        self.fallback = Some(url);
+        self
+    }
+    fn deferred(url: reqwest::Url, resolver: BoxFuture<'static, Result<Self>>) -> Self {
+        Self {
+            resolver: Some(resolver),
+            ..url.into()
+        }
+    }
+    /// Resolve only after checking the image cache, inside the cancellable page job.
+    pub async fn resolve(mut self) -> Result<Self> {
+        if let Some(resolve) = self.resolver.take() {
+            let request = resolve.await?;
+            ensure!(
+                request.resolver.is_none(),
+                "无效图片解析结果 / Invalid image resolution"
+            );
+            Ok(request)
+        } else {
+            Ok(self)
         }
     }
 }
@@ -209,18 +240,29 @@ impl ComicSource for MangaYun {
                 book.site != "comicbox",
                 "暂不支持此来源的阅读，请选择其他来源 / Reading this source is not supported yet"
             );
-            let data = self
+            let result = self
                 .request(
                     "/api/chapter-images",
                     Some(json!({"siteId":book.site,"chapterUrl":chapter.url,"refresh":refresh})),
                 )
-                .await?;
-            let images: Vec<String> = serde_json::from_value(data["images"].clone())?;
-            ensure!(
-                !images.is_empty() && images.len() <= 2000,
-                "无效章节图片列表 / Invalid page list"
-            );
-            Ok(images)
+                .await;
+            let pages = result.and_then(|data| {
+                let images: Vec<String> = serde_json::from_value(data["images"].clone())?;
+                ensure!(
+                    !images.is_empty() && images.len() <= 2000,
+                    "来源未返回章节图片 / Source returned no chapter images"
+                );
+                Ok(images)
+            });
+            if book.site == "dm5" && pages.is_err() {
+                let chapter_url = http_url(&chapter.url)?;
+                ensure!(
+                    dm5::is_chapter(&chapter_url),
+                    "无效动漫屋章节地址 / Invalid DM5 chapter URL"
+                );
+                return dm5::pages(&self.client, chapter_url).await;
+            }
+            pages
         })
     }
     fn image_url(&self, site: &str, url: &str) -> Result<reqwest::Url> {
@@ -231,6 +273,19 @@ impl ComicSource for MangaYun {
             .join(url)
             .map_err(|_| anyhow!("无效图片地址 / Invalid image URL"))?;
         http_url(absolute.as_str())?;
+        if site == "dm5" && dm5::is_page(&absolute) {
+            let source = self.clone();
+            return Ok(ImageRequest::deferred(
+                absolute.clone(),
+                Box::pin(async move {
+                    let (image, referer) = dm5::resolve(&source.client, absolute).await?;
+                    let relay = source.image_request("dm5", image.as_str())?.url;
+                    let mut request = ImageRequest::from(image).with_fallback(relay);
+                    request.referer = Some(referer);
+                    Ok(request)
+                }),
+            ));
+        }
         if absolute.origin() == reqwest::Url::parse(&self.base)?.origin()
             && absolute.path() == "/api/image"
         {
@@ -258,10 +313,7 @@ impl ComicSource for MangaYun {
         Ok(if protected {
             proxy.into()
         } else {
-            ImageRequest {
-                url: absolute,
-                fallback: Some(proxy),
-            }
+            ImageRequest::from(absolute).with_fallback(proxy)
         })
     }
 }

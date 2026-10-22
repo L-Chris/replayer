@@ -524,14 +524,7 @@ impl State {
 
     pub(super) fn detail_ui(&mut self, ui: &mut Ui, settings: &crate::settings::Settings) {
         let l = settings.language;
-        if design::control(
-            ui,
-            l.text("返回书架 / 搜索", "Back to library / search"),
-            Some(draw_back),
-            design::Control::Quiet,
-            0.0,
-        )
-        .clicked()
+        if design::back_button(ui, l.text("返回书架 / 搜索", "Back to library / search")).clicked()
         {
             self.view = View::Catalog;
             self.detail_job = None;
@@ -600,17 +593,6 @@ impl State {
                                 self.resume(entry.clone(), settings);
                             }
                         });
-                        if design::control(
-                            ui,
-                            l.text("刷新目录", "Refresh chapters"),
-                            Some(|p, r, c| draw_repeat(p, r, c, false)),
-                            design::Control::Outline,
-                            0.0,
-                        )
-                        .clicked()
-                        {
-                            self.open_book(shown.clone());
-                        }
                     }
                 });
                 egui::CollapsingHeader::new(l.text("简介", "Description"))
@@ -641,13 +623,6 @@ impl State {
             ));
             ui.checkbox(&mut self.reverse, l.text("倒序", "Descending"));
             ui.checkbox(&mut self.unread_only, l.text("只看未读", "Unread only"));
-            if ui.button(l.text("全部标为已读", "Mark all read")).clicked() {
-                let mut entry = entry.clone();
-                for chapter in entry.chapters.clone() {
-                    entry.mark_read(chapter.key());
-                }
-                self.save(entry);
-            }
         });
         let mut chapters: Vec<_> = entry
             .chapters
