@@ -74,7 +74,7 @@ impl Chksz {
     async fn request(&self, endpoint: &str, params: &[(&str, String)]) -> Result<Value> {
         ensure!(
             !self.key.trim().is_empty(),
-            "Set CHKSZ_API_KEY in .env or Music sources settings"
+            "Set an API key in Music settings"
         );
         // Never return reqwest's error: its URL contains the API key.
         let response = self
@@ -287,6 +287,7 @@ impl MusicSource for Chksz {
                         &song.artist,
                     ),
                     album: preferred("album", &song.album),
+                    online: None,
                 },
                 cover: cover_url(&field(data, "picUrl"))
                     .or_else(|| cover_url(&field(data, "cover")))

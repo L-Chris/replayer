@@ -1,8 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ai;
 mod app;
 mod comics;
-mod env_config;
+mod credentials;
 mod jobs;
 mod lyrics;
 mod media;
@@ -14,6 +15,9 @@ mod renderer;
 mod selftest;
 mod settings;
 mod subtitles;
+mod sync;
+#[cfg(test)]
+mod test_config;
 mod torrent;
 mod updater;
 

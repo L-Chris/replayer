@@ -94,10 +94,13 @@ pub enum ReadingMode {
     LeftToRight,
     RightToLeft,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
+    pub image_selected: crate::ai::ModelRef,
+    #[serde(skip_serializing)]
     pub image_base_url: String,
+    #[serde(skip_serializing)]
     pub image_model: String,
     #[serde(skip)]
     pub image_key: String,
@@ -109,6 +112,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            image_selected: Default::default(),
             image_base_url: String::new(),
             image_model: String::new(),
             image_key: String::new(),

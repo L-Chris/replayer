@@ -40,6 +40,13 @@ impl App {
         records
     }
     pub(super) fn play_record(&mut self, record: Record, resume: bool) {
+        if let Some(song) = &record.online
+            && !std::path::Path::new(&record.path).is_file()
+        {
+            let position = resume.then(|| record.resume_at()).flatten();
+            self.start_online_record(song.clone(), position);
+            return;
+        }
         self.update_library();
         self.comic.flush();
         self.set_active_queue(record.music);
@@ -66,8 +73,17 @@ impl App {
         if !ui.is_rect_visible(rect) {
             return;
         }
-        self.metadata_cache
-            .request(&record.path, &self.metadata_requests);
+        if !record.path.starts_with("online://") {
+            self.metadata_cache
+                .request(&record.path, &self.metadata_requests);
+        } else if self
+            .metadata_cache
+            .get(&record.path)
+            .and_then(|v| v.as_ref())
+            .is_none()
+        {
+            self.request_online_art(record, ui.ctx());
+        }
         let art = self
             .metadata_cache
             .get(&record.path)
@@ -228,12 +244,7 @@ impl App {
         }
         if page == Page::Video {
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(
-                        l.text("本地视频与播放历史", "Local videos and playback history"),
-                    )
-                    .color(MUTED),
-                );
+                ui.label(RichText::new(l.text("已收藏的视频", "Favorite videos")).color(MUTED));
                 if ui.button(l.text("打开磁链", "Open magnet")).clicked() {
                     self.magnet_open = true;
                 }
@@ -258,8 +269,23 @@ impl App {
             }
         }
         let query = self.workspace.query.to_lowercase();
-        records.retain(|r|match page{Page::Music=>r.music,Page::Video=>!r.music,Page::Favorites=>r.favorite,Page::Recent=>r.played>0,Page::Downloads=>std::path::Path::new(&r.path).starts_with(self.settings.music.directory()),_=>true}
-            && (query.is_empty() || format!("{} {} {}",r.title,r.artist,r.album).to_lowercase().contains(&query)));
+        records.retain(|r| {
+            let included = match page {
+                Page::Music => r.music && r.favorite,
+                Page::Video => !r.music && r.favorite,
+                Page::Favorites => r.favorite,
+                Page::Recent => r.played > 0,
+                Page::Downloads => {
+                    std::path::Path::new(&r.path).starts_with(self.settings.music.directory())
+                }
+                _ => true,
+            };
+            included
+                && (query.is_empty()
+                    || format!("{} {} {}", r.title, r.artist, r.album)
+                        .to_lowercase()
+                        .contains(&query))
+        });
         ui.label(
             RichText::new(format!(
                 "{} {}",
@@ -274,22 +300,34 @@ impl App {
             if page == Page::Video {
                 self.media_cards(ui, &records);
             } else {
-                if page == Page::Music && !records.is_empty() {
+                if page == Page::Music && records.iter().any(|r| r.played > 0) {
                     ui.label(
                         RichText::new(l.text("最近聆听", "Recently listened"))
                             .size(20.0)
                             .strong(),
                     );
                     ui.add_space(10.0);
-                    self.media_cards(ui, &records.iter().take(4).cloned().collect::<Vec<_>>());
+                    self.media_cards(
+                        ui,
+                        &records
+                            .iter()
+                            .filter(|r| r.played > 0)
+                            .take(4)
+                            .cloned()
+                            .collect::<Vec<_>>(),
+                    );
                     ui.add_space(16.0);
                 }
                 if !records.is_empty() {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(l.text("全部歌曲", "All tracks"))
-                                .size(20.0)
-                                .strong(),
+                            RichText::new(if page == Page::Music {
+                                l.text("收藏歌曲", "Favorite tracks")
+                            } else {
+                                l.text("全部歌曲", "All tracks")
+                            })
+                            .size(20.0)
+                            .strong(),
                         );
                         if primary(ui, l.text("播放全部", "Play all")).clicked() {
                             self.play_record(records[0].clone(), false);
@@ -329,18 +367,35 @@ impl App {
             }
             if records.is_empty() {
                 ui.add_space(44.0);
-                ui.label(
-                    RichText::new(l.text("这里还没有内容", "Nothing here yet"))
-                        .size(22.0)
-                        .strong(),
-                );
-                ui.label(
-                    RichText::new(l.text(
-                        "打开文件后自动加入资料库，也可以直接拖入窗口",
-                        "Open files to add them to your library, or drag them into this window",
-                    ))
-                    .color(MUTED),
-                );
+                let favorites_page = matches!(page, Page::Music | Page::Video);
+                let (title, hint) = if favorites_page && !query.is_empty() {
+                    (
+                        l.text("没有找到匹配的收藏", "No matching favorites"),
+                        l.text("试试其他关键词", "Try another search"),
+                    )
+                } else if favorites_page {
+                    (
+                        if page == Page::Music {
+                            l.text("还没有收藏音乐", "No favorite music yet")
+                        } else {
+                            l.text("还没有收藏视频", "No favorite videos yet")
+                        },
+                        l.text(
+                            "播放时点击爱心收藏，也可以在最近播放中收藏",
+                            "Use the heart while playing or in Recently played to add favorites",
+                        ),
+                    )
+                } else {
+                    (
+                        l.text("这里还没有内容", "Nothing here yet"),
+                        l.text(
+                            "打开文件后自动加入资料库，也可以直接拖入窗口",
+                            "Open files to add them to your library, or drag them into this window",
+                        ),
+                    )
+                };
+                ui.label(RichText::new(title).size(22.0).strong());
+                ui.label(RichText::new(hint).color(MUTED));
             }
             if page == Page::Favorites {
                 ui.add_space(20.0);
@@ -393,13 +448,60 @@ impl App {
                 (&record.path, "album"),
                 Rect::from_min_max(
                     pos2(r.min.x + end + 12.0, r.min.y + 18.0),
-                    pos2(r.max.x - 116.0, r.max.y),
+                    pos2(
+                        r.max.x
+                            - if self.workspace.page == Page::Recent {
+                                154.0
+                            } else {
+                                116.0
+                            },
+                        r.max.y,
+                    ),
                 ),
             );
             album.add(egui::Label::new(RichText::new(&record.album).color(MUTED)).truncate());
         }
-        let favorite_rect =
-            Rect::from_center_size(pos2(r.max.x - 24.0, r.center().y), Vec2::splat(32.0));
+        let recent = self.workspace.page == Page::Recent;
+        let favorite_rect = Rect::from_center_size(
+            pos2(r.max.x - if recent { 62.0 } else { 24.0 }, r.center().y),
+            Vec2::splat(32.0),
+        );
+        if recent {
+            let rect =
+                Rect::from_center_size(pos2(r.max.x - 24.0, r.center().y), Vec2::splat(32.0));
+            let remove = ui
+                .interact(
+                    rect,
+                    ui.id().with((&record.path, "delete-history")),
+                    Sense::click(),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(
+                    self.settings
+                        .language
+                        .text("删除播放记录", "Remove playback history"),
+                );
+            remove.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    true,
+                    self.settings
+                        .language
+                        .text("删除播放记录", "Remove playback history"),
+                )
+            });
+            if response.hovered() || remove.hovered() || remove.has_focus() || response.has_focus()
+            {
+                if remove.hovered() || remove.has_focus() {
+                    ui.painter().rect_filled(rect, 6, SURFACE);
+                }
+                draw_trash(ui.painter(), rect.shrink(7.0), MUTED);
+            }
+            if remove.clicked() {
+                self.remove_history(&record.path);
+                return;
+            }
+        }
         if record.duration > 0.0 {
             ui.painter().text(
                 pos2(favorite_rect.min.x - 12.0, r.center().y),
@@ -434,6 +536,18 @@ impl App {
                 .clicked()
             {
                 self.play_record(record.clone(), false);
+                ui.close();
+            }
+            if record.played > 0
+                && ui
+                    .button(
+                        self.settings
+                            .language
+                            .text("删除播放记录", "Remove playback history"),
+                    )
+                    .clicked()
+            {
+                self.remove_history(&record.path);
                 ui.close();
             }
         });

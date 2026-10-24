@@ -14,9 +14,12 @@ mod images;
 mod preferences;
 mod reader;
 #[cfg(test)]
-mod visual_tests;
+pub(super) mod visual_tests;
 
 const COVER_RATIO: f32 = 3.0 / 4.0;
+const COVER_CACHE_COUNT: usize = 80;
+const COVER_CACHE_BYTES: usize = 32 * 1024 * 1024;
+const UPDATE_INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 fn chapter_neighbors(chapters: &[Chapter], index: usize) -> [Option<usize>; 2] {
     let Some(current) = chapters.get(index) else {
@@ -248,7 +251,7 @@ struct TranslationRequest {
     context: String,
     settings: domain::Settings,
     language: Language,
-    llm: crate::settings::LlmSettings,
+    ai: crate::ai::Settings,
 }
 struct TranslationJob {
     request: TranslationRequest,
@@ -271,6 +274,7 @@ pub(super) struct State {
     reader: Option<Reader>,
     status: String,
     covers: HashMap<String, Picture>,
+    cover_used: HashMap<String, u64>,
     cover_jobs: HashMap<String, Job<Arc<images::Prepared>>>,
     cover_errors: HashSet<String>,
     reverse: bool,
@@ -281,6 +285,7 @@ pub(super) struct State {
     update_done: usize,
     update_total: usize,
     update_after: Instant,
+    last_update_started: Option<Instant>,
     automatic_checked: bool,
     translations: VecDeque<TranslationRequest>,
     translation: Option<TranslationJob>,
@@ -315,7 +320,7 @@ impl State {
         );
         inner.add_space(12.0);
         if let Some(entry) = entry {
-            self.ensure_cover(&entry.book);
+            self.ensure_cover(&entry.book, ui.ctx());
             inner.horizontal_top(|ui| {
                 let cover_width = (width * 0.32).min((height - 80.0) * COVER_RATIO);
                 let (cover, _) = ui.allocate_exact_size(
@@ -441,10 +446,10 @@ impl State {
         let entries: Vec<_> = self
             .entries()
             .iter()
-            .filter(|e| e.progress.is_some())
+            .filter(|e| e.favorite)
             .cloned()
             .collect();
-        self.preview_entries(ui, settings, entries)
+        self.preview_entries(ui, settings, entries, false)
     }
     pub(super) fn favorite_preview(
         &mut self,
@@ -457,13 +462,14 @@ impl State {
             .filter(|e| e.favorite)
             .cloned()
             .collect();
-        self.preview_entries(ui, settings, entries)
+        self.preview_entries(ui, settings, entries, true)
     }
     fn preview_entries(
         &mut self,
         ui: &mut Ui,
         settings: &crate::settings::Settings,
         mut entries: Vec<Entry>,
+        show_favorite: bool,
     ) -> bool {
         if entries.is_empty() {
             return false;
@@ -475,7 +481,7 @@ impl State {
                 .strong(),
         );
         ui.add_space(12.0);
-        self.book_grid(
+        self.book_grid_with_controls(
             ui,
             &entries
                 .into_iter()
@@ -483,6 +489,7 @@ impl State {
                 .map(|e| e.book)
                 .collect::<Vec<_>>(),
             settings,
+            show_favorite,
         )
     }
     pub(super) fn reload_images(&mut self) {
@@ -524,6 +531,7 @@ impl State {
             reader: None,
             status: String::new(),
             covers: HashMap::new(),
+            cover_used: HashMap::new(),
             cover_jobs: HashMap::new(),
             cover_errors: HashSet::new(),
             reverse: false,
@@ -534,6 +542,7 @@ impl State {
             update_done: 0,
             update_total: 0,
             update_after: Instant::now(),
+            last_update_started: None,
             automatic_checked: false,
             translations: VecDeque::new(),
             translation: None,
@@ -542,7 +551,7 @@ impl State {
             translation_failed: 0,
         }
     }
-    fn entries(&self) -> &[Entry] {
+    pub(super) fn entries(&self) -> &[Entry] {
         self.library
             .as_ref()
             .map(|l| l.entries.as_slice())
@@ -552,12 +561,18 @@ impl State {
         let key = self.selected.as_ref()?.key();
         self.library.as_ref()?.get(&key).cloned()
     }
-    fn save(&mut self, entry: Entry) {
+    pub(super) fn save(&mut self, entry: Entry) {
         if let Some(library) = &mut self.library
             && let Err(error) = library.save(entry)
         {
             self.status = error.to_string();
         }
+    }
+    pub(super) fn import_synced(&mut self, entry: Entry) -> anyhow::Result<()> {
+        self.library
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("漫画资料库不可用 / Comic library is unavailable"))?
+            .save(entry)
     }
     pub fn flush(&mut self) {
         let Some(reader) = &mut self.reader else {
@@ -699,29 +714,26 @@ impl State {
             self.cover_jobs.remove(&key);
             match result {
                 Ok(image) => {
-                    if self.covers.len() >= 80
-                        && let Some(old) = self.covers.keys().next().cloned()
-                    {
-                        self.covers.remove(&old);
-                    }
+                    self.cover_used
+                        .insert(key.clone(), ctx.cumulative_frame_nr());
                     self.covers
                         .insert(key.clone(), Picture::prepared(ctx, &key, &image));
                 }
                 Err(_) => {
+                    self.cover_used.remove(&key);
                     self.cover_errors.insert(key);
                 }
             }
         }
+        self.trim_covers(ctx.cumulative_frame_nr());
         if !self.automatic_checked {
             self.automatic_checked = true;
-            if settings.comics.check_updates {
-                self.begin_updates(false);
-            }
+            self.refresh_on_home(settings, Instant::now());
         }
         if self.update_job.is_none()
             && Instant::now() >= self.update_after
-            && let Some(book) = self.update_queue.pop_front()
             && let Some(source) = &self.source
+            && let Some(book) = self.update_queue.pop_front()
         {
             let key = book.key();
             let source = source.clone();
@@ -771,34 +783,30 @@ impl State {
         } else {
             ctx.request_repaint_after(Duration::from_secs(1));
         }
+    }
+    pub(super) fn refresh_on_home(&mut self, settings: &crate::settings::Settings, now: Instant) {
         if settings.comics.check_updates
-            && self.update_job.is_none()
-            && self.update_queue.is_empty()
+            && self
+                .last_update_started
+                .is_none_or(|last| now.saturating_duration_since(last) >= UPDATE_INTERVAL)
         {
-            // Last attempts are persisted, so reopening does not repeatedly hit failures.
-            if self
-                .entries()
-                .iter()
-                .any(|e| e.favorite && domain::now().saturating_sub(e.checked) >= 6 * 3600)
-            {
-                self.begin_updates(false);
-            }
+            self.begin_updates(now);
         }
     }
-    fn begin_updates(&mut self, force: bool) {
+    fn begin_updates(&mut self, now: Instant) {
         if self.update_job.is_some() || !self.update_queue.is_empty() {
             return;
         }
         self.update_queue = self
             .entries()
             .iter()
-            .filter(|e| {
-                e.favorite && (force || domain::now().saturating_sub(e.checked) >= 6 * 3600)
-            })
+            .filter(|e| e.favorite)
             .map(|e| e.book.clone())
             .collect();
         self.update_total = self.update_queue.len();
         self.update_done = 0;
+        self.last_update_started = Some(now);
+        self.update_after = now;
     }
     fn open_book(&mut self, book: Book) {
         self.flush();
@@ -884,14 +892,34 @@ impl State {
         self.selected = Some(entry.book);
         self.read_chapter(index, settings, true);
     }
-    fn ensure_cover(&mut self, book: &Book) {
+    fn trim_covers(&mut self, frame: u64) {
+        let mut bytes: usize = self.covers.values().map(Picture::bytes).sum();
+        while self.covers.len() > COVER_CACHE_COUNT || bytes > COVER_CACHE_BYTES {
+            // Poll runs before drawing. Pin covers seen in the previous frame,
+            // including egui's extra layout pass, and newly completed uploads.
+            let victim = self
+                .covers
+                .keys()
+                .filter(|key| {
+                    self.cover_used
+                        .get(*key)
+                        .is_none_or(|used| frame.saturating_sub(*used) > 2)
+                        && !self.reader.as_ref().is_some_and(|r| r.book.key() == **key)
+                })
+                .min_by_key(|key| self.cover_used.get(*key).copied().unwrap_or(0))
+                .cloned();
+            let Some(key) = victim else { break };
+            bytes -= self.covers.remove(&key).unwrap().bytes();
+            self.cover_used.remove(&key);
+        }
+    }
+    fn ensure_cover(&mut self, book: &Book, ctx: &egui::Context) {
         let key = book.key();
-        if book.cover.is_empty()
-            || self.covers.contains_key(&key)
-            || self.cover_jobs.contains_key(&key)
-            || self.cover_errors.contains(&key)
-            || self.cover_jobs.len() >= 2
-        {
+        if self.covers.contains_key(&key) || self.cover_jobs.contains_key(&key) {
+            self.cover_used.insert(key, ctx.cumulative_frame_nr());
+            return;
+        }
+        if book.cover.is_empty() || self.cover_errors.contains(&key) || self.cover_jobs.len() >= 2 {
             return;
         }
         let Some(source) = &self.source else { return };
@@ -900,6 +928,8 @@ impl State {
         };
         let directory = domain::root().join("cache/covers");
         let cache_key = format!("cover:{}", book.cover);
+        self.cover_used
+            .insert(key.clone(), ctx.cumulative_frame_nr());
         self.cover_jobs.insert(
             key,
             Job::spawn(move |_| async move { images::fetch(directory, cache_key, url, 240).await }),
@@ -936,7 +966,7 @@ impl State {
         let context = reader.book.title.clone();
         let configuration = domain::translation::Config::load_with(
             &settings.comics,
-            &settings.llm,
+            &settings.ai,
             settings.language,
         )
         .ok();
@@ -968,7 +998,7 @@ impl State {
     fn queue_translation(&mut self, all: bool, settings: &crate::settings::Settings) {
         if let Err(error) = domain::translation::Config::load_with(
             &settings.comics,
-            &settings.llm,
+            &settings.ai,
             settings.language,
         ) {
             self.status = error.to_string();
@@ -997,7 +1027,7 @@ impl State {
                 context: reader.book.title.clone(),
                 settings: settings.comics.clone(),
                 language: settings.language,
-                llm: settings.llm.clone(),
+                ai: settings.ai.clone(),
             };
             if self
                 .translations
@@ -1029,7 +1059,7 @@ impl State {
                         if let Some(asset) = reader.assets.get(&active.request.index)
                             && domain::translation::Config::load_with(
                                 &settings.comics,
-                                &settings.llm,
+                                &settings.ai,
                                 settings.language,
                             )
                             .ok()
@@ -1104,7 +1134,7 @@ impl State {
                 let key = format!("{}:{}:{}", request.book, request.chapter, request.index);
                 let config = match domain::translation::Config::load_with(
                     &request.settings,
-                    &request.llm,
+                    &request.ai,
                     request.language,
                 ) {
                     Ok(c) => c,
@@ -1138,7 +1168,7 @@ impl State {
         }
         let config = match domain::translation::Config::load_with(
             &request.settings,
-            &request.llm,
+            &request.ai,
             request.language,
         ) {
             Ok(c) => c,

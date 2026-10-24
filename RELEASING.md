@@ -8,7 +8,9 @@ links the Rust application's MSVC runtime statically. No API key is needed to bu
 To release:
 
 1. Update the version in `Cargo.toml` and regenerate `Cargo.lock`.
-2. Commit, then create and push a matching stable tag such as `v0.2.0`.
+2. Add bilingual notes at `docs/releases/vX.Y.Z.md`, validate them with
+   `python scripts/validate-release-notes.py --tag vX.Y.Z --file docs/releases/vX.Y.Z.md`,
+   then commit and push a matching stable tag. Follow the release notes rules in `AGENTS.md`.
 3. The workflow rejects mismatched tags, runs tests, builds packages, installs the
    installer in the disposable runner, and runs the installed player's self-test.
 4. Only after the build passes does it create the GitHub Release and upload assets.
@@ -30,7 +32,9 @@ The installer is per-user (no elevation by default) and installs to
 `%LOCALAPPDATA%/Programs/replayer`. Updates reuse the currently running executable's
 directory, including a writable portable directory. The helper waits for the
 player to exit, verifies the hash again, installs, and restarts the player. Settings
-in `%LOCALAPPDATA%/replayer` and the user's `.env` are not included or overwritten.
+in `%LOCALAPPDATA%/replayer` and credentials in Windows Credential Manager are not
+included in packages or overwritten. The app does not read `.env`; it is reserved
+for explicit development tests.
 Export generated subtitles before restarting. Installation logs are under
 `%LOCALAPPDATA%/replayer/updates/VERSION/`.
 

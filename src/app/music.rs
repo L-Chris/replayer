@@ -1,6 +1,9 @@
 use super::*;
 use crate::queue::{Item, Source};
 
+pub(super) const TABS_TOP: f32 = 64.0;
+const CONTENT_TOP: f32 = TABS_TOP + design::CONTROL_HEIGHT + 16.0;
+
 fn item_is_music(item: &Item) -> bool {
     match &item.source {
         Source::File(path) => !std::path::Path::new(path)
@@ -394,12 +397,12 @@ impl App {
             .map(|p| (p.is_playing(), p.duration(), p.position()))
             .unwrap_or((false, 0.0, 0.0));
         let content = Rect::from_min_max(
-            playback.min + vec2(40.0, 86.0),
+            playback.min + vec2(40.0, CONTENT_TOP),
             playback.max - vec2(40.0, 24.0),
         );
-        let compact = content.height() < 280.0;
-        let show_lyrics = !compact && content.width() >= 560.0;
-        let (left, lyrics_rect) = if show_lyrics {
+        let short = content.height() < 280.0;
+        let compact = short || content.width() < 560.0;
+        let (left, lyrics_rect) = if !compact {
             let half = content.width() * 0.5;
             (
                 Rect::from_min_max(
@@ -408,6 +411,15 @@ impl App {
                 ),
                 Some(Rect::from_min_max(
                     pos2(content.min.x + half + 16.0, content.min.y),
+                    content.max,
+                )),
+            )
+        } else if !short {
+            // A narrow window or expanded queue uses a compact cover above lyrics.
+            (
+                Rect::from_min_size(content.min, vec2(content.width(), 88.0)),
+                Some(Rect::from_min_max(
+                    content.min + vec2(0.0, 104.0),
                     content.max,
                 )),
             )
@@ -423,13 +435,14 @@ impl App {
                     .min(left.width() - 20.0)
             };
             let (cover, text_rect) = if compact {
+                let text_height = (left.height() - 12.0).min(120.0);
                 let cover = Rect::from_center_size(
                     pos2(left.min.x + size * 0.5, left.center().y),
                     Vec2::splat(size),
                 );
                 let text = Rect::from_min_max(
-                    pos2(cover.max.x + 18.0, left.center().y - 60.0),
-                    pos2(left.max.x, left.center().y + 60.0),
+                    pos2(cover.max.x + 18.0, left.center().y - text_height * 0.5),
+                    pos2(left.max.x, left.center().y + text_height * 0.5),
                 );
                 (cover, text)
             } else {
@@ -557,7 +570,7 @@ impl App {
                 .max_rect(rect.shrink(10.0))
                 .layout(Layout::top_down(Align::Min)),
         );
-        ui.set_clip_rect(rect);
+        ui.set_clip_rect(rect.intersect(root.clip_rect()));
         let current = self.lyrics.current_index(position);
         let synced = self.lyrics.synced;
         let mut follow = self.lyrics_follow;

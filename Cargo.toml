@@ -1,6 +1,6 @@
 [package]
 name = "replayer"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
@@ -9,12 +9,12 @@ bytemuck = "1.25.2"
 cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
 eframe = "0.36"
+egui-phosphor = { version = "0.14", features = ["subset"] }
 # Playback and subtitle audio extraction do not use capture devices or filters.
 ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "format", "software-resampling", "software-scaling"] }
 rfd = "0.17.2"
 rtrb = "0.3"
 base64 = "0.22"
-dotenvy = "0.15"
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
@@ -25,6 +25,8 @@ unicode-width = "0.2"
 sha2 = "0.10"
 rusqlite = { version = "0.40", features = ["bundled"] }
 regex = "1"
+quick-xml = "0.42"
+ring = "0.17"
 semver = "1"
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
 axum = "0.8"
@@ -35,6 +37,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 tc_tea = { version = "0.2.1", default-features = false }
 replayer-image = { path = "crates/replayer-image" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
+
+[dev-dependencies]
+dotenvy = "0.15"
 
 [build-dependencies]
 winresource = "0.1.31"

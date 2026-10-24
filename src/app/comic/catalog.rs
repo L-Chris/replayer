@@ -63,14 +63,14 @@ impl State {
                     } else {
                         l.text("检查更新", "Check updates")
                     },
-                    Some(|p, r, c| draw_repeat(p, r, c, false)),
+                    Some(icons::refresh),
                     design::Control::Outline,
                     action_width,
                 )
                 .on_hover_text(l.text("检查收藏更新", "Check favorite comics for updates"))
                 .clicked()
                 {
-                    self.begin_updates(true);
+                    self.begin_updates(Instant::now());
                 }
             },
         );
@@ -439,6 +439,16 @@ impl State {
         books: &[Book],
         settings: &crate::settings::Settings,
     ) -> bool {
+        self.book_grid_with_controls(ui, books, settings, true)
+    }
+
+    pub(super) fn book_grid_with_controls(
+        &mut self,
+        ui: &mut Ui,
+        books: &[Book],
+        settings: &crate::settings::Settings,
+        show_favorite: bool,
+    ) -> bool {
         let l = settings.language;
         let columns = ((ui.available_width() + 16.0) / 164.0).floor().max(1.0) as usize;
         let width = ((ui.available_width() - 16.0 * columns.saturating_sub(1) as f32)
@@ -471,7 +481,7 @@ impl State {
                             );
                         }
                         if ui.clip_rect().intersects(cover) {
-                            self.ensure_cover(book);
+                            self.ensure_cover(book, ui.ctx());
                         }
                         let entry = self.library.as_ref().and_then(|lib| lib.get(&book.key()));
                         let selected = entry.is_some_and(|e| e.favorite);
@@ -526,17 +536,19 @@ impl State {
                                 );
                             }
                         }
-                        let fav_rect = Rect::from_min_size(
-                            pos2(cover.max.x - 40.0, cover.min.y + 8.0),
-                            vec2(32.0, 32.0),
-                        );
-                        ui.painter()
-                            .rect_filled(fav_rect, 7, Color32::from_black_alpha(170));
-                        if design::favorite_at(ui, ui.id().with("favorite"), fav_rect, selected)
-                            .on_hover_text(l.text("收藏 / 取消收藏", "Toggle favorite"))
-                            .clicked()
-                        {
-                            favorite = Some(book.clone());
+                        if show_favorite {
+                            let fav_rect = Rect::from_min_size(
+                                pos2(cover.max.x - 40.0, cover.min.y + 8.0),
+                                vec2(32.0, 32.0),
+                            );
+                            ui.painter()
+                                .rect_filled(fav_rect, 7, Color32::from_black_alpha(170));
+                            if design::favorite_at(ui, ui.id().with("favorite"), fav_rect, selected)
+                                .on_hover_text(l.text("收藏 / 取消收藏", "Toggle favorite"))
+                                .clicked()
+                            {
+                                favorite = Some(book.clone());
+                            }
                         }
                         if response.on_hover_text(&book.title).clicked() {
                             open = Some(book.clone());
@@ -596,7 +608,7 @@ impl State {
             if let Some(picture) = self.covers.get(&shown.key()) {
                 picture.cover(ui, rect, 8);
             }
-            self.ensure_cover(&shown);
+            self.ensure_cover(&shown, ui.ctx());
             ui.vertical(|ui| {
                 ui.label(RichText::new(&shown.title).size(29.0).strong());
                 ui.label(format!("{} · {}", shown.author, shown.site_name));

@@ -453,9 +453,13 @@ fn live_comic_image_translation() {
         )
         .await
         .unwrap();
-        let config =
-            translation::Config::load(&Settings::default(), crate::settings::Language::English)
-                .unwrap();
+        let configured = crate::test_config::settings().unwrap();
+        let config = translation::Config::load_with(
+            &configured.comics,
+            &configured.ai,
+            crate::settings::Language::English,
+        )
+        .unwrap();
         println!("Configured image model: {}", config.model_name());
         let start = std::time::Instant::now();
         let path = translation::translate(

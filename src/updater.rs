@@ -56,9 +56,13 @@ pub struct Updater {
     installer: Option<PathBuf>,
     tx: Sender<Event>,
     rx: Receiver<Event>,
+    pub dialog_visible: bool,
+    prompted_version: Option<String>,
+    manual_check: bool,
+    repaint: eframe::egui::Context,
 }
 impl Updater {
-    pub fn new(automatic: bool) -> Self {
+    pub fn new(automatic: bool, repaint: eframe::egui::Context) -> Self {
         let (tx, rx) = unbounded();
         let mut value = Self {
             status: Status::Idle,
@@ -66,9 +70,13 @@ impl Updater {
             installer: None,
             tx,
             rx,
+            dialog_visible: false,
+            prompted_version: None,
+            manual_check: false,
+            repaint,
         };
         if automatic && cfg!(target_os = "windows") && !cfg!(debug_assertions) {
-            value.check();
+            value.start_check(false);
         }
         value
     }
@@ -79,6 +87,13 @@ impl Updater {
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 Event::Checked(Ok(update)) => {
+                    if let Some(update) = &update {
+                        self.dialog_visible = self.manual_check
+                            || self.prompted_version.as_deref() != Some(&update.version);
+                        self.prompted_version = Some(update.version.clone());
+                    } else {
+                        self.dialog_visible = false;
+                    }
                     self.status = if update.is_some() {
                         Status::Available
                     } else {
@@ -100,16 +115,23 @@ impl Updater {
         }
     }
     pub fn check(&mut self) {
+        self.start_check(true);
+    }
+    fn start_check(&mut self, manual: bool) {
         if self.busy() {
             return;
         }
         self.update = None;
         self.installer = None;
         self.status = Status::Checking;
+        self.manual_check = manual;
+        self.dialog_visible = false;
         let tx = self.tx.clone();
+        let repaint = self.repaint.clone();
         spawn(move || {
             let result = runtime().and_then(|rt| rt.block_on(check()));
             let _ = tx.send(Event::Checked(result.map_err(|e| format!("{e:#}"))));
+            repaint.request_repaint();
         });
     }
     pub fn download(&mut self) {
@@ -123,10 +145,13 @@ impl Updater {
             received: 0,
             total: update.asset.size,
         };
+        self.dialog_visible = true;
         let tx = self.tx.clone();
+        let repaint = self.repaint.clone();
         spawn(move || {
             let result = runtime().and_then(|rt| rt.block_on(download(&update, &tx)));
             let _ = tx.send(Event::Downloaded(result.map_err(|e| format!("{e:#}"))));
+            repaint.request_repaint();
         });
     }
     pub fn install(&mut self) -> Result<()> {
@@ -140,6 +165,18 @@ impl Updater {
             self.status = Status::Failed(format!("{error:#}"));
         }
         result
+    }
+    pub fn can_install(&self) -> bool {
+        self.installer.is_some()
+    }
+    #[cfg(test)]
+    pub(crate) fn offer_fixture(&mut self) {
+        self.tx.send(Event::Checked(Ok(Some(Update {
+            version: "9.0.0".into(),
+            notes: "## Fix\n\n- Keep controls visible.\n\n<details>\n<summary>中文更新说明</summary>\n\n## Fix\n\n- 修复按钮遮挡。\n\n</details>".into(),
+            asset: Asset { name: String::new(), browser_download_url: String::new(), digest: None, size: 0 },
+        })))).unwrap();
+        self.poll();
     }
 }
 fn spawn(work: impl FnOnce() + Send + 'static) {
@@ -389,6 +426,41 @@ pub fn localized_notes(notes: &str, chinese: bool) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_prompts_once_per_version_manual_checks_reopen_and_failures_keep_retry_state() {
+        let mut updater = Updater::new(false, Default::default());
+        updater.offer_fixture();
+        assert!(updater.dialog_visible);
+        updater.dialog_visible = false;
+        updater.offer_fixture();
+        assert!(!updater.dialog_visible);
+        updater.manual_check = true;
+        updater.offer_fixture();
+        assert!(updater.dialog_visible);
+        updater
+            .tx
+            .send(Event::Downloaded(Err("network unavailable".into())))
+            .unwrap();
+        updater.poll();
+        assert!(updater.update.is_some());
+        assert!(updater.dialog_visible);
+        assert!(!updater.can_install());
+        updater
+            .tx
+            .send(Event::Downloaded(Ok(PathBuf::from("fixture-installer"))))
+            .unwrap();
+        updater.poll();
+        assert!(updater.can_install());
+        updater.status = Status::Failed("installer failed".into());
+        assert!(updater.can_install());
+        updater.dialog_visible = false;
+        updater
+            .tx
+            .send(Event::Checked(Err("offline".into())))
+            .unwrap();
+        updater.poll();
+        assert!(!updater.dialog_visible);
+    }
     fn release(version: &str) -> Release {
         let data = b"installer";
         let name = format!("replayer-{version}-windows-x86_64-setup.exe");

@@ -24,6 +24,54 @@ pub struct SearchPage {
     pub songs: Vec<Song>,
     pub has_more: bool,
 }
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OnlineSong {
+    pub source: String,
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub cover: Option<String>,
+}
+impl OnlineSong {
+    pub fn key(&self) -> String {
+        let platform = match self.source.as_str() {
+            "chksz-163" => "netease",
+            "chksz-qq" => "qq",
+            "chksz-kugou" => "kugou",
+            other => other,
+        };
+        crate::comics::digest(format!("{platform}\0{}", self.id).as_bytes())
+    }
+    pub fn song(&self) -> Result<Song> {
+        let source = sources("")?
+            .into_iter()
+            .map(|s| s.descriptor().id)
+            .find(|id| *id == self.source)
+            .ok_or_else(|| anyhow::anyhow!("音乐源暂不可用 / Music source is unavailable"))?;
+        Ok(Song {
+            source,
+            id: self.id.clone(),
+            title: self.title.clone(),
+            artist: self.artist.clone(),
+            album: self.album.clone(),
+            cover: self.cover.as_ref().and_then(|v| v.parse().ok()),
+        })
+    }
+}
+impl From<&Song> for OnlineSong {
+    fn from(song: &Song) -> Self {
+        Self {
+            source: song.source.into(),
+            id: song.id.clone(),
+            title: song.title.clone(),
+            artist: song.artist.clone(),
+            album: song.album.clone(),
+            cover: song.cover.as_ref().map(ToString::to_string),
+        }
+    }
+}
 pub struct ResolvedTrack {
     pub url: reqwest::Url,
     pub extension: String,
@@ -63,7 +111,7 @@ pub fn sources(key: &str) -> Result<Vec<Arc<dyn MusicSource>>> {
     chksz::sources("https://api.chksz.com", key)
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
     pub source: String,
@@ -93,7 +141,7 @@ impl Settings {
         if !self.api_key.trim().is_empty() {
             return Ok(self.api_key.trim().into());
         }
-        crate::env_config::get("CHKSZ_API_KEY").map(|v| v.unwrap_or_default())
+        Ok(String::new())
     }
 }
 

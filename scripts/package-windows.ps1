@@ -29,7 +29,7 @@ try {
     Copy-Item -LiteralPath 'MUSIC_PLAYBACK.md' -Destination $stage
     Copy-Item -LiteralPath 'MUSIC_SOURCES.md' -Destination $stage
     Copy-Item -LiteralPath 'COMICS.md' -Destination $stage
-    Copy-Item -LiteralPath '.env.example' -Destination $stage
+    Copy-Item -LiteralPath 'CLOUD_SYNC.md' -Destination $stage
     Copy-Item -LiteralPath 'THIRD_PARTY.md' -Destination $stage
     Copy-Item -LiteralPath 'licenses' -Destination $stage -Recurse
     Copy-Item -LiteralPath (Join-Path $ffmpeg 'LICENSE.txt') -Destination (Join-Path $stage 'FFmpeg-LICENSE.txt')

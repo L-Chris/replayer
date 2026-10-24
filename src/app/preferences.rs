@@ -8,15 +8,30 @@ impl App {
     }
     pub(super) fn preferences_page(&mut self, ui: &mut Ui) {
         let language = self.settings.language;
-        ui.heading(language.text("设置", "Settings"));
-        ui.label(
-            RichText::new(language.text(
-                "管理播放体验与 AI 服务",
-                "Playback experience and AI services",
-            ))
-            .color(MUTED),
-        );
-        ui.add_space(20.0);
+        let dirty_before = self.preferences_draft != self.settings;
+        ui.horizontal(|ui| {
+            ui.heading(language.text("设置", "Settings"));
+            if !matches!(
+                self.preferences_tab,
+                PrefTab::Providers | PrefTab::Cloud | PrefTab::About
+            ) {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let response =
+                        design::control(ui, "", Some(more_icon), design::Control::Quiet, 34.0)
+                            .on_hover_text(language.text("更多", "More"));
+                    egui::Popup::menu(&response).show(|ui| {
+                        if ui
+                            .button(language.text("恢复默认", "Restore defaults"))
+                            .clicked()
+                        {
+                            self.reset_preferences(language);
+                            ui.close();
+                        }
+                    });
+                });
+            }
+        });
+        ui.add_space(16.0);
         let rect = ui.available_rect_before_wrap();
         let nav_width = if rect.width() > 680.0 { 155.0 } else { 110.0 };
         let mut nav = workspace::child(
@@ -26,10 +41,12 @@ impl App {
         );
         nav.spacing_mut().item_spacing.y = 10.0;
         for (tab, zh, en) in [
-            (PrefTab::General, "外观与语言", "Appearance"),
+            (PrefTab::General, "通用", "General"),
+            (PrefTab::Providers, "AI 提供商", "AI providers"),
             (PrefTab::Subtitles, "AI 字幕", "AI subtitles"),
-            (PrefTab::MusicSources, "音乐源", "Music sources"),
+            (PrefTab::MusicSources, "音乐相关", "Music"),
             (PrefTab::Comics, "漫画相关", "Comics"),
+            (PrefTab::Cloud, "云同步", "Cloud sync"),
             (PrefTab::About, "关于", "About"),
         ] {
             design::selectable_value(
@@ -41,7 +58,10 @@ impl App {
         }
         let body = Rect::from_min_max(
             pos2(rect.min.x + nav_width + 22.0, rect.min.y),
-            pos2(rect.max.x, rect.max.y - 68.0),
+            pos2(
+                rect.max.x,
+                rect.max.y - if dirty_before { 52.0 } else { 0.0 },
+            ),
         );
         let mut content = workspace::child(ui, "settings-content", body);
         design::scroll()
@@ -56,355 +76,293 @@ impl App {
                         ui.set_width(ui.available_width());
                         match self.preferences_tab {
                             PrefTab::General => self.preferences_general(ui),
+                            PrefTab::Providers => self.preferences_providers(ui),
                             PrefTab::Subtitles => self.preferences_subtitles(ui),
                             PrefTab::MusicSources => self.preferences_music_sources(ui),
                             PrefTab::Comics => self.preferences_comics(ui),
+                            PrefTab::Cloud => self.preferences_cloud(ui),
                             PrefTab::About => self.about(ui, &ui.ctx().clone()),
                         }
                     });
             });
-        let mut footer = workspace::child(
-            ui,
-            "settings-footer",
-            Rect::from_min_max(pos2(body.min.x, rect.max.y - 57.0), rect.max),
-        );
-        footer.horizontal(|ui| {
-            if ui
-                .button(language.text("恢复默认", "Restore defaults"))
-                .clicked()
-            {
-                self.reset_preferences(language);
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if workspace::primary(ui, language.text("保存设置", "Save settings")).clicked()
-                {
+        let dirty = self.preferences_draft != self.settings;
+        if dirty != dirty_before {
+            ui.ctx().request_repaint();
+        }
+        if dirty {
+            let mut attempted_save = false;
+            let mut footer = workspace::child(
+                ui,
+                "settings-footer",
+                Rect::from_min_max(pos2(body.min.x, rect.max.y - 42.0), rect.max),
+            );
+            footer.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if workspace::primary(ui, language.text("保存", "Save")).clicked() {
                     self.save_preferences(language);
+                    attempted_save = true;
+                    ui.ctx().request_repaint();
                 }
             });
+            if attempted_save {
+                ui.ctx()
+                    .data_mut(|d| d.remove::<Feedback>(ui.id().with("settings-feedback-state")));
+            }
+        }
+        self.preferences_feedback(ui, rect, dirty);
+    }
+    fn preferences_feedback(&self, ui: &Ui, rect: Rect, dirty: bool) {
+        let id = ui.id().with("settings-feedback-state");
+        if self.config_message.is_empty() {
+            ui.ctx().data_mut(|d| d.remove::<Feedback>(id));
+            return;
+        }
+        let notice = ui.ctx().data_mut(|data| {
+            let previous = data.get_temp::<Feedback>(id);
+            let notice = previous
+                .filter(|n| n.message == self.config_message)
+                .unwrap_or_else(|| Feedback {
+                    message: self.config_message.clone(),
+                    until: Instant::now() + Duration::from_secs(4),
+                });
+            data.insert_temp(id, notice.clone());
+            notice
         });
-        if !self.config_message.is_empty() {
-            footer.small(&self.config_message);
+        if let Some(remaining) = notice.until.checked_duration_since(Instant::now()) {
+            egui::Area::new(ui.id().with("settings-feedback"))
+                .order(egui::Order::Foreground)
+                .interactable(false)
+                .pivot(egui::Align2::RIGHT_BOTTOM)
+                .fixed_pos(rect.max - vec2(0.0, if dirty { 54.0 } else { 0.0 }))
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::new()
+                        .fill(SURFACE)
+                        .corner_radius(8)
+                        .inner_margin(10)
+                        .show(ui, |ui| {
+                            ui.set_max_width(360.0);
+                            ui.label(&notice.message);
+                        });
+                });
+            ui.ctx().request_repaint_after(remaining);
         }
     }
     fn save_preferences(&mut self, language: Language) {
-        if self.preferences_tab == PrefTab::Comics {
-            self.config_message = match self.settings.save() {
-                Ok(()) => {
-                    self.comic.reload_images();
-                    language.text("已保存", "Saved").into()
-                }
-                Err(error) => error.to_string(),
-            };
-            return;
-        }
-        if self.preferences_tab != PrefTab::Subtitles {
-            let previous = self.settings.music.clone();
-            self.settings.music = self.online_music.draft.clone();
-            self.config_message = match self.settings.save() {
-                Ok(()) => {
-                    if previous.source != self.settings.music.source {
-                        self.online_music.clear_search();
-                    }
-                    language.text("已保存", "Saved").into()
-                }
-                Err(error) => {
-                    self.settings.music = previous;
-                    error.to_string()
-                }
-            };
-            return;
-        }
-        match subtitles::LlmConfig::load_with(&self.llm_draft) {
-            Ok(_) => {
-                let previous = self.settings.llm.clone();
-                self.settings.llm = self.llm_draft.clone();
-                match self.settings.save() {
-                    Ok(()) => {
-                        self.config_message = language
-                            .text(
-                                "已保存 · 下次生成时生效",
-                                "Saved · Applies to the next generation",
-                            )
-                            .into()
-                    }
-                    Err(error) => {
-                        self.settings.llm = previous;
-                        self.config_message = error.to_string();
-                    }
-                }
+        let result = self
+            .preferences_draft
+            .ai
+            .validate()
+            .and_then(|_| subtitles::LlmConfig::validate_options(&self.preferences_draft.llm))
+            .and_then(|_| self.preferences_draft.save());
+        match result {
+            Ok(()) => {
+                self.settings = self.preferences_draft.clone();
+                self.online_music.clear_search();
+                self.comic.reload_images();
+                self.config_message = language.text("已保存", "Saved").into();
             }
             Err(error) => self.config_message = language.error(&error.to_string()),
         }
     }
     fn reset_preferences(&mut self, language: Language) {
-        if self.preferences_tab == PrefTab::Comics {
-            self.settings.comics = Default::default();
-            self.config_message = language
-                .text(
-                    "已恢复默认值，点击保存应用",
-                    "Defaults restored; save to apply",
-                )
-                .into();
-            return;
-        }
-        if self.preferences_tab == PrefTab::MusicSources {
-            self.online_music.draft = Default::default();
-            self.config_message = language
-                .text(
-                    "已恢复默认值，点击保存应用",
-                    "Defaults restored; save to apply",
-                )
-                .into();
-            return;
-        }
-        self.llm_draft = Default::default();
-        match subtitles::LlmConfig::defaults() {
-            Ok(mut defaults) => {
-                self.env_key_available = !defaults.api_key.is_empty();
-                defaults.api_key.clear();
-                self.llm_defaults = defaults;
-                self.config_message = language
-                    .text(
-                        "已恢复默认值，点击保存应用",
-                        "Defaults restored; save to apply",
-                    )
-                    .into();
+        match self.preferences_tab {
+            PrefTab::General => self.preferences_draft.language = Language::Chinese,
+            PrefTab::Subtitles => {
+                let selected = self.preferences_draft.llm.selected.clone();
+                self.preferences_draft.llm = crate::settings::LlmSettings {
+                    selected,
+                    ..Default::default()
+                };
             }
-            Err(error) => self.config_message = language.error(&error.to_string()),
+            PrefTab::Comics => {
+                let image_selected = self.preferences_draft.comics.image_selected.clone();
+                self.preferences_draft.comics = crate::comics::Settings {
+                    image_selected,
+                    ..Default::default()
+                };
+            }
+            PrefTab::MusicSources => {
+                let api_key = self.preferences_draft.music.api_key.clone();
+                self.preferences_draft.music = crate::music_sources::Settings {
+                    api_key,
+                    ..Default::default()
+                };
+            }
+            PrefTab::Providers | PrefTab::Cloud | PrefTab::About => return,
         }
+        self.config_message = language.text("已恢复默认值", "Defaults restored").into();
     }
     fn preferences_general(&mut self, ui: &mut Ui) {
         let language = self.settings.language;
         ui.add_space(6.0);
-        ui.label(
-            RichText::new(language.text("界面语言", "Interface language"))
-                .strong()
-                .size(16.0),
-        );
-        ui.label(
-            RichText::new(language.text(
-                "语言同时用于界面与 AI 字幕",
-                "Language applies to the interface and AI subtitles",
-            ))
-            .color(MUTED),
-        );
-        ui.horizontal(|ui| {
-            design::selectable_value(
-                ui,
-                &mut self.settings.language,
-                Language::Chinese,
-                "简体中文",
-            );
-            design::selectable_value(
-                ui,
-                &mut self.settings.language,
-                Language::English,
-                "English",
-            );
-        });
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new(language.text("播放队列", "Play queue"))
-                .strong()
-                .size(16.0),
-        );
-        ui.label(
-            RichText::new(language.text(
-                "队列自动保存，下次启动时恢复",
-                "The queue is saved automatically and restored on startup",
-            ))
-            .color(MUTED),
+        form_row(
+            ui,
+            language.text("界面语言", "Interface language"),
+            language,
+            |ui| {
+                design::selectable_value(
+                    ui,
+                    &mut self.preferences_draft.language,
+                    Language::Chinese,
+                    "简体中文",
+                );
+                design::selectable_value(
+                    ui,
+                    &mut self.preferences_draft.language,
+                    Language::English,
+                    "English",
+                );
+            },
         );
     }
+
     fn preferences_subtitles(&mut self, ui: &mut Ui) {
-        let language = self.settings.language;
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new(language.text("AI 字幕", "AI subtitles"))
-                .strong()
-                .size(16.0),
-        );
-        let mut bilingual = self
-            .llm_draft
-            .bilingual
-            .or(self.llm_defaults.bilingual)
-            .unwrap_or(false);
-        if ui
-            .checkbox(
+        let l = self.settings.language;
+        let settings = &mut self.preferences_draft.llm;
+        form_row(ui, l.text("字幕模型", "Subtitle model"), l, |ui| {
+            providers::model_selector(ui, &mut settings.selected, &self.preferences_draft.ai, l)
+                .on_hover_text(l.text(
+                    "请选择支持音频输入的模型",
+                    "Choose a model that accepts audio input",
+                ));
+        });
+        let mut bilingual = settings.bilingual.unwrap_or(false);
+        form_row(ui, l.text("双语字幕", "Bilingual subtitles"), l, |ui| {
+            if design::toggle(
+                ui,
                 &mut bilingual,
-                language.text(
-                    "双语字幕（原文 + 目标语言）",
-                    "Bilingual subtitles (original + target)",
-                ),
+                l.text("双语字幕", "Bilingual subtitles"),
             )
             .changed()
-        {
-            self.llm_draft.bilingual = Some(bilingual);
-        }
-        ui.label(
-            RichText::new(language.text(
-                "使用兼容 OpenAI 的音频模型 · 留空继承 .env",
-                "OpenAI-compatible audio models · Empty fields inherit .env",
-            ))
-            .color(MUTED),
-        );
-        field(
-            ui,
-            language.text("接口地址", "Base URL"),
-            &mut self.llm_draft.base_url,
-            &self.llm_defaults.base_url,
-            false,
-        );
-        field(
-            ui,
-            language.text("模型", "Model"),
-            &mut self.llm_draft.model,
-            &self.llm_defaults.model,
-            false,
-        );
-        let key_hint = if self.env_key_available {
-            language.text(
-                "已从环境配置读取 · 留空继续使用",
-                "Available from environment · Leave empty to inherit",
+            {
+                settings.bilingual = Some(bilingual);
+            }
+        });
+        form_row(ui, l.text("音频分段", "Chunk duration"), l, |ui| {
+            ui.add(
+                design::text_edit(&mut settings.chunk_seconds)
+                    .desired_width(80.0)
+                    .hint_text("120"),
             )
-        } else {
-            language.text("输入 API Key", "Enter API key")
-        };
-        field(ui, "API Key", &mut self.llm_draft.api_key, key_hint, true);
-        ui.small(
-            RichText::new(language.text(
-                "密钥仅本次运行有效；长期使用请配置 .env",
-                "Keys stay in this session; use .env for persistence",
-            ))
-            .color(MUTED),
-        );
-        ui.add_space(4.0);
-        ui.collapsing(language.text("高级选项", "Advanced"), |ui| {
-            let effort = if self.llm_draft.reasoning_effort.is_empty() {
-                self.llm_defaults.reasoning_effort.as_str()
-            } else {
-                self.llm_draft.reasoning_effort.as_str()
-            };
-            egui::ComboBox::from_label(language.text("思考等级", "Reasoning effort"))
-                .selected_text(if effort.is_empty() || effort == "default" {
-                    language.text("default（不传参数）", "default (omit parameter)")
-                } else {
-                    effort
-                })
+            .on_hover_text(l.text("5–120 秒", "5–120 seconds"));
+            ui.label(l.text("秒", "seconds"));
+        });
+        form_row(ui, l.text("并发请求", "Parallel requests"), l, |ui| {
+            ui.add(
+                egui::DragValue::new(&mut self.preferences_draft.subtitle_concurrency)
+                    .range(1..=6)
+                    .speed(1.0),
+            );
+        });
+        form_row(ui, l.text("思考等级", "Reasoning effort"), l, |ui| {
+            egui::ComboBox::from_id_salt("reasoning_effort")
+                .width(ui.available_width())
+                .selected_text(
+                    if settings.reasoning_effort.is_empty()
+                        || settings.reasoning_effort == "default"
+                    {
+                        l.text("默认（不传参数）", "Default (omit parameter)")
+                    } else {
+                        &settings.reasoning_effort
+                    },
+                )
                 .show_ui(ui, |ui| {
-                    design::selectable_value(
-                        ui,
-                        &mut self.llm_draft.reasoning_effort,
-                        String::new(),
-                        language.text("跟随 .env", "Use .env"),
-                    );
                     for effort in [
                         "default", "none", "minimal", "low", "medium", "high", "xhigh", "max",
                     ] {
                         design::selectable_value(
                             ui,
-                            &mut self.llm_draft.reasoning_effort,
-                            effort.to_owned(),
-                            effort,
+                            &mut settings.reasoning_effort,
+                            effort.into(),
+                            if effort == "default" {
+                                l.text("默认（不传参数）", "Default (omit parameter)")
+                            } else {
+                                effort
+                            },
                         );
                     }
                 });
-            ui.small(language.text(
-                "default 不传参数；其他等级需模型支持",
-                "default omits the parameter; other levels require model support",
-            ));
-            egui::ComboBox::from_label(language.text("上传音频格式", "Upload audio format"))
-                .selected_text(if self.llm_draft.audio_format.is_empty() {
-                    language.text("跟随 .env（默认 MP3）", "Use .env (MP3 by default)")
-                } else {
-                    &self.llm_draft.audio_format
-                })
+        });
+        form_row(ui, l.text("音频格式", "Audio format"), l, |ui| {
+            egui::ComboBox::from_id_salt("audio_format")
+                .width(ui.available_width())
+                .selected_text(settings.audio_format.to_uppercase())
                 .show_ui(ui, |ui| {
-                    design::selectable_value(
-                        ui,
-                        &mut self.llm_draft.audio_format,
-                        String::new(),
-                        language.text("跟随 .env", "Use .env"),
-                    );
-                    design::selectable_value(
-                        ui,
-                        &mut self.llm_draft.audio_format,
-                        "mp3".into(),
-                        "MP3",
-                    );
-                    design::selectable_value(
-                        ui,
-                        &mut self.llm_draft.audio_format,
-                        "wav".into(),
-                        "WAV",
-                    );
-                });
-            egui::ComboBox::from_label(language.text("音频编码", "Audio encoding"))
-                .selected_text(if self.llm_draft.audio_encoding.is_empty() {
-                    language.text("跟随 .env", "Use .env")
-                } else {
-                    &self.llm_draft.audio_encoding
-                })
-                .show_ui(ui, |ui| {
-                    design::selectable_value(
-                        ui,
-                        &mut self.llm_draft.audio_encoding,
-                        String::new(),
-                        language.text("跟随 .env", "Use .env"),
-                    );
-                    for value in ["auto", "data_url", "base64"] {
+                    for format in ["mp3", "wav"] {
                         design::selectable_value(
                             ui,
-                            &mut self.llm_draft.audio_encoding,
-                            value.to_owned(),
-                            value,
+                            &mut settings.audio_format,
+                            format.into(),
+                            format.to_uppercase(),
                         );
                     }
                 });
-            field(
-                ui,
-                language.text("音频分段（5–120 秒）", "Chunk duration (5–120 seconds)"),
-                &mut self.llm_draft.chunk_seconds,
-                &self.llm_defaults.chunk_seconds,
-                false,
-            );
         });
-        ui.horizontal(|ui| {
-            ui.label(language.text("并发请求", "Parallel requests"));
-            let fraction = (self.settings.subtitle_concurrency.clamp(1, 6) - 1) as f32 / 5.0;
-            let (track, response) = hslider(ui, 120.0, 34.0, fraction, 3.0, false, 1.0);
-            if (response.clicked() || response.dragged())
-                && let Some(p) = response.interact_pointer_pos()
-            {
-                self.settings.subtitle_concurrency =
-                    (((p.x - track.min.x) / track.width()).clamp(0.0, 1.0) * 5.0).round() as usize
-                        + 1;
-            }
-            ui.add(
-                egui::DragValue::new(&mut self.settings.subtitle_concurrency)
-                    .range(1..=6)
-                    .speed(1.0),
-            );
+        form_row(ui, l.text("音频编码", "Audio encoding"), l, |ui| {
+            egui::ComboBox::from_id_salt("audio_encoding")
+                .width(ui.available_width())
+                .selected_text(if settings.audio_encoding == "auto" {
+                    l.text("自动", "Automatic")
+                } else {
+                    &settings.audio_encoding
+                })
+                .show_ui(ui, |ui| {
+                    for encoding in ["auto", "data_url", "base64"] {
+                        design::selectable_value(
+                            ui,
+                            &mut settings.audio_encoding,
+                            encoding.into(),
+                            if encoding == "auto" {
+                                l.text("自动", "Automatic")
+                            } else {
+                                encoding
+                            },
+                        );
+                    }
+                });
         });
-        ui.small(
-            RichText::new(language.text(
-                "模型配置与并发数用于下一次生成",
-                "Model settings and concurrency apply to the next generation",
-            ))
-            .color(MUTED),
-        );
     }
 }
 
-fn field(ui: &mut Ui, label: &str, value: &mut String, hint: &str, password: bool) {
-    ui.label(label);
-    ui.add(
-        design::text_edit(value)
-            .id_salt(label)
-            .hint_text(hint)
-            .password(password)
-            .desired_width(f32::INFINITY),
-    );
+/// Settings use a shared label column and a bounded control column, including
+/// rows with checkboxes or auxiliary actions that have no label of their own.
+pub(super) fn form_row<R>(
+    ui: &mut Ui,
+    label: &str,
+    language: Language,
+    contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let label_width = match language {
+        Language::Chinese => 96.0,
+        Language::English => 140.0,
+    };
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(
+            vec2(label_width, design::CONTROL_HEIGHT),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_min_size(vec2(label_width, design::CONTROL_HEIGHT));
+                ui.add(egui::Label::new(RichText::new(label).color(MUTED)).wrap());
+            },
+        );
+        let width = ui.available_width().min(440.0);
+        ui.allocate_ui_with_layout(
+            vec2(width, design::CONTROL_HEIGHT),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_min_height(design::CONTROL_HEIGHT);
+                contents(ui)
+            },
+        )
+        .inner
+    })
+    .inner
+}
+
+#[derive(Clone)]
+struct Feedback {
+    message: String,
+    until: Instant,
+}
+fn more_icon(p: &Painter, r: Rect, c: Color32) {
+    icons::paint(p, r, c, icons::DOTS_THREE);
 }

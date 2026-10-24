@@ -20,16 +20,17 @@ impl State {
         let pointer = ui.input(|i| i.pointer.hover_pos());
         let bar = controls::layout(ui, screen, l);
         let near_edge = pointer.is_some_and(|p| {
-            screen.contains(p) && (p.y < screen.min.y + 52.0 || p.y > bar.footer.min.y - 12.0)
+            screen.contains(p)
+                && (p.y < screen.min.y + controls::BAR_HEIGHT + 8.0
+                    || p.y > bar.footer.min.y - 12.0)
         });
         if near_edge || egui::Popup::is_any_open(ui.ctx()) || ui.ctx().dragged_id().is_some() {
             reader.toolbar_until = Instant::now() + Duration::from_secs(2);
         }
         if ui.input(|i| i.key_pressed(Key::Escape)) {
-            let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+            let fullscreen = window::fullscreen(ui.ctx());
             if fullscreen {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                window::set_fullscreen(ui.ctx(), false);
             } else if reader.sidebar {
                 reader.sidebar = false;
             } else {
@@ -60,7 +61,7 @@ impl State {
             }
         }
         let controls = Instant::now() < reader.toolbar_until;
-        let header = Rect::from_min_size(screen.min, vec2(screen.width(), 48.0));
+        let header = Rect::from_min_size(screen.min, vec2(screen.width(), controls::BAR_HEIGHT));
         let footer = bar.footer;
         let side_width = if reader.sidebar {
             (screen.width() * 0.21).clamp(200.0, 270.0)
@@ -68,38 +69,13 @@ impl State {
             0.0
         };
         let canvas_outer = Rect::from_min_max(
-            screen.min + vec2(20.0, 56.0),
+            screen.min + vec2(20.0, 8.0),
             pos2(
                 screen.max.x - side_width - if reader.sidebar { 32.0 } else { 20.0 },
-                footer.min.y - 10.0,
+                screen.max.y - 8.0,
             ),
         );
         let canvas = canvas_outer;
-        if controls {
-            ui.painter().rect_filled(header, 0, BACKGROUND);
-            ui.painter().line_segment(
-                [header.left_bottom(), header.right_bottom()],
-                Stroke::new(1.0, design::LINE),
-            );
-            let caption = Rect::from_min_max(
-                screen.min + vec2(22.0, 8.0),
-                pos2(
-                    screen.max.x - window::CONTROLS_WIDTH - 12.0,
-                    screen.min.y + 44.0,
-                ),
-            );
-            let mut caption_ui = workspace::child(ui, "reader-caption", caption);
-            caption_ui.horizontal(|ui| {
-                if design::back_button(ui, l.text("返回目录", "Back to chapters")).clicked() {
-                    back = true;
-                }
-                ui.add(egui::Label::new(RichText::new(&reader.book.title).strong()).truncate());
-                ui.label(RichText::new("›").color(MUTED));
-                ui.add(
-                    egui::Label::new(RichText::new(&reader.chapter.name).color(MUTED)).truncate(),
-                );
-            });
-        }
 
         let mut canvas_ui = workspace::child(ui, "comic_canvas", canvas);
         if reader.pages_job.is_some() {
@@ -270,10 +246,42 @@ impl State {
                     });
             }
         }
+        if controls {
+            overlay(ui, "reader-header", header, egui::Order::Middle, |ui| {
+                window::drag_region(ui);
+                ui.painter().rect_filled(header, 0, BACKGROUND);
+                ui.painter().line_segment(
+                    [header.left_bottom(), header.right_bottom()],
+                    Stroke::new(1.0, design::LINE),
+                );
+                let caption = Rect::from_min_max(
+                    screen.min + vec2(14.0, 1.0),
+                    pos2(
+                        screen.max.x - window::controls_width(ui.ctx()) - 12.0,
+                        header.max.y - 1.0,
+                    ),
+                );
+                let mut caption_ui = workspace::child(ui, "reader-caption", caption);
+                caption_ui.horizontal(|ui| {
+                    if design::back_button(ui, l.text("返回目录", "Back to chapters")).clicked()
+                    {
+                        back = true;
+                    }
+                    ui.add(egui::Label::new(RichText::new(&reader.book.title).strong()).truncate());
+                    ui.label(RichText::new("›").color(MUTED));
+                    ui.add(
+                        egui::Label::new(RichText::new(&reader.chapter.name).color(MUTED))
+                            .truncate(),
+                    );
+                });
+                window::caption_resize_edges(ui, screen);
+            });
+        }
+
         if reader.sidebar {
             let rect = Rect::from_min_max(
-                pos2(screen.max.x - side_width - 20.0, canvas_outer.min.y),
-                pos2(screen.max.x - 20.0, canvas_outer.max.y),
+                pos2(screen.max.x - side_width - 20.0, header.max.y + 8.0),
+                pos2(screen.max.x - 20.0, footer.min.y - 8.0),
             );
             ui.painter().rect_filled(rect, 10, SURFACE);
             ui.painter().rect_stroke(
@@ -408,21 +416,26 @@ impl State {
             .map_or([None, None], |entry| {
                 chapter_neighbors(&entry.chapters, reader.index)
             });
-        let actions = controls::show(
-            ui,
-            reader,
-            &bar,
-            neighbors,
-            l,
-            controls,
-            controls::Status {
-                message: &self.status,
-                total: self.translation_total,
-                done: self.translation_done,
-                failed: self.translation_failed,
-                working: self.translation.is_some() || !self.translations.is_empty(),
-            },
-        );
+        let overlay_rect = if controls { bar.footer } else { bar.status };
+        let status = controls::Status {
+            message: &self.status,
+            total: self.translation_total,
+            done: self.translation_done,
+            failed: self.translation_failed,
+            working: self.translation.is_some() || !self.translations.is_empty(),
+        };
+        let actions =
+            if controls || status.working || !status.message.is_empty() || status.failed > 0 {
+                overlay(
+                    ui,
+                    "reader-footer",
+                    overlay_rect,
+                    egui::Order::Foreground,
+                    |ui| controls::show(ui, reader, &bar, neighbors, l, controls, status),
+                )
+            } else {
+                controls::Actions::default()
+            };
         chapter_action = actions.chapter.or(chapter_action);
         let translate = actions.translate;
         retry |= actions.retry;
@@ -497,6 +510,31 @@ impl State {
         ui.allocate_space(vec2(ui.available_width(), (screen.height() - 8.0).max(0.0)));
     }
 }
+// Separate layers keep page clicks and wheel events out of visible toolbars.
+// Their rectangles never participate in the reading canvas layout.
+fn overlay<R>(
+    ui: &Ui,
+    id: &str,
+    rect: Rect,
+    order: egui::Order,
+    content: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    egui::Area::new(ui.id().with(id))
+        .order(order)
+        .fixed_pos(rect.min)
+        .default_size(rect.size())
+        .constrain(false)
+        .movable(false)
+        .sense(Sense::hover())
+        .show(ui.ctx(), |area| {
+            area.set_max_size(rect.size());
+            area.set_min_size(rect.size());
+            let mut child = workspace::child(area, id, rect);
+            content(&mut child)
+        })
+        .inner
+}
+
 /// Recenter when zoom, scrollbars or window geometry changes; retain user
 /// horizontal panning while the viewport and content dimensions stay stable.
 fn center_scroll_content(ui: &Ui, viewport: Rect, width: f32, reset: bool) {
@@ -579,51 +617,23 @@ fn reader_slot(ui: &mut Ui, id: &str, rect: Rect) -> Ui {
 }
 
 fn reader_plus(p: &Painter, r: Rect, c: Color32) {
-    p.line_segment([r.left_center(), r.right_center()], Stroke::new(1.5, c));
-    p.line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.5, c));
+    icons::paint(p, r, c, icons::PLUS);
 }
 fn reader_minus(p: &Painter, r: Rect, c: Color32) {
-    p.line_segment([r.left_center(), r.right_center()], Stroke::new(1.5, c));
+    icons::paint(p, r, c, icons::MINUS);
 }
 fn reader_chapters(p: &Painter, r: Rect, c: Color32) {
-    for y in [0.0, 5.0] {
-        p.add(Shape::line(
-            vec![
-                pos2(r.min.x, r.center().y + y),
-                pos2(r.center().x, r.min.y + y),
-                pos2(r.max.x, r.center().y + y),
-            ],
-            Stroke::new(1.4, c),
-        ));
-    }
+    icons::paint(p, r, c, icons::CARET_DOUBLE_UP);
 }
 pub(super) fn reader_book(p: &Painter, r: Rect, c: Color32) {
-    p.rect_stroke(r, 2, Stroke::new(1.3, c), egui::StrokeKind::Inside);
-    p.line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.3, c));
+    icons::paint(p, r, c, icons::BOOK_OPEN);
 }
 fn reader_document(p: &Painter, r: Rect, c: Color32) {
-    p.rect_stroke(
-        r.shrink2(vec2(2.0, 0.0)),
-        2,
-        Stroke::new(1.3, c),
-        egui::StrokeKind::Inside,
-    );
-    for y in [0.4, 0.65] {
-        p.line_segment(
-            [
-                pos2(r.min.x + 5.0, r.min.y + r.height() * y),
-                pos2(r.max.x - 5.0, r.min.y + r.height() * y),
-            ],
-            Stroke::new(1.2, c),
-        );
-    }
+    icons::paint(p, r, c, icons::TRANSLATE);
 }
 fn reader_translate(p: &Painter, r: Rect, c: Color32) {
     reader_document(p, r, c);
-    p.circle_filled(r.right_top() + vec2(-1.0, 1.0), 2.5, c);
 }
 fn reader_translate_chapter(p: &Painter, r: Rect, c: Color32) {
-    reader_document(p, r.translate(vec2(2.0, 1.0)).shrink(1.0), c);
-    p.line_segment([r.left_bottom(), r.left_top()], Stroke::new(1.2, c));
-    p.line_segment([r.left_top(), r.right_top()], Stroke::new(1.2, c));
+    icons::paint(p, r, c, icons::FILES);
 }

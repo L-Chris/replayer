@@ -8,9 +8,7 @@ fn music_error(language: Language, error: &anyhow::Error) -> String {
         return message;
     }
     let translated = match message.as_str() {
-        "Set CHKSZ_API_KEY in .env or Music sources settings" => {
-            "请在 .env 中配置 CHKSZ_API_KEY，或在音乐源设置中填写密钥"
-        }
+        "Set an API key in Music settings" => "请在音乐相关设置中填写 API Key",
         "Music API connection failed or timed out" => "音乐接口连接失败或超时，请检查网络",
         "Music API response interrupted" => "音乐接口响应中断，请重试",
         "Music API response too large" => "音乐接口响应超过大小限制",
@@ -35,7 +33,6 @@ fn music_error(language: Language, error: &anyhow::Error) -> String {
         "Cannot publish downloaded music file" => {
             "无法保存完整音乐文件，请确认下载目录支持硬链接且没有同名文件冲突"
         }
-        "Cannot read .env" | "Cannot parse .env" => "无法读取或解析 .env 配置文件",
         _ => "",
     };
     if !translated.is_empty() {
@@ -62,7 +59,6 @@ fn music_error(language: Language, error: &anyhow::Error) -> String {
 
 pub(super) struct State {
     pub open: bool,
-    pub draft: music_sources::Settings,
     keyword: String,
     searched: String,
     page: usize,
@@ -74,6 +70,8 @@ pub(super) struct State {
     failed: bool,
     pub autoplay: bool,
     providers: Vec<Arc<dyn MusicSource>>,
+    covers: HashMap<String, Job<Arc<crate::media::Artwork>>>,
+    cover_attempts: std::collections::HashSet<String>,
 }
 impl State {
     pub(super) fn clear_search(&mut self) {
@@ -82,10 +80,9 @@ impl State {
         self.page = 0;
         self.next = false;
     }
-    pub fn new(settings: &music_sources::Settings) -> Self {
+    pub fn new(_settings: &music_sources::Settings) -> Self {
         Self {
             open: false,
-            draft: settings.clone(),
             keyword: String::new(),
             searched: String::new(),
             page: 0,
@@ -97,11 +94,115 @@ impl State {
             failed: false,
             autoplay: false,
             providers: music_sources::sources("").unwrap_or_default(),
+            covers: HashMap::new(),
+            cover_attempts: Default::default(),
         }
     }
 }
 impl App {
+    pub(super) fn request_online_art(&mut self, record: &library::Record, ctx: &egui::Context) {
+        if self.online_music.covers.len() >= 2
+            || self.online_music.cover_attempts.contains(&record.path)
+        {
+            return;
+        }
+        let Some(song) = &record.online else { return };
+        let Some(url) = song
+            .cover
+            .as_ref()
+            .and_then(|s| s.parse::<reqwest::Url>().ok())
+        else {
+            return;
+        };
+        if !matches!(url.scheme(), "https" | "http")
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return;
+        }
+        let directory = Settings::queue_path().with_file_name("music-covers");
+        let key = url.to_string();
+        let ctx = ctx.clone();
+        self.online_music.cover_attempts.insert(record.path.clone());
+        self.online_music.covers.insert(
+            record.path.clone(),
+            Job::spawn(move |_| async move {
+                let result = crate::comics::cache::fetch(&directory, &key, url, 240)
+                    .await
+                    .and_then(|image| {
+                        let tile = image
+                            .bitmap
+                            .tiles
+                            .into_iter()
+                            .next()
+                            .ok_or_else(|| anyhow::anyhow!("Invalid music cover"))?;
+                        Ok(Arc::new(crate::media::Artwork {
+                            width: tile.width() as usize,
+                            height: tile.height() as usize,
+                            rgba: tile.into_raw(),
+                        }))
+                    });
+                ctx.request_repaint();
+                result
+            }),
+        );
+    }
+    pub(super) fn start_online_record(
+        &mut self,
+        online: music_sources::OnlineSong,
+        resume: Option<f64>,
+    ) {
+        if self.online_music.download.is_some() {
+            return;
+        }
+        let result = online.song().and_then(|song| {
+            let providers = music_sources::sources(&self.settings.music.key()?)?;
+            let source = providers
+                .into_iter()
+                .find(|p| p.descriptor().id == song.source)
+                .ok_or_else(|| anyhow::anyhow!("音乐源暂不可用 / Music source is unavailable"))?;
+            Ok((song, source))
+        });
+        match result {
+            Ok((song, source)) => {
+                let quality = self.settings.music.quality.clone();
+                let directory = self.settings.music.directory();
+                self.online_music.autoplay = true;
+                self.online_music.failed = false;
+                self.online_music.status.clear();
+                self.workspace.resume = resume.map(|p| (format!("online://{}", online.key()), p));
+                self.online_music.download = Some(Job::spawn(move |bytes| async move {
+                    music_sources::download(source.as_ref(), &song, &quality, &directory, bytes)
+                        .await
+                }));
+            }
+            Err(error) => {
+                self.error = Some(music_error(self.settings.language, &error));
+            }
+        }
+    }
     pub(super) fn poll_online_music(&mut self) {
+        let ready: Vec<_> = self
+            .online_music
+            .covers
+            .iter()
+            .filter_map(|(path, job)| job.poll().map(|r| (path.clone(), r)))
+            .collect();
+        for (path, result) in ready {
+            self.online_music.covers.remove(&path);
+            if let Ok(artwork) = result {
+                self.metadata_cache.complete(
+                    path,
+                    Some(Arc::new(crate::media::Info {
+                        kind: crate::media::Kind::Music,
+                        title: None,
+                        artist: None,
+                        album: None,
+                        artwork: Some(artwork),
+                    })),
+                );
+            }
+        }
         if let Some(result) = self.online_music.search.as_ref().and_then(Job::poll) {
             self.online_music.search = None;
             match result {
@@ -119,6 +220,15 @@ impl App {
             self.online_music.download = None;
             match result {
                 Ok(path) => {
+                    if let Some(song) = crate::media::LocalMetadata::load(&path).online {
+                        if let Some((old, _)) = &mut self.workspace.resume
+                            && *old == format!("online://{}", song.key())
+                        {
+                            *old = path.to_string_lossy().into_owned();
+                        }
+                        self.library
+                            .bind_online(path.to_string_lossy().into_owned(), song);
+                    }
                     self.metadata_cache.remove(path.to_string_lossy().as_ref());
                     self.art_textures.remove(path.to_string_lossy().as_ref());
                     self.online_music.failed = false;
@@ -149,47 +259,22 @@ impl App {
     }
     pub(super) fn preferences_music_sources(&mut self, ui: &mut Ui) {
         let l = self.settings.language;
-        ui.heading(l.text("在线音乐", "Online music"));
-        ui.label(l.text(
-            "ChKSz · 网易云 / QQ 音乐 / 酷狗",
-            "ChKSz · NetEase / QQ Music / Kugou",
-        ));
-        ui.hyperlink_to(
-            l.text("接口文档与 API Key", "API documentation and key"),
-            "https://api.chksz.com/index.html#apis",
-        );
-        ui.add_space(12.0);
-        ui.label("ChKSz API Key");
-        ui.add(
-            design::text_edit(&mut self.online_music.draft.api_key)
-                .password(true)
-                .hint_text(l.text("留空使用 CHKSZ_API_KEY", "Empty: use CHKSZ_API_KEY")),
-        );
-        ui.label(
-            RichText::new(l.text(
-                "密钥仅本次运行有效；永久配置请使用 .env",
-                "The key is session-only; use .env for persistent configuration",
-            ))
-            .small()
-            .color(MUTED),
-        );
-        ui.add_space(12.0);
-        ui.label(l.text("下载目录", "Download directory"));
-        ui.add(
-            design::text_edit(&mut self.online_music.draft.directory)
-                .desired_width(f32::INFINITY)
-                .hint_text(l.text("留空使用应用音乐目录", "Empty: use the app music directory")),
-        );
-        ui.label(
-            RichText::new(self.online_music.draft.directory().display().to_string())
-                .small()
-                .color(MUTED),
-        );
-        ui.add_space(12.0);
-        ui.label(l.text(
-            "播放会先下载到本地，再加入音乐队列。下载文件会保留，不自动删除。",
-            "Play downloads a local file and adds it to the music queue. Downloads are retained.",
-        ));
+        providers::secret_field(ui, &mut self.preferences_draft.music.api_key, l);
+        preferences::form_row(ui, "", l, |ui| {
+            ui.hyperlink_to(
+                l.text("获取密钥", "Get API key"),
+                "https://api.chksz.com/index.html#apis",
+            );
+        });
+        preferences::form_row(ui, l.text("下载目录", "Download directory"), l, |ui| {
+            ui.add(
+                design::text_edit(&mut self.preferences_draft.music.directory)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(
+                        l.text("留空使用应用音乐目录", "Empty: use the app music directory"),
+                    ),
+            );
+        });
     }
     fn start_music_search(&mut self, source: Arc<dyn MusicSource>, page: usize) {
         self.online_music.page = page;
@@ -273,8 +358,8 @@ impl App {
             self.online_music.clear_search();
         }
         if changed || old_quality != self.settings.music.quality {
-            self.online_music.draft.source = self.settings.music.source.clone();
-            self.online_music.draft.quality = self.settings.music.quality.clone();
+            self.preferences_draft.music.source = self.settings.music.source.clone();
+            self.preferences_draft.music.quality = self.settings.music.quality.clone();
             if let Err(error) = self.settings.save() {
                 self.online_music.status = error.to_string();
             }

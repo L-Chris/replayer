@@ -1474,6 +1474,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-phosphor"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f4299551488dddaa8f757727e1eb4ffdaf277ffe6e30b413403468f5ecf4634"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3062,7 +3071,7 @@ dependencies = [
  "httparse",
  "librqbit-dualstack-sockets",
  "network-interface",
- "quick-xml",
+ "quick-xml 0.41.0",
  "reqwest 0.13.5",
  "serde",
  "serde_derive",
@@ -4251,6 +4260,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-xml"
+version = "0.42.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4536,7 +4554,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "replayer"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4546,14 +4564,17 @@ dependencies = [
  "crossbeam-channel",
  "dotenvy",
  "eframe",
+ "egui-phosphor",
  "ffmpeg-next",
  "futures-util",
  "image",
  "librqbit",
+ "quick-xml 0.42.0",
  "regex",
  "replayer-image",
  "reqwest 0.12.28",
  "rfd",
+ "ring",
  "rtrb",
  "rusqlite",
  "rustls",
@@ -4568,6 +4589,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "uuid",
+ "windows-sys 0.61.2",
  "winresource",
 ]
 
@@ -6224,7 +6246,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "338e30461b3a2b67d70eb30a6d89f8e0c93a833e07d2ae89085cd070c4a00ac0"
 dependencies = [
  "proc-macro2",
- "quick-xml",
+ "quick-xml 0.41.0",
  "quote",
 ]
 

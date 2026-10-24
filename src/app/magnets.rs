@@ -206,11 +206,9 @@ impl App {
                         .ok()
                         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
                         .unwrap_or_else(|| "replayer.exe".into());
-                    let base = if self.settings.llm.base_url.trim().is_empty() {
-                        &self.llm_defaults.base_url
-                    } else {
-                        &self.settings.llm.base_url
-                    };
+                    let base = self.settings.ai.providers.iter()
+                        .find(|p| p.id == self.settings.llm.selected.provider)
+                        .map_or("", |p| p.base_url.as_str());
                     ctx.copy_text(crate::torrent::routing_rules(&executable, base));
                 }
                 ui.small(language.text(

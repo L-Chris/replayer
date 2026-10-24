@@ -5,8 +5,6 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
-    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -27,67 +25,25 @@ pub struct Config {
 }
 impl Config {
     pub fn load() -> Result<Self> {
-        Self::load_with(&crate::settings::Settings::load().llm)
+        let settings = crate::settings::Settings::load();
+        Self::load_with(&settings.llm, &settings.ai)
     }
-    pub fn defaults() -> Result<LlmSettings> {
-        let file = if let Some(path) = std::env::var_os("REPLAYER_ENV_FILE") {
-            Some(PathBuf::from(path))
-        } else {
-            let cwd = std::env::current_dir().ok();
-            let exe = std::env::current_exe().ok();
-            cwd.iter()
-                .flat_map(|p| p.ancestors())
-                .chain(
-                    exe.iter()
-                        .filter_map(|p| p.parent())
-                        .flat_map(|p| p.ancestors()),
-                )
-                .map(|dir| dir.join(".env"))
-                .find(|p| p.is_file())
-        };
-        let mut values = HashMap::new();
-        if let Some(file) = file {
-            let entries =
-                dotenvy::from_path_iter(file).map_err(|_| anyhow::anyhow!("无法读取 .env 配置"))?;
-            for entry in entries {
-                let (key, value) =
-                    entry.map_err(|_| anyhow::anyhow!("无法解析 .env，请检查 KEY=VALUE 格式"))?;
-                values.insert(key, value);
-            }
-        }
-        let get = |names: &[&str]| -> Option<String> {
-            names.iter().find_map(|n| {
-                std::env::var(n)
-                    .ok()
-                    .filter(|v| !v.trim().is_empty())
-                    .or_else(|| values.get(*n).cloned().filter(|v| !v.trim().is_empty()))
-            })
-        };
-        Ok(LlmSettings {
-            api_key: get(&["LLM_API_KEY", "OPENAI_API_KEY"]).unwrap_or_default(),
-            base_url: get(&["LLM_BASE_URL", "OPENAI_BASE_URL"])
-                .unwrap_or_else(|| "https://chat.rethinkos.com/v1".into()),
-            model: get(&["LLM_MODEL", "OPENAI_MODEL"]).unwrap_or_else(|| "qwen/omni-flash".into()),
-            audio_encoding: get(&["LLM_AUDIO_ENCODING"]).unwrap_or_else(|| "auto".into()),
-            audio_format: get(&["LLM_AUDIO_FORMAT"]).unwrap_or_else(|| "mp3".into()),
-            chunk_seconds: get(&["LLM_SUBTITLE_CHUNK_SECONDS"]).unwrap_or_else(|| "120".into()),
-            reasoning_effort: get(&["LLM_REASONING_EFFORT"]).unwrap_or_else(|| "default".into()),
-            bilingual: Some(
-                match get(&["LLM_SUBTITLE_BILINGUAL"])
-                    .as_deref()
-                    .unwrap_or("false")
-                {
-                    "true" | "1" => true,
-                    "false" | "0" => false,
-                    _ => bail!("LLM_SUBTITLE_BILINGUAL must be true or false"),
-                },
-            ),
-        })
+    pub fn load_with(options: &LlmSettings, ai: &crate::ai::Settings) -> Result<Self> {
+        Self::from_connection(ai.resolve(&options.selected)?, options)
     }
-    pub fn load_with(overrides: &LlmSettings) -> Result<Self> {
-        Self::resolve(Self::defaults()?, overrides)
+    pub fn validate_options(options: &LlmSettings) -> Result<()> {
+        Self::from_connection(
+            crate::ai::Connection {
+                base_url: "https://validation.invalid/v1".into(),
+                api_key: "validation".into(),
+                model: "validation".into(),
+            },
+            options,
+        )
+        .map(|_| ())
     }
-    fn resolve(defaults: LlmSettings, overrides: &LlmSettings) -> Result<Self> {
+    fn from_connection(connection: crate::ai::Connection, overrides: &LlmSettings) -> Result<Self> {
+        let defaults = LlmSettings::default();
         let pick = |value: &str, default: String| {
             if value.trim().is_empty() {
                 default
@@ -95,26 +51,29 @@ impl Config {
                 value.trim().to_owned()
             }
         };
-        let key = pick(&overrides.api_key, defaults.api_key);
-        ensure!(!key.trim().is_empty(), "请在设置或 .env 中配置 API Key");
-        let base_url = pick(&overrides.base_url, defaults.base_url);
-        let model = pick(&overrides.model, defaults.model);
+        let key = connection.api_key;
+        ensure!(
+            !key.trim().is_empty(),
+            "请在 AI 提供商设置中填写密钥 / Set an API key in AI providers"
+        );
+        let base_url = connection.base_url;
+        let model = connection.model;
         ensure!(!model.trim().is_empty(), "模型名称不能为空");
         let encoding = pick(&overrides.audio_encoding, defaults.audio_encoding);
         let audio_format = match pick(&overrides.audio_format, defaults.audio_format).as_str() {
             "mp3" => "mp3",
             "wav" => "wav",
-            _ => bail!("LLM_AUDIO_FORMAT must be mp3 or wav"),
+            _ => bail!("音频格式必须是 MP3 或 WAV / Audio format must be MP3 or WAV"),
         };
         let data_url = match encoding.as_str() {
             "auto" => model.to_lowercase().contains("qwen"),
             "data_url" => true,
             "base64" => false,
-            _ => bail!("LLM_AUDIO_ENCODING 必须是 auto、data_url 或 base64"),
+            _ => bail!("音频编码必须是 auto、data_url 或 base64 / Invalid audio encoding"),
         };
         let chunk_seconds = pick(&overrides.chunk_seconds, defaults.chunk_seconds)
             .parse::<usize>()
-            .context("LLM_SUBTITLE_CHUNK_SECONDS 必须是整数")?;
+            .context("音频分段长度必须是整数 / Chunk duration must be an integer")?;
         ensure!(
             (5..=120).contains(&chunk_seconds),
             "字幕音频分段长度必须在 5..120 秒之间"
@@ -123,12 +82,10 @@ impl Config {
         let reasoning_effort = match effort.as_str() {
             "" | "default" => None,
             "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => Some(effort),
-            _ => bail!(
-                "LLM_REASONING_EFFORT must be default, none, minimal, low, medium, high, xhigh or max"
-            ),
+            _ => bail!("思考等级无效 / Invalid reasoning effort"),
         };
-        let url =
-            reqwest::Url::parse(&base_url).map_err(|_| anyhow::anyhow!("LLM_BASE_URL 格式无效"))?;
+        let url = reqwest::Url::parse(&base_url)
+            .map_err(|_| anyhow::anyhow!("服务地址无效 / Invalid service endpoint"))?;
         ensure!(
             matches!(url.scheme(), "https" | "http")
                 && url.host_str().is_some()
@@ -136,7 +93,7 @@ impl Config {
                 && url.password().is_none()
                 && url.query().is_none()
                 && url.fragment().is_none(),
-            "LLM_BASE_URL 必须是 HTTP(S) 接口根地址，不能包含凭据、查询参数或片段"
+            "服务地址必须是 HTTP(S) 根地址 / Use an HTTP(S) API base URL"
         );
         Ok(Self {
             key,
@@ -354,7 +311,7 @@ fn network_error(error: reqwest::Error) -> anyhow::Error {
     if error.is_timeout() {
         anyhow::anyhow!("字幕 API 请求超时（120 秒），可取消后重试")
     } else if error.is_connect() {
-        anyhow::anyhow!("无法连接字幕 API，请检查网络、TLS 和 LLM_BASE_URL")
+        anyhow::anyhow!("无法连接字幕 API，请检查网络、TLS 和服务地址")
     } else {
         anyhow::anyhow!("字幕 API 连接中断或响应读取失败")
     }
@@ -459,70 +416,52 @@ mod tests {
         );
     }
     #[test]
-    fn ui_overrides_inherit_defaults_and_validate_without_network() {
-        use crate::settings::LlmSettings;
-        let defaults = || LlmSettings {
-            api_key: "environment-key".into(),
-            base_url: "https://example.com/v1/".into(),
-            model: "qwen/audio".into(),
-            audio_encoding: "auto".into(),
-            audio_format: "mp3".into(),
-            bilingual: Some(false),
-            reasoning_effort: "default".into(),
-            chunk_seconds: "20".into(),
+    fn configured_models_and_business_options_validate_without_network() {
+        let mut ai = crate::ai::Settings {
+            providers: vec![crate::ai::Provider {
+                id: "my-provider".into(),
+                name: "My provider".into(),
+                api_key: "fixture-key".into(),
+                base_url: "https://example.com/v1/".into(),
+                models: vec!["qwen/audio".into()],
+            }],
         };
-        let inherited = super::Config::resolve(defaults(), &LlmSettings::default()).unwrap();
-        assert_eq!(inherited.key, "environment-key");
-        assert_eq!(inherited.base_url, "https://example.com/v1");
-        assert!(inherited.data_url);
-        assert!(inherited.reasoning_effort.is_none());
-        let mut environment = defaults();
-        environment.reasoning_effort = "high".into();
+        let mut options = crate::settings::LlmSettings {
+            selected: crate::ai::ModelRef {
+                provider: "my-provider".into(),
+                model: "qwen/audio".into(),
+            },
+            ..Default::default()
+        };
+        let config = super::Config::load_with(&options, &ai).unwrap();
+        assert!(config.key == "fixture-key");
+        assert_eq!(config.base_url, "https://example.com/v1");
+        assert!(config.data_url);
+        assert_eq!(config.audio_format, "mp3");
+        assert_eq!(config.chunk_seconds, 120);
+        assert!(!config.bilingual);
+        assert!(config.reasoning_effort.is_none());
+        options.reasoning_effort = "low".into();
         assert_eq!(
-            super::Config::resolve(environment.clone(), &LlmSettings::default())
+            super::Config::load_with(&options, &ai)
                 .unwrap()
                 .reasoning_effort
                 .as_deref(),
-            Some("high")
+            Some("low")
         );
-        let override_default = LlmSettings {
-            reasoning_effort: "default".into(),
-            chunk_seconds: "120".into(),
-            ..Default::default()
-        };
-        let resolved = super::Config::resolve(environment, &override_default).unwrap();
-        assert!(resolved.reasoning_effort.is_none());
-        assert_eq!(resolved.chunk_seconds, 120);
-        assert!(
-            super::Config::resolve(
-                defaults(),
-                &LlmSettings {
-                    reasoning_effort: "invalid".into(),
-                    ..Default::default()
-                }
-            )
-            .is_err()
-        );
-        let mut overrides = LlmSettings {
-            model: "other-audio".into(),
-            api_key: "session-key".into(),
-            chunk_seconds: "10".into(),
-            ..Default::default()
-        };
-        let custom = super::Config::resolve(defaults(), &overrides).unwrap();
-        assert_eq!(custom.key, "session-key");
-        assert_eq!(custom.model, "other-audio");
-        assert_eq!(custom.chunk_seconds, 10);
-        assert!(!custom.data_url);
-        overrides.chunk_seconds = "0".into();
-        assert!(super::Config::resolve(defaults(), &overrides).is_err());
-        overrides.chunk_seconds.clear();
-        overrides.base_url = "https://user:password@example.com/v1".into();
-        let error = super::Config::resolve(defaults(), &overrides)
+        options.reasoning_effort = "invalid".into();
+        assert!(super::Config::validate_options(&options).is_err());
+        options.reasoning_effort = "default".into();
+        options.chunk_seconds = "0".into();
+        assert!(super::Config::load_with(&options, &ai).is_err());
+        options.chunk_seconds = "120".into();
+        ai.providers[0].base_url = "https://user:password@example.com/v1".into();
+        let error = super::Config::load_with(&options, &ai)
             .err()
             .unwrap()
             .to_string();
         assert!(!error.contains("password"));
+        assert!(super::Config::validate_options(&crate::settings::LlmSettings::default()).is_ok());
     }
     use super::*;
     #[test]

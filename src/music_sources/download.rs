@@ -120,6 +120,22 @@ pub async fn download(
     progress: Arc<AtomicU64>,
 ) -> Result<PathBuf> {
     let mut track = source.resolve(song, quality).await?;
+    let mut online = OnlineSong::from(song);
+    if !track.metadata.title.is_empty() {
+        online.title = track.metadata.title.clone();
+    }
+    if !track.metadata.artist.is_empty() {
+        online.artist = track.metadata.artist.clone();
+    }
+    if !track.metadata.album.is_empty() {
+        online.album = track.metadata.album.clone();
+    }
+    online.cover = track
+        .cover
+        .as_ref()
+        .map(ToString::to_string)
+        .or(online.cover);
+    track.metadata.online = Some(online);
     if track.lyrics.is_none() {
         // Lyrics are best-effort: an unavailable endpoint never fails playback.
         track.lyrics = source.lyrics(song).await.ok().flatten();

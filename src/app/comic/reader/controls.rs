@@ -1,12 +1,14 @@
 use super::*;
 
+pub(super) const BAR_HEIGHT: f32 = 36.0;
+
 pub(super) struct BarLayout {
     pub footer: Rect,
     options: Rect,
     pager: Rect,
     zoom: Rect,
     chapters: Rect,
-    status: Rect,
+    pub status: Rect,
     compact: bool,
     mode_width: f32,
     display_width: f32,
@@ -35,44 +37,16 @@ pub(super) fn layout(ui: &Ui, screen: Rect, l: Language) -> BarLayout {
 
 fn arrange(screen: Rect, options_width: f32, mode_width: f32, display_width: f32) -> BarLayout {
     let compact = screen.width() < options_width + 336.0 + 220.0 + 64.0;
-    let footer = Rect::from_min_max(
-        pos2(
-            screen.min.x,
-            screen.max.y - if compact { 108.0 } else { 64.0 },
-        ),
-        screen.max,
-    );
-    let cy = if compact {
-        footer.max.y - 27.0
-    } else {
-        footer.center().y
-    };
+    let footer = Rect::from_min_max(pos2(screen.min.x, screen.max.y - BAR_HEIGHT), screen.max);
+    let cy = footer.center().y;
     let status = Rect::from_center_size(pos2(footer.max.x - 33.0, cy), vec2(34.0, 34.0));
     let chapters = status.translate(vec2(-42.0, 0.0));
     let zoom = Rect::from_min_size(pos2(chapters.min.x - 144.0, cy - 17.0), vec2(132.0, 34.0));
     let options = Rect::from_min_size(
-        pos2(
-            footer.min.x + 16.0,
-            if compact {
-                footer.min.y + 10.0
-            } else {
-                cy - 17.0
-            },
-        ),
-        vec2(
-            if compact {
-                footer.width() - 32.0
-            } else {
-                options_width
-            },
-            34.0,
-        ),
+        pos2(footer.min.x + 16.0, cy - 17.0),
+        vec2(if compact { 34.0 } else { options_width }, 34.0),
     );
-    let start = if compact {
-        footer.min.x + 16.0
-    } else {
-        options.max.x + 16.0
-    };
+    let start = options.max.x + 16.0;
     let end = zoom.min.x - 16.0;
     let pager = Rect::from_center_size(
         pos2((start + end) * 0.5, cy),
@@ -124,15 +98,17 @@ pub(super) fn show(
             Stroke::new(1.0, design::LINE),
         );
         let mut options = reader_slot(ui, "reader-options", bar.options);
-        options.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            let mode = dropdown(
-                ui,
-                mode_name(reader.mode, l),
+        if bar.compact {
+            let response = design::control(
+                &mut options,
+                "",
                 Some(reader_book),
-                bar.mode_width,
-            );
-            egui::Popup::menu(&mode).show(|ui| {
+                design::Control::Quiet,
+                34.0,
+            )
+            .on_hover_text(l.text("阅读与翻译设置", "Reading and translation"));
+            egui::Popup::menu(&response).show(|ui| {
+                ui.label(l.text("阅读方式", "Reading mode"));
                 for mode in [
                     ReadingMode::Vertical,
                     ReadingMode::LeftToRight,
@@ -146,9 +122,8 @@ pub(super) fn show(
                         ui.close();
                     }
                 }
-            });
-            let display = dropdown(ui, display_name(reader.display, l), None, bar.display_width);
-            egui::Popup::menu(&display).show(|ui| {
+                ui.separator();
+                ui.label(l.text("显示模式", "Display mode"));
                 for display in [Display::Original, Display::Translated, Display::Compare] {
                     if design::selectable_value(
                         ui,
@@ -162,27 +137,61 @@ pub(super) fn show(
                         ui.close();
                     }
                 }
-            });
-            ui.add_enabled_ui(!reader.urls.is_empty(), |ui| {
-                if bar.compact {
-                    let response = dropdown(
-                        ui,
-                        l.text("图片翻译", "Translate"),
-                        Some(reader_translate),
-                        design::control_width(ui, l.text("图片翻译", "Translate"), true) + 24.0,
-                    );
-                    egui::Popup::menu(&response).show(|ui| {
-                        for (all, label) in [
-                            (false, l.text("翻译本页", "Translate page")),
-                            (true, l.text("翻译本章", "Translate chapter")),
-                        ] {
-                            if ui.button(label).clicked() {
-                                actions.translate = Some(all);
-                                ui.close();
-                            }
+                ui.separator();
+                ui.add_enabled_ui(!reader.urls.is_empty(), |ui| {
+                    for (all, label) in [
+                        (false, l.text("翻译本页", "Translate page")),
+                        (true, l.text("翻译本章", "Translate chapter")),
+                    ] {
+                        if ui.button(label).clicked() {
+                            actions.translate = Some(all);
+                            ui.close();
                         }
-                    });
-                } else {
+                    }
+                });
+            });
+        } else {
+            options.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let mode = dropdown(
+                    ui,
+                    mode_name(reader.mode, l),
+                    Some(reader_book),
+                    bar.mode_width,
+                );
+                egui::Popup::menu(&mode).show(|ui| {
+                    for mode in [
+                        ReadingMode::Vertical,
+                        ReadingMode::LeftToRight,
+                        ReadingMode::RightToLeft,
+                    ] {
+                        if design::selectable_value(ui, &mut reader.mode, mode, mode_name(mode, l))
+                            .changed()
+                        {
+                            reader.restore = true;
+                            reader.dirty = true;
+                            ui.close();
+                        }
+                    }
+                });
+                let display =
+                    dropdown(ui, display_name(reader.display, l), None, bar.display_width);
+                egui::Popup::menu(&display).show(|ui| {
+                    for display in [Display::Original, Display::Translated, Display::Compare] {
+                        if design::selectable_value(
+                            ui,
+                            &mut reader.display,
+                            display,
+                            display_name(display, l),
+                        )
+                        .changed()
+                        {
+                            reader.restore = true;
+                            ui.close();
+                        }
+                    }
+                });
+                ui.add_enabled_ui(!reader.urls.is_empty(), |ui| {
                     if design::control(
                         ui,
                         l.text("翻译本页", "Translate page"),
@@ -205,9 +214,9 @@ pub(super) fn show(
                     {
                         actions.translate = Some(true);
                     }
-                }
+                });
             });
-        });
+        }
         let mut zoom = reader_slot(ui, "reader-zoom", bar.zoom);
         let old_zoom = reader.zoom;
         zoom.horizontal(|ui| {
@@ -388,12 +397,9 @@ fn dropdown(ui: &mut Ui, label: &str, icon: Option<design::Icon>, width: f32) ->
     let response = design::control(ui, label, icon, design::Control::Outline, width);
     let arrow = Rect::from_center_size(
         pos2(response.rect.max.x - 16.0, response.rect.center().y),
-        vec2(9.0, 5.0),
+        vec2(16.0, 16.0),
     );
-    ui.painter().add(Shape::line(
-        vec![arrow.left_top(), arrow.center_bottom(), arrow.right_top()],
-        Stroke::new(1.4, MUTED),
-    ));
+    icons::paint(ui.painter(), arrow, MUTED, icons::CARET_DOWN);
     response
 }
 
@@ -437,12 +443,7 @@ fn status_text(ui: &mut Ui, status: &Status<'_>, l: Language) {
 }
 
 fn info_icon(p: &Painter, r: Rect, c: Color32) {
-    p.circle_stroke(r.center(), r.width() * 0.43, Stroke::new(1.3, c));
-    p.circle_filled(r.center() - vec2(0.0, 3.5), 0.9, c);
-    p.line_segment(
-        [r.center() - vec2(0.0, 0.5), r.center() + vec2(0.0, 4.0)],
-        Stroke::new(1.4, c),
-    );
+    icons::paint(p, r, c, icons::INFO);
 }
 
 #[cfg(test)]
@@ -454,6 +455,7 @@ mod tests {
             for options_width in [460.0, 620.0] {
                 let screen = Rect::from_min_size(pos2(70.0, 35.0), vec2(width, 540.0));
                 let bar = arrange(screen, options_width, 160.0, 110.0);
+                assert_eq!(bar.footer.height(), 36.0);
                 let controls = [bar.options, bar.pager, bar.zoom, bar.chapters, bar.status];
                 for (index, rect) in controls.iter().enumerate() {
                     assert!(bar.footer.contains_rect(*rect));

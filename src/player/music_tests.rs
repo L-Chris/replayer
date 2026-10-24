@@ -80,6 +80,7 @@ fn music_formats_tags_cover_and_audio_eof() {
         ]);
         ffmpeg(&args, &path);
         crate::media::LocalMetadata {
+            online: None,
             title: "fallback title".into(),
             artist: "fallback artist".into(),
             album: "fallback album".into(),

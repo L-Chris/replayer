@@ -1,5 +1,19 @@
 # Bundled components
 
+Cloud sync XML parsing uses `quick-xml` 0.42.0 (MIT), bundled in
+`licenses/quick-xml-MIT.txt`. Source: https://github.com/tafia/quick-xml .
+Credential encryption and password-based key derivation use `ring` 0.17.14;
+its applicable notices are bundled as `licenses/ring-LICENSE.txt`,
+`licenses/ring-BoringSSL.txt` and `licenses/ring-other-bits.txt`.
+Source: https://github.com/briansmith/ring .
+
+UI icons use a compile-time subset of Phosphor Regular through `egui-phosphor`
+0.14.0 (MIT OR Apache-2.0). The Phosphor icon artwork is MIT licensed.
+Both MIT notices are bundled in `licenses/egui-phosphor-MIT.txt` and
+`licenses/Phosphor-Icons-MIT.txt`.
+Sources: https://github.com/amPerl/egui-phosphor and
+https://github.com/phosphor-icons/web .
+
 Comic preview resizing uses `fast_image_resize` 6.1.0 (MIT OR Apache-2.0),
 Copyright Kirill Kuzminykh. The MIT license is bundled in
 `licenses/fast_image_resize-MIT.txt`.

@@ -13,6 +13,42 @@ pub const HOVER: Color32 = Color32::from_rgb(32, 43, 40);
 pub const CONTROL_HEIGHT: f32 = 34.0;
 pub const CARD_PADDING: f32 = 8.0;
 
+pub fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
+    let (rect, mut response) =
+        ui.allocate_exact_size(vec2(42.0, CONTROL_HEIGHT), egui::Sense::click());
+    if response.clicked() {
+        *value = !*value;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *value, label)
+    });
+    let progress = ui.ctx().animate_bool(response.id, *value);
+    let track = egui::Rect::from_center_size(rect.center(), vec2(42.0, 24.0));
+    ui.painter().rect_filled(
+        track,
+        12,
+        Color32::from(egui::lerp(
+            egui::Rgba::from(BORDER)..=egui::Rgba::from(Color32::from_rgb(69, 139, 112)),
+            progress,
+        )),
+    );
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            track.expand(2.0),
+            14,
+            Stroke::new(1.0, ACCENT),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let center = egui::pos2(
+        egui::lerp((track.left() + 12.0)..=(track.right() - 12.0), progress),
+        track.center().y,
+    );
+    ui.painter().circle_filled(center, 9.0, TEXT);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// Keep the frame in every state: egui's frameless inactive selectable loses
 /// its stroke margins, making the label and its neighbours move on hover.
 pub fn selectable_value<'a, T: PartialEq>(
@@ -310,6 +346,7 @@ pub fn cover(ui: &egui::Ui, texture: &egui::TextureHandle, rect: egui::Rect, rad
 }
 
 pub fn apply(ctx: &egui::Context) {
+    super::icons::install(ctx);
     let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
     style.visuals = egui::Visuals::dark();
     style.visuals.override_text_color = Some(TEXT);
@@ -549,6 +586,66 @@ pub fn segmented_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toggle_supports_click_keyboard_and_disabled_state_without_moving() {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        let mut value = false;
+        let mut rect = egui::Rect::NOTHING;
+        let mut id = egui::Id::NULL;
+        let mut frame = |events: Vec<egui::Event>, enabled: bool| {
+            let mut changed = false;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.add_enabled_ui(enabled, |ui| {
+                        let response = toggle(ui, &mut value, "Bilingual subtitles");
+                        if rect.is_positive() {
+                            assert_eq!(response.rect, rect);
+                        }
+                        rect = response.rect;
+                        id = response.id;
+                        changed = response.changed();
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            (rect, id, changed, value)
+        };
+        let (rect, id, _, _) = frame(vec![], true);
+        let point = rect.center();
+        frame(vec![egui::Event::PointerMoved(point)], true);
+        let click = |pressed| {
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }]
+        };
+        assert!(!frame(click(true), true).2);
+        let result = frame(click(false), true);
+        assert!(result.2 && result.3);
+        ctx.memory_mut(|memory| memory.request_focus(id));
+        let result = frame(
+            vec![egui::Event::Key {
+                key: egui::Key::Space,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+            true,
+        );
+        assert!(result.2 && !result.3);
+        frame(click(true), false);
+        let result = frame(click(false), false);
+        assert!(!result.2 && !result.3);
+    }
 
     #[test]
     fn selectable_hover_and_selection_preserve_text_and_neighbour_positions() {

@@ -7,36 +7,17 @@ impl App {
         ui.add_space(12.0);
         ui.heading("replayer");
         ui.label(format!(
-            "{} {} · Windows x64",
+            "{} {}",
             language.text("版本", "Version"),
             env!("CARGO_PKG_VERSION")
         ));
-        ui.label(
-            RichText::new(language.text(
-                "音乐 · 视频 · 漫画 · 磁链播放",
-                "Music · Video · Comics · Magnet playback",
-            ))
-            .color(MUTED),
-        );
-        ui.horizontal(|ui| {
-            ui.hyperlink_to(language.text("项目主页", "Project"), updater::REPOSITORY);
-            ui.hyperlink_to(
-                language.text("发行版本", "Releases"),
-                format!("{}/releases", updater::REPOSITORY),
-            );
-        });
+        ui.hyperlink_to(language.text("项目主页", "Project"), updater::REPOSITORY);
         ui.add_space(8.0);
         ui.separator();
-        if ui
-            .checkbox(
-                &mut self.settings.auto_check_updates,
-                language.text("启动时自动检查更新", "Check for updates on startup"),
-            )
-            .changed()
-            && let Err(error) = self.settings.save()
-        {
-            self.error = Some(error.to_string());
-        }
+        ui.checkbox(
+            &mut self.preferences_draft.auto_check_updates,
+            language.text("启动时自动检查更新", "Check for updates on startup"),
+        );
         let status = match &self.updater.status {
             Status::Idle => language
                 .text("尚未检查更新", "Updates have not been checked")
@@ -66,7 +47,9 @@ impl App {
                 format!("{}: {error}", language.text("更新未完成", "Update failed"))
             }
         };
-        ui.label(status);
+        if !matches!(self.updater.status, Status::Idle) {
+            ui.label(status);
+        }
         if let Status::Downloading { received, total } = &self.updater.status {
             ui.add(
                 egui::ProgressBar::new(*received as f32 / (*total).max(1) as f32).show_percentage(),
@@ -83,7 +66,7 @@ impl App {
                 self.updater.check();
             }
             if self.updater.update.is_some() && !self.updater.busy() {
-                if matches!(self.updater.status, Status::Ready) {
+                if self.updater.can_install() {
                     if ui
                         .button(language.text("安装并重启", "Install and restart"))
                         .clicked()
@@ -106,17 +89,165 @@ impl App {
             ));
         }
         if let Some(update) = &self.updater.update {
+            if ui
+                .button(language.text("查看更新", "View update"))
+                .clicked()
+            {
+                self.updater.dialog_visible = true;
+            }
             ui.label(RichText::new(format!("v{}", update.version)).strong());
             design::scroll().max_height(180.0).show(ui, |ui| {
                 let notes = updater::localized_notes(&update.notes, language == Language::Chinese);
-                ui.label(if notes.is_empty() {
-                    language.text("此版本暂无更新说明", "No release notes available")
+                if notes.is_empty() {
+                    ui.label(language.text("此版本暂无更新说明", "No release notes available"));
                 } else {
-                    notes
-                });
+                    release_notes(ui, notes);
+                }
             });
         }
-        ui.add_space(10.0);
-        ui.small(RichText::new("Rust · FFmpeg · egui / WGPU").color(MUTED));
+    }
+
+    pub(super) fn update_dialog(&mut self, ctx: &egui::Context) {
+        if !self.updater.dialog_visible {
+            return;
+        }
+        let Some(update) = self.updater.update.clone() else {
+            return;
+        };
+        let l = self.settings.language;
+        let busy = self.updater.busy();
+        let ready = self.updater.can_install();
+        let mut download = false;
+        let mut install = false;
+        let mut dismiss = false;
+        let modal = egui::Modal::new(Id::new("update-dialog"))
+            .frame(
+                egui::Frame::new()
+                    .fill(SURFACE)
+                    .corner_radius(12)
+                    .inner_margin(22),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(480.0_f32.min((ctx.content_rect().width() - 64.0).max(240.0)));
+                ui.heading(l.text("发现新版本", "Update available"));
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(format!(
+                        "v{}  →  v{}",
+                        env!("CARGO_PKG_VERSION"),
+                        update.version
+                    ))
+                    .color(ACCENT)
+                    .strong(),
+                );
+                ui.add_space(12.0);
+                design::scroll()
+                    .id_salt("update-notes")
+                    .auto_shrink([false, true])
+                    .max_height((ctx.content_rect().height() * 0.4).min(260.0))
+                    .show(ui, |ui| {
+                        let notes = updater::localized_notes(&update.notes, l == Language::Chinese);
+                        if notes.trim().is_empty() {
+                            ui.label(l.text("此版本暂无更新说明", "No release notes available"));
+                        } else {
+                            release_notes(ui, notes);
+                        }
+                    });
+                ui.add_space(14.0);
+                match &self.updater.status {
+                    Status::Downloading { received, total } => {
+                        ui.add(
+                            egui::ProgressBar::new(*received as f32 / (*total).max(1) as f32)
+                                .show_percentage(),
+                        );
+                        ui.small(format!(
+                            "{} {:.1} / {:.1} MiB",
+                            l.text("正在下载", "Downloading"),
+                            *received as f64 / 1048576.0,
+                            *total as f64 / 1048576.0
+                        ));
+                        ctx.request_repaint_after(Duration::from_millis(200));
+                    }
+                    Status::Failed(error) => {
+                        ui.colored_label(Color32::LIGHT_RED, l.error(error));
+                    }
+                    _ => {}
+                }
+                if ready && !self.subtitles.is_empty() {
+                    ui.small(l.text(
+                        "重启前请导出需要保留的字幕",
+                        "Export subtitles you want to keep before restarting",
+                    ));
+                }
+                ui.add_space(14.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if !busy {
+                        let text = if ready {
+                            l.text("安装并重启", "Install and restart")
+                        } else if matches!(self.updater.status, Status::Failed(_)) {
+                            l.text("重试", "Retry")
+                        } else {
+                            l.text("下载更新", "Download update")
+                        };
+                        if design::control(ui, text, None, design::Control::Primary, 0.0).clicked()
+                        {
+                            install = ready;
+                            download = !ready;
+                        }
+                    }
+                    dismiss = ui.button(l.text("稍后", "Later")).clicked();
+                });
+            });
+        if dismiss || modal.should_close() {
+            self.updater.dialog_visible = false;
+        }
+        if download {
+            self.updater.download();
+        }
+        if install && self.updater.install().is_ok() {
+            self.comic.flush();
+            self.update_library();
+            self.library.flush();
+            self.persist_queue();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+}
+
+/// Release notes use the documented headings, bullet lists and Markdown links.
+/// Images and HTML are deliberately not fetched by the in-app notes view.
+fn release_notes(ui: &mut Ui, markdown: &str) {
+    static LINKS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let links =
+        LINKS.get_or_init(|| regex::Regex::new(r"\[([^\]]+)\]\((https?://[^\s)]+)\)").unwrap());
+    for line in markdown.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            ui.add_space(5.0);
+        } else if let Some(heading) = line.strip_prefix("## ") {
+            ui.label(RichText::new(heading).strong().size(17.0));
+        } else if !line.starts_with('<') {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 3.0;
+                let text = if let Some(item) = line.strip_prefix("- ") {
+                    ui.label("•");
+                    item
+                } else {
+                    line
+                };
+                let mut end = 0;
+                for captures in links.captures_iter(text) {
+                    let matched = captures.get(0).unwrap();
+                    if matched.start() > end {
+                        ui.label(text[end..matched.start()].trim());
+                    }
+                    ui.hyperlink_to(&captures[1], &captures[2]);
+                    end = matched.end();
+                }
+                if end < text.len() {
+                    ui.label(text[end..].trim());
+                }
+            });
+        }
     }
 }

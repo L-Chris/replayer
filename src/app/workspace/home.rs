@@ -12,7 +12,11 @@ impl App {
             )),
         );
         design::scroll().auto_shrink([false, false]).show(ui, |ui| {
-            let records = self.records();
+            let records: Vec<_> = self
+                .records()
+                .into_iter()
+                .filter(|r| r.played > 0)
+                .collect();
             let video = records.iter().find(|r| !r.music).cloned();
             let music = records.iter().find(|r| r.music).cloned();
             let width = ui.available_width();

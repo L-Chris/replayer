@@ -15,14 +15,18 @@ use crate::renderer::VideoRenderer;
 use crate::settings::{Language, Settings};
 use crate::subtitles::{self, Cue, Job};
 mod about;
+mod branding;
+mod cloud;
 mod comic;
 mod design;
+mod icons;
 mod library;
 mod magnets;
 mod metadata;
 mod music;
 mod online_music;
 mod preferences;
+mod providers;
 mod qq;
 mod queue_drag;
 mod window;
@@ -42,9 +46,11 @@ pub enum UiMode {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PrefTab {
     General,
+    Providers,
     Subtitles,
     MusicSources,
     Comics,
+    Cloud,
     About,
 }
 enum Act {
@@ -68,7 +74,9 @@ enum Act {
 pub struct App {
     workspace: workspace::State,
     library: library::Library,
+    history_undo: Option<(library::RemovedHistory, Instant)>,
     comic: comic::State,
+    cloud: cloud::State,
     online_music: online_music::State,
     queue: crate::queue::Queue,
     queue_inactive: crate::queue::Queue,
@@ -80,6 +88,7 @@ pub struct App {
     metadata_cache: metadata::Cache,
     art_textures: HashMap<String, egui::TextureHandle>,
     media_info: Option<Arc<crate::media::Info>>,
+    online_origin: Option<crate::music_sources::OnlineSong>,
     artwork: Option<egui::TextureHandle>,
     lyrics: crate::lyrics::Lyrics,
     lyrics_follow: bool,
@@ -97,9 +106,8 @@ pub struct App {
     torrent_resolving: bool,
     magnet_open: bool,
     magnet_input: String,
-    llm_draft: crate::settings::LlmSettings,
-    llm_defaults: crate::settings::LlmSettings,
-    env_key_available: bool,
+    preferences_draft: Settings,
+    providers_ui: providers::State,
     config_message: String,
     player: Option<Player>,
     video: VideoRenderer,
@@ -142,12 +150,16 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Vec<String>) -> Self {
+        Self::with_state(cc, initial, Settings::load(), comic::State::new())
+    }
+    fn with_state(
+        cc: &eframe::CreationContext<'_>,
+        initial: Vec<String>,
+        settings: Settings,
+        comic: comic::State,
+    ) -> Self {
         setup_fonts(&cc.egui_ctx);
         design::apply(&cc.egui_ctx);
-        let settings = Settings::load();
-        let mut defaults = subtitles::LlmConfig::defaults().unwrap_or_default();
-        let env_key_available = !defaults.api_key.is_empty();
-        defaults.api_key.clear();
         let (open_tx, open_rx) = unbounded();
         let (subtitle_save_tx, subtitle_save_rx) = unbounded();
         let (metadata_requests, metadata_requests_rx): (Sender<String>, Receiver<String>) =
@@ -169,7 +181,9 @@ impl App {
         let mut app = Self {
             workspace: workspace::State::default(),
             library: library::Library::load(),
-            comic: comic::State::new(),
+            history_undo: None,
+            comic,
+            cloud: Default::default(),
             online_music: online_music::State::new(&settings.music),
             queue: Default::default(),
             queue_inactive: Default::default(),
@@ -181,11 +195,12 @@ impl App {
             metadata_cache: Default::default(),
             art_textures: HashMap::new(),
             media_info: None,
+            online_origin: None,
             artwork: None,
             lyrics: crate::lyrics::Lyrics::default(),
             lyrics_follow: true,
             append_dialog: false,
-            updater: crate::updater::Updater::new(settings.auto_check_updates),
+            updater: crate::updater::Updater::new(settings.auto_check_updates, cc.egui_ctx.clone()),
             torrent_job: None,
             torrent_files: Vec::new(),
             torrent_selected: None,
@@ -196,11 +211,10 @@ impl App {
             magnet_input: String::new(),
             preferences_tab: PrefTab::General,
             mode: UiMode::Music,
-            llm_draft: settings.llm.clone(),
+            preferences_draft: settings.clone(),
+            providers_ui: Default::default(),
             settings,
             settings_open: false,
-            llm_defaults: defaults,
-            env_key_available,
             config_message: String::new(),
             player: None,
             video: VideoRenderer::new(cc.wgpu_render_state.clone()),
@@ -293,7 +307,7 @@ impl App {
         });
         if settings.on_hover_text(label).clicked() {
             self.settings_open = true;
-            self.llm_draft = self.settings.llm.clone();
+            self.preferences_draft = self.settings.clone();
             self.config_message.clear();
         }
     }
@@ -402,6 +416,11 @@ impl App {
         self.update_library();
         self.library.flush();
         self.online_music.autoplay = false;
+        self.library.begin_playback();
+        self.online_origin = crate::media::LocalMetadata::load(std::path::Path::new(&path)).online;
+        if let Some(song) = &self.online_origin {
+            self.library.bind_online(path.clone(), song.clone());
+        }
         self.media_info = None;
         self.artwork = None;
         self.subtitle_job = None;
@@ -506,10 +525,6 @@ impl eframe::App for App {
                                 egui::TextureOptions::LINEAR,
                             )
                         });
-                        if info.kind == crate::media::Kind::Music && self.fullscreen {
-                            self.fullscreen = false;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-                        }
                         if let Some(source) = &self.source {
                             let path = source.to_string_lossy().into_owned();
                             self.metadata_cache.playback(path, info.clone());
@@ -574,17 +589,36 @@ impl eframe::App for App {
 
     fn ui(&mut self, root: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
-        self.fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(self.fullscreen));
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F11)) {
-            self.fullscreen = !self.fullscreen;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+        self.updater.poll();
+        self.poll_cloud(&ctx);
+        self.fullscreen = window::fullscreen_shortcuts(&ctx);
+        if self.updater.dialog_visible {
+            ctx.input_mut(|i| {
+                if i.consume_key(egui::Modifiers::NONE, Key::Escape) {
+                    self.updater.dialog_visible = false;
+                }
+                for key in [
+                    Key::Space,
+                    Key::ArrowLeft,
+                    Key::ArrowRight,
+                    Key::ArrowUp,
+                    Key::ArrowDown,
+                    Key::Home,
+                    Key::End,
+                    Key::PageUp,
+                    Key::PageDown,
+                ] {
+                    i.consume_key(egui::Modifiers::NONE, key);
+                }
+            });
         }
-        window::drag_region(root);
+        if !(self.workspace.page == workspace::Page::Comic && self.comic.reading()) {
+            window::drag_region(root);
+        }
         let screen = root.max_rect();
         let painter = root.painter().clone();
         let language = self.settings.language;
         let previous_concurrency = self.settings.subtitle_concurrency;
-        self.updater.poll();
         self.poll_torrent();
         self.poll_qq_key();
         while let Ok((path, art)) = self.metadata_results.try_recv() {
@@ -739,6 +773,7 @@ impl eframe::App for App {
 
         self.update_library();
         if self.workspace.page != workspace::Page::Playing || self.settings_open {
+            window::video_cursor(&ctx, false);
             self.workspace_ui(root);
             return;
         }
@@ -853,15 +888,15 @@ impl eframe::App for App {
         // ---- keyboard ----
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.volume_open = false;
-            if self.settings_open {
+            if window::fullscreen(&ctx) {
+                window::set_fullscreen(&ctx, false);
+                self.fullscreen = false;
+            } else if self.settings_open {
                 self.settings_open = false;
             } else if self.online_music.open {
                 self.online_music.open = false;
             } else if self.magnet_open {
                 self.magnet_open = false;
-            } else {
-                self.fullscreen = false;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             }
         }
         if self.player.is_some()
@@ -892,7 +927,7 @@ impl eframe::App for App {
             let top_rect = Rect::from_min_size(screen.min, vec2(screen.width(), BAR_TOP));
             painter.rect_filled(top_rect, 0, Color32::from_black_alpha((a * 200.0) as u8));
             let mut header_content = top_rect.shrink2(vec2(20.0, 10.0));
-            header_content.max.x -= window::CONTROLS_WIDTH;
+            header_content.max.x -= window::controls_width(&ctx);
             let mut back = workspace::child(
                 root,
                 "video-back",
@@ -943,6 +978,18 @@ impl eframe::App for App {
             self.music_view(root, screen, playback_rect, &mut act);
         }
         self.window_frame(root, a > 0.02);
+        window::video_cursor(
+            &ctx,
+            self.fullscreen
+                && playing
+                && a <= 0.02
+                && !self.queue_open
+                && !self.magnet_open
+                && !self.online_music.open
+                && !self.volume_open
+                && !egui::Popup::is_any_open(&ctx)
+                && pointer.is_some_and(|p| playback_rect.contains(p)),
+        );
         if sidebar_width > 0.0 {
             self.queue_sidebar(
                 root,
@@ -1035,6 +1082,8 @@ impl eframe::App for App {
 
         self.preferences(&ctx);
         self.online_music_window(&ctx);
+        self.history_notice(&ctx);
+        self.update_dialog(&ctx);
         self.magnet_dialog(&ctx);
         if let Some(player) = &self.player {
             let state = player.snapshot().state;
@@ -1203,8 +1252,8 @@ impl App {
                 }
             }
             Act::ToggleFullscreen => {
-                self.fullscreen = !self.fullscreen;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+                window::set_fullscreen(ctx, !window::fullscreen(ctx));
+                self.fullscreen = window::fullscreen(ctx);
             }
             Act::Open => {
                 if !self.dialog_open {
@@ -1270,19 +1319,20 @@ impl App {
                     None
                 };
                 if let Some(path) = &subtitle_source {
-                    match subtitles::LlmConfig::load_with(&self.settings.llm).and_then(|config| {
-                        Job::start_with_cache(
-                            path.clone(),
-                            subtitles::Options {
-                                language: self.settings.language,
-                                concurrency: self.settings.subtitle_concurrency,
-                                ..Default::default()
-                            },
-                            pos,
-                            config,
-                            cache,
-                        )
-                    }) {
+                    match subtitles::LlmConfig::load_with(&self.settings.llm, &self.settings.ai)
+                        .and_then(|config| {
+                            Job::start_with_cache(
+                                path.clone(),
+                                subtitles::Options {
+                                    language: self.settings.language,
+                                    concurrency: self.settings.subtitle_concurrency,
+                                    ..Default::default()
+                                },
+                                pos,
+                                config,
+                                cache,
+                            )
+                        }) {
                         Ok(job) => {
                             self.subtitle_job = Some(job);
                             self.subtitles.clear();
@@ -1554,14 +1604,7 @@ fn play_circle_button(ui: &mut Ui, size: f32, playing: bool) -> Response {
 }
 
 fn draw_back(p: &Painter, r: Rect, c: Color32) {
-    p.add(Shape::line(
-        vec![
-            pos2(r.center().x + r.width() * 0.18, r.min.y),
-            pos2(r.center().x - r.width() * 0.28, r.center().y),
-            pos2(r.center().x + r.width() * 0.18, r.max.y),
-        ],
-        Stroke::new(1.6, c),
-    ));
+    icons::paint(p, r, c, icons::ARROW_LEFT);
 }
 
 fn draw_shuffle(p: &Painter, r: Rect, c: Color32) {
@@ -1621,282 +1664,60 @@ fn draw_seek_ten(p: &Painter, r: Rect, c: Color32, forward: bool) {
 }
 
 fn draw_repeat(p: &Painter, r: Rect, c: Color32, single: bool) {
-    let s = Stroke::new(1.5, c);
-    for flip in [false, true] {
-        let point = |x: f32, y: f32| {
-            pos2(
-                r.min.x + (if flip { 1.0 - x } else { x }) * r.width(),
-                r.min.y + (if flip { 1.0 - y } else { y }) * r.height(),
-            )
-        };
-        p.add(Shape::line(
-            vec![
-                point(0.0, 0.58),
-                point(0.0, 0.30),
-                point(0.18, 0.12),
-                point(0.92, 0.12),
-            ],
-            s,
-        ));
-        p.add(Shape::line(
-            vec![point(0.72, 0.0), point(0.92, 0.12), point(0.72, 0.30)],
-            s,
-        ));
-    }
-    if single {
-        p.text(
-            r.center(),
-            egui::Align2::CENTER_CENTER,
-            "1",
-            egui::FontId::proportional(r.height() * 0.60),
-            c,
-        );
-    }
+    icons::paint(
+        p,
+        r,
+        c,
+        if single {
+            icons::REPEAT_ONCE
+        } else {
+            icons::REPEAT
+        },
+    );
 }
 
 fn draw_subtitles(p: &Painter, r: Rect, c: Color32) {
-    p.rect_stroke(
-        r,
-        CornerRadius::same(3),
-        Stroke::new(2.0, c),
-        egui::StrokeKind::Inside,
-    );
-    let inner = Stroke::new(1.8, c);
-    let y1 = r.center().y - r.height() * 0.16;
-    let y2 = r.center().y + r.height() * 0.2;
-    p.line_segment(
-        [
-            pos2(r.min.x + r.width() * 0.2, y1),
-            pos2(r.max.x - r.width() * 0.2, y1),
-        ],
-        inner,
-    );
-    p.line_segment(
-        [
-            pos2(r.min.x + r.width() * 0.2, y2),
-            pos2(r.center().x + r.width() * 0.1, y2),
-        ],
-        inner,
-    );
+    icons::paint(p, r, c, icons::SUBTITLES);
 }
 
 fn draw_trash(p: &Painter, r: Rect, c: Color32) {
-    let s = Stroke::new(2.0, c);
-    let lid = r.min.y + r.height() * 0.26;
-    p.line_segment(
-        [
-            pos2(r.center().x - r.width() * 0.16, r.min.y + r.height() * 0.1),
-            pos2(r.center().x + r.width() * 0.16, r.min.y + r.height() * 0.1),
-        ],
-        s,
-    );
-    p.line_segment([pos2(r.min.x, lid), pos2(r.max.x, lid)], s);
-    p.line_segment(
-        [
-            pos2(r.min.x + r.width() * 0.14, lid),
-            pos2(r.min.x + r.width() * 0.24, r.max.y),
-        ],
-        s,
-    );
-    p.line_segment(
-        [
-            pos2(r.max.x - r.width() * 0.14, lid),
-            pos2(r.max.x - r.width() * 0.24, r.max.y),
-        ],
-        s,
-    );
-    p.line_segment(
-        [
-            pos2(r.min.x + r.width() * 0.24, r.max.y),
-            pos2(r.max.x - r.width() * 0.24, r.max.y),
-        ],
-        s,
-    );
-    let ribs = Stroke::new(1.5, c);
-    p.line_segment(
-        [
-            pos2(r.center().x - r.width() * 0.13, lid + r.height() * 0.14),
-            pos2(r.center().x - r.width() * 0.11, r.max.y - r.height() * 0.12),
-        ],
-        ribs,
-    );
-    p.line_segment(
-        [
-            pos2(r.center().x + r.width() * 0.13, lid + r.height() * 0.14),
-            pos2(r.center().x + r.width() * 0.11, r.max.y - r.height() * 0.12),
-        ],
-        ribs,
-    );
+    icons::paint(p, r, c, icons::TRASH);
 }
 
 fn draw_close(p: &Painter, r: Rect, c: Color32) {
-    let s = Stroke::new(2.0, c);
-    p.line_segment([r.left_top(), r.right_bottom()], s);
-    p.line_segment([r.left_bottom(), r.right_top()], s);
+    icons::paint(p, r, c, icons::X);
 }
 
 fn draw_folder(p: &Painter, r: Rect, c: Color32) {
-    let tab_w = r.width() * 0.38;
-    let tab_y = r.min.y + r.height() * 0.18;
-    let top = r.min.y + r.height() * 0.38;
-    let pts = vec![
-        pos2(r.min.x, r.max.y),
-        pos2(r.min.x, tab_y),
-        pos2(r.min.x + tab_w, tab_y),
-        pos2(r.min.x + tab_w + r.width() * 0.1, top),
-        pos2(r.max.x, top),
-        pos2(r.max.x, r.max.y),
-        pos2(r.min.x, r.max.y),
-    ];
-    p.add(Shape::closed_line(pts, Stroke::new(2.0, c)));
+    icons::paint(p, r, c, icons::FOLDER_OPEN);
 }
 
 fn draw_magnet(p: &Painter, r: Rect, c: Color32) {
-    let s = Stroke::new(2.0, c);
-    let cx = r.center().x;
-    let cy = r.center().y + r.height() * 0.08;
-    let rad = r.width() * 0.3;
-    let mut pts = Vec::new();
-    for i in 0..=12 {
-        let ang = std::f32::consts::PI + std::f32::consts::PI * i as f32 / 12.0;
-        pts.push(pos2(cx + ang.cos() * rad, cy + ang.sin() * rad));
-    }
-    p.add(Shape::line(pts, s));
-    p.line_segment([pos2(cx - rad, cy), pos2(cx - rad, r.max.y)], s);
-    p.line_segment([pos2(cx + rad, cy), pos2(cx + rad, r.max.y)], s);
-    p.line_segment(
-        [
-            pos2(cx - rad, r.max.y - r.height() * 0.22),
-            pos2(cx - rad, r.max.y),
-        ],
-        Stroke::new(3.5, c),
-    );
-    p.line_segment(
-        [
-            pos2(cx + rad, r.max.y - r.height() * 0.22),
-            pos2(cx + rad, r.max.y),
-        ],
-        Stroke::new(3.5, c),
-    );
+    icons::paint(p, r, c, icons::MAGNET);
 }
 
 fn draw_settings(p: &Painter, r: Rect, c: Color32) {
-    let center = r.center();
-    let rad = r.width().min(r.height()) * 0.5;
-    p.circle_stroke(center, rad * 0.58, Stroke::new(2.0, c));
-    for i in 0..8 {
-        let ang = i as f32 * std::f32::consts::TAU / 8.0;
-        let (sx, sy) = (ang.cos(), ang.sin());
-        p.line_segment(
-            [
-                pos2(center.x + sx * rad * 0.58, center.y + sy * rad * 0.58),
-                pos2(center.x + sx * rad, center.y + sy * rad),
-            ],
-            Stroke::new(2.0, c),
-        );
-    }
-    p.circle_filled(center, rad * 0.2, c);
+    icons::paint(p, r, c, icons::GEAR_SIX);
 }
 
 fn draw_add(p: &Painter, r: Rect, c: Color32) {
-    let s = Stroke::new(2.0, c);
-    let cx = r.center().x;
-    let cy = r.center().y;
-    let d = r.width().min(r.height()) * 0.42;
-    p.line_segment([pos2(cx - d, cy), pos2(cx + d, cy)], s);
-    p.line_segment([pos2(cx, cy - d), pos2(cx, cy + d)], s);
+    icons::paint(p, r, c, icons::PLUS);
 }
 
 fn draw_search(p: &Painter, r: Rect, c: Color32) {
-    let s = Stroke::new(2.0, c);
-    let size = r.width().min(r.height());
-    let rad = size * 0.3;
-    let k = std::f32::consts::FRAC_1_SQRT_2;
-    let center = pos2(r.center().x - size * 0.13, r.center().y - size * 0.13);
-    p.circle_stroke(center, rad, s);
-    p.line_segment(
-        [
-            pos2(center.x + rad * k, center.y + rad * k),
-            pos2(
-                center.x + (rad + size * 0.28) * k,
-                center.y + (rad + size * 0.28) * k,
-            ),
-        ],
-        s,
-    );
+    icons::paint(p, r, c, icons::MAGNIFYING_GLASS);
 }
 
 fn draw_music(p: &Painter, r: Rect, c: Color32) {
-    let s = Stroke::new(2.0, c);
-    let top = r.min.y + r.height() * 0.14;
-    let x1 = r.min.x + r.width() * 0.36;
-    let x2 = r.min.x + r.width() * 0.88;
-    let y = r.max.y - r.height() * 0.2;
-    p.line_segment([pos2(x1, top), pos2(x1, y)], s);
-    p.line_segment([pos2(x2, top), pos2(x2, y)], s);
-    p.line_segment(
-        [pos2(x1, top + 1.0), pos2(x2, top + 1.0)],
-        Stroke::new(2.5, c),
-    );
-    let head = r.width() * 0.17;
-    p.circle_filled(pos2(x1 - head * 0.8, y), head, c);
-    p.circle_filled(pos2(x2 - head * 0.8, y), head, c);
+    icons::paint(p, r, c, icons::MUSIC_NOTES);
 }
 
 fn draw_video(p: &Painter, r: Rect, c: Color32) {
-    p.rect_stroke(
-        r,
-        CornerRadius::same(3),
-        Stroke::new(2.0, c),
-        egui::StrokeKind::Inside,
-    );
-    let cx = r.center().x;
-    let cy = r.center().y;
-    let d = r.width().min(r.height()) * 0.26;
-    p.add(Shape::convex_polygon(
-        vec![
-            pos2(cx - d * 0.65, cy - d),
-            pos2(cx - d * 0.65, cy + d),
-            pos2(cx + d * 0.95, cy),
-        ],
-        c,
-        Stroke::NONE,
-    ));
+    icons::paint(p, r, c, icons::FILM_SLATE);
 }
 
 fn draw_queue(p: &Painter, r: Rect, c: Color32) {
-    let s = Stroke::new(2.0, c);
-    let (w, h) = (r.width(), r.height());
-    p.line_segment(
-        [
-            pos2(r.min.x, r.min.y + h * 0.2),
-            pos2(r.max.x, r.min.y + h * 0.2),
-        ],
-        s,
-    );
-    p.line_segment(
-        [
-            pos2(r.min.x, r.min.y + h * 0.5),
-            pos2(r.max.x, r.min.y + h * 0.5),
-        ],
-        s,
-    );
-    p.line_segment(
-        [
-            pos2(r.min.x, r.min.y + h * 0.8),
-            pos2(r.min.x + w * 0.55, r.min.y + h * 0.8),
-        ],
-        s,
-    );
-    p.add(Shape::convex_polygon(
-        vec![
-            pos2(r.min.x + w * 0.7, r.min.y + h * 0.62),
-            pos2(r.min.x + w * 0.7, r.max.y),
-            pos2(r.max.x, r.min.y + h * 0.81),
-        ],
-        c,
-        Stroke::NONE,
-    ));
+    icons::paint(p, r, c, icons::QUEUE);
 }
 
 fn vslider(
@@ -2008,18 +1829,17 @@ fn setup_fonts(ctx: &egui::Context) {
     let Some(bytes) = CANDIDATES.iter().find_map(|p| std::fs::read(p).ok()) else {
         return;
     };
-    let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        "cjk".to_owned(),
-        Arc::new(egui::FontData::from_owned(bytes)),
-    );
-    if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-        fam.push("cjk".to_owned());
-    }
-    if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-        fam.push("cjk".to_owned());
-    }
-    ctx.set_fonts(fonts);
+    ctx.add_font(egui::epaint::text::FontInsert {
+        name: "cjk".into(),
+        data: egui::FontData::from_owned(bytes),
+        families: [egui::FontFamily::Proportional, egui::FontFamily::Monospace]
+            .into_iter()
+            .map(|family| egui::epaint::text::InsertFontFamily {
+                family,
+                priority: egui::epaint::text::FontPriority::Lowest,
+            })
+            .collect(),
+    });
 }
 
 fn fmt_time(secs: f64) -> String {

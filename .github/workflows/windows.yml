@@ -99,6 +99,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: replayer-*-windows-x86_64
@@ -115,5 +116,13 @@ jobs:
             gh release upload "$RELEASE_TAG" dist/*.exe dist/*.zip dist/SHA256SUMS.txt --clobber
             gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG"
           else
-            gh release create "$RELEASE_TAG" dist/*.exe dist/*.zip dist/SHA256SUMS.txt --verify-tag --title "$RELEASE_TAG" --generate-notes
+            NOTES="docs/releases/$RELEASE_TAG.md"
+            python scripts/validate-release-notes.py --tag "$RELEASE_TAG" --file "$NOTES"
+            gh release create "$RELEASE_TAG" dist/*.exe dist/*.zip dist/SHA256SUMS.txt --verify-tag --title "$RELEASE_TAG" --notes-file "$NOTES"
+          fi
+          gh release view "$RELEASE_TAG" --json name,tagName,body > dist/published-release.json
+          if [ -f "docs/releases/$RELEASE_TAG.md" ]; then
+            python scripts/validate-release-notes.py --tag "$RELEASE_TAG" --file "docs/releases/$RELEASE_TAG.md" --published dist/published-release.json
+          else
+            python scripts/validate-release-notes.py --tag "$RELEASE_TAG" --published dist/published-release.json --allow-legacy
           fi

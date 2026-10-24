@@ -1,21 +1,49 @@
 # Replayer logo
 
-Generated with the built-in image_gen tool on 2026-09-26.
-Original output retained without image processing. Logo asset: replayer-logo.png.
+The current logo was generated with the built-in `image_gen` tool on 2026-10-24.
+The reference was the small folded play mark at the top-left of the approved
+[home design](../../docs/design/replayer-v1/00-home.png).
 
-## Windows application assets
+The user requested a solid center. The final image fills the former central
+opening while preserving the rounded silhouette, mint and blue-teal palette,
+and folded surfaces. `replayer-logo.png` is the unmodified generated output;
+its SHA-256 matches the selected image-generation artifact.
 
-`replayer-icon-256.png` and `replayer.ico` are resized/encoded derivatives of the
-original logo, with transparency preserved. Regenerate using
-`uv run --with pillow==12.1.1 python scripts/generate-icons.py`.
-The ICO contains 16, 20, 24, 32, 40, 48, 64, 128 and 256 pixel images.
+## Application assets
 
-`build.rs` embeds the ICO in the Windows executable; `src/main.rs` supplies the PNG
-to the native window. The installer uses the ICO for Setup/Uninstall and the
-executable's icon for application shortcuts and the installed-apps entry.
-Generated assets are checked into the repository; CI requires no image-generation
-service or Python installation.
+- `replayer-logo.png`: original transparent artwork.
+- `replayer-icon-256.png`: window/application icon with original clear space.
+- `replayer-mark-256.png`: same artwork with compact padding for the sidebar.
+- `replayer.ico`: Windows icons at 16, 20, 24, 32, 40, 48, 64, 128 and 256px.
 
-## Prompt
+Regenerate the resized/encoded derivatives from the checkout in PowerShell:
 
-Use case: logo-brand. Create one finished minimalist logo symbol for replayer, a desktop music and video player. Square 1024x1024 canvas with a genuinely transparent background. A single compact geometric cobalt-blue mark (#5684F5): a thick smoothly rounded open loop suggesting replay, integrated seamlessly with one right-pointing play triangle through clever negative space. The silhouette should subtly suggest a lowercase r without becoming a literal letter illustration. Flat solid color, crisp vector-like edges, balanced optical weight, very few shapes, recognizable at 24 pixels. Center the mark with generous even clear space, occupying about 70 percent of canvas. Quiet, modern, refined, suitable for a Windows application icon and a dark media player interface. No text, no wordmark, no gradients, no shadows, no 3D, no outlines around a tile, no mockup, no multiple options, no decorative audio equalizer bars. Transparent pixels around the symbol, not a checkerboard drawing.
+```powershell
+$env:UV_CACHE_DIR = "$PWD/target/tool-cache/uv"
+$env:UV_PYTHON_INSTALL_DIR = "$PWD/target/tool-cache/python"
+uv run --no-project scripts/generate-icons.py
+```
+
+The script preserves the original artwork and validates transparent corners,
+a solid center and all ICO sizes. Generated assets are checked in; Windows CI
+needs no Python or image-generation service.
+
+`src/app/branding.rs` caches the sidebar artwork once per egui context. All
+pages with the main sidebar use this mark. Immersive players and the comic
+reader keep their existing layout without a brand header.
+
+`build.rs` embeds the ICO in the executable. `src/main.rs` supplies the PNG to the
+native window. The installer uses the ICO for Setup/Uninstall and the
+executable's icon for shortcuts and the installed-apps entry.
+
+## Initial generation
+
+Built-in `image_gen`, transparent background. Reference: `00-home.png`.
+Generate a standalone logo matching the small mint/jade and blue-teal folded
+play mark at the top-left of the reference UI. Preserve the rounded silhouette,
+folded ribbon construction and restrained color palette. Center one mark on a
+square transparent canvas. No text, tile, background, shadow or extra symbols.
+
+## Final edit prompt (verbatim)
+
+Use case: precise-object-edit. Edit the attached replayer logo. Make exactly one design change: remove the central triangular hole and fill that entire opening with the logo's blue-teal surface so the mark becomes one continuous SOLID right-pointing play silhouette, with absolutely no hollow center or transparent interior. Blend the filled center naturally into the folded blue-teal upper surface. Keep the mint front ribbon crossing the bottom-right and the restrained fold shading, but do not create a smaller triangle, a new inset outline, a dark cavity, or a second play symbol in the center. Invariants: preserve the outer rounded triangular silhouette, its orientation, overall proportions, position and canvas size, mint/jade and blue-teal palette, folded surface quality, and clean edges. Preserve genuine transparency OUTSIDE the solid silhouette only. No text, no tile, no shadow, no added symbols.

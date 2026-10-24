@@ -28,6 +28,13 @@ impl Language {
         }
     }
     pub fn error(self, message: &str) -> String {
+        if let Some((chinese, english)) = message.split_once(" / ") {
+            return match self {
+                Self::Chinese => chinese,
+                Self::English => english,
+            }
+            .into();
+        }
         if self == Self::English
             && message == "字幕 API 返回 HTTP 400: 请求无效，已跳过该片段（不重试）"
         {
@@ -67,20 +74,7 @@ impl Language {
         }
         let mut output = message.to_owned();
         for (zh, en) in [
-            (
-                "请在设置或 .env 中配置 API Key",
-                "Set an API key in Settings or .env",
-            ),
             ("模型名称不能为空", "Model name cannot be empty"),
-            ("无法读取 .env 配置", "Cannot read .env configuration"),
-            (
-                "无法解析 .env，请检查 KEY=VALUE 格式",
-                "Cannot parse .env; use KEY=VALUE syntax",
-            ),
-            (
-                "请在 .env 中设置 LLM_API_KEY 或 OPENAI_API_KEY",
-                "Set LLM_API_KEY or OPENAI_API_KEY in .env",
-            ),
             ("字幕生成已取消", "Subtitle generation cancelled"),
             (
                 "当前文件没有音轨，无法生成字幕",
@@ -98,8 +92,8 @@ impl Language {
                 "Subtitle API timed out (120 seconds); retry later",
             ),
             (
-                "无法连接字幕 API，请检查网络、TLS 和 LLM_BASE_URL",
-                "Cannot connect to subtitle API; check network, TLS and LLM_BASE_URL",
+                "无法连接字幕 API，请检查网络、TLS 和 服务地址",
+                "Cannot connect to subtitle API; check network, TLS and endpoint",
             ),
             (
                 "字幕 API 连接中断或响应读取失败",
@@ -140,15 +134,6 @@ impl Language {
                 "字幕 API 响应超过 2 MiB 上限",
                 "Subtitle API response exceeds 2 MiB",
             ),
-            ("LLM_BASE_URL 格式无效", "Invalid LLM_BASE_URL"),
-            (
-                "LLM_AUDIO_ENCODING 必须是 auto、data_url 或 base64",
-                "LLM_AUDIO_ENCODING must be auto, data_url or base64",
-            ),
-            (
-                "LLM_SUBTITLE_CHUNK_SECONDS 必须是整数",
-                "LLM_SUBTITLE_CHUNK_SECONDS must be an integer",
-            ),
             (
                 "字幕音频分段长度必须在 5..120 秒之间",
                 "Chunk duration must be between 5 and 120 seconds",
@@ -160,11 +145,14 @@ impl Language {
     }
 }
 
-/// Empty fields inherit the environment. Credentials are session-only.
-#[derive(Clone, Default, Serialize, Deserialize)]
+/// Business options reference a shared AI model. Legacy connection fields only migrate old settings.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct LlmSettings {
+    pub selected: crate::ai::ModelRef,
+    #[serde(skip_serializing)]
     pub base_url: String,
+    #[serde(skip_serializing)]
     pub model: String,
     #[serde(skip)]
     pub api_key: String,
@@ -174,10 +162,29 @@ pub struct LlmSettings {
     pub reasoning_effort: String,
     pub chunk_seconds: String,
 }
+impl Default for LlmSettings {
+    fn default() -> Self {
+        Self {
+            selected: Default::default(),
+            base_url: String::new(),
+            model: String::new(),
+            api_key: String::new(),
+            audio_encoding: "auto".into(),
+            audio_format: "mp3".into(),
+            bilingual: Some(false),
+            reasoning_effort: "default".into(),
+            chunk_seconds: "120".into(),
+        }
+    }
+}
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
+    pub ai: crate::ai::Settings,
+    pub sync: crate::sync::Settings,
+    #[serde(skip)]
+    pub credential_error: Option<String>,
     pub auto_check_updates: bool,
     pub language: Language,
     pub subtitle_concurrency: usize,
@@ -188,6 +195,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            ai: Default::default(),
+            sync: Default::default(),
+            credential_error: None,
             auto_check_updates: true,
             language: Language::Chinese,
             subtitle_concurrency: 2,
@@ -204,16 +214,171 @@ impl Settings {
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
         value.subtitle_concurrency = value.subtitle_concurrency.clamp(1, 6);
+        value.migrate();
+        if let Err(error) = value.load_credentials(&crate::credentials::SystemVault) {
+            value.credential_error = Some(error.to_string());
+        }
         value
     }
     pub fn save(&self) -> Result<()> {
+        self.save_with(&crate::credentials::SystemVault, &Self::path())
+    }
+    fn secret_target(path: &std::path::Path, id: &str) -> String {
+        format!(
+            "replayer/{}/{}",
+            crate::comics::digest(path.to_string_lossy().as_bytes()),
+            id
+        )
+    }
+    pub fn load_credentials(&mut self, vault: &impl crate::credentials::Vault) -> Result<()> {
         let path = Self::path();
+        self.load_credentials_from(vault, &path)
+    }
+    fn load_credentials_from(
+        &mut self,
+        vault: &impl crate::credentials::Vault,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        for provider in &mut self.ai.providers {
+            provider.api_key = vault
+                .get(&Self::secret_target(path, &format!("ai/{}", provider.id)))?
+                .unwrap_or_default();
+        }
+        self.music.api_key = vault
+            .get(&Self::secret_target(path, "music/chksz"))?
+            .unwrap_or_default();
+        self.credential_error = None;
+        self.sync.password = vault
+            .get(&Self::secret_target(
+                path,
+                &format!("sync/{}/password", self.sync.account()),
+            ))?
+            .unwrap_or_default();
+        self.sync.passphrase = vault
+            .get(&Self::secret_target(
+                path,
+                &format!("sync/{}/passphrase", self.sync.account()),
+            ))?
+            .unwrap_or_default();
+        Ok(())
+    }
+    fn save_with(
+        &self,
+        vault: &impl crate::credentials::Vault,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            self.credential_error.is_none(),
+            "无法读取密钥，请重新加载后保存 / Reload credentials before saving"
+        );
+        self.ai.validate()?;
+        if self.sync.enabled {
+            self.sync.validate()?;
+        }
+        let mut changes = vec![(
+            Self::secret_target(path, "music/chksz"),
+            self.music.api_key.clone(),
+        )];
+        for provider in &self.ai.providers {
+            // AI keys remain in the credential vault even when cloud sync is enabled.
+            changes.push((
+                Self::secret_target(path, &format!("ai/{}", provider.id)),
+                provider.api_key.clone(),
+            ));
+        }
+        if let Ok(bytes) = std::fs::read(path)
+            && let Ok(old) = serde_json::from_slice::<Self>(&bytes)
+        {
+            for provider in old.ai.providers {
+                if !self.ai.providers.iter().any(|p| p.id == provider.id) {
+                    changes.push((
+                        Self::secret_target(path, &format!("ai/{}", provider.id)),
+                        String::new(),
+                    ));
+                }
+            }
+        }
+        changes.push((
+            Self::secret_target(path, &format!("sync/{}/password", self.sync.account())),
+            self.sync.password.clone(),
+        ));
+        changes.push((
+            Self::secret_target(path, &format!("sync/{}/passphrase", self.sync.account())),
+            self.sync.passphrase.clone(),
+        ));
+        crate::credentials::transaction(vault, &changes, || self.write_json(path))
+    }
+    fn write_json(&self, path: &std::path::Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let temporary = path.with_extension("json.tmp");
         std::fs::write(&temporary, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(temporary, path).context("save settings")
+    }
+    fn migrate(&mut self) {
+        // An empty old field is not a reason to search the environment.
+        let mut add =
+            |id: &str, name: &str, base: &str, model: &str, selected: &mut crate::ai::ModelRef| {
+                if selected.provider.is_empty() && (!base.is_empty() || !model.is_empty()) {
+                    if !self.ai.providers.iter().any(|p| p.id == id) {
+                        self.ai.providers.push(crate::ai::Provider {
+                            id: id.into(),
+                            name: name.into(),
+                            base_url: base.into(),
+                            models: if model.is_empty() {
+                                vec![]
+                            } else {
+                                vec![model.into()]
+                            },
+                            api_key: String::new(),
+                        });
+                    }
+                    *selected = crate::ai::ModelRef {
+                        provider: id.into(),
+                        model: model.into(),
+                    };
+                }
+            };
+        add(
+            "legacy-subtitles",
+            "字幕服务",
+            &self.llm.base_url,
+            &self.llm.model,
+            &mut self.llm.selected,
+        );
+        let image_base = if self.comics.image_base_url.is_empty() {
+            &self.llm.base_url
+        } else {
+            &self.comics.image_base_url
+        };
+        if !self.comics.image_base_url.is_empty() || !self.comics.image_model.is_empty() {
+            add(
+                "legacy-images",
+                "图像服务",
+                image_base,
+                &self.comics.image_model,
+                &mut self.comics.image_selected,
+            );
+        }
+        self.llm.base_url.clear();
+        self.llm.model.clear();
+        self.llm.api_key.clear();
+        self.comics.image_base_url.clear();
+        self.comics.image_model.clear();
+        self.comics.image_key.clear();
+        if self.llm.audio_encoding.is_empty() {
+            self.llm.audio_encoding = "auto".into();
+        }
+        if self.llm.audio_format.is_empty() {
+            self.llm.audio_format = "mp3".into();
+        }
+        if self.llm.chunk_seconds.is_empty() {
+            self.llm.chunk_seconds = "120".into();
+        }
+        if self.llm.reasoning_effort.is_empty() {
+            self.llm.reasoning_effort = "default".into();
+        }
     }
     fn path() -> PathBuf {
         Self::root().join("settings.json")
@@ -241,8 +406,77 @@ impl Settings {
 mod tests {
     use super::*;
     #[test]
+    fn old_settings_migrate_once_without_reusing_business_connections() {
+        let mut settings: Settings = serde_json::from_str(r#"{"llm":{"base_url":"https://audio.example/v1","model":"audio","audio_format":""},"comics":{"image_model":"edit"}}"#).unwrap();
+        settings.migrate();
+        assert_eq!(settings.ai.providers.len(), 2);
+        assert_ne!(
+            settings.llm.selected.provider,
+            settings.comics.image_selected.provider
+        );
+        assert_eq!(settings.llm.selected.model, "audio");
+        assert_eq!(settings.comics.image_selected.model, "edit");
+        assert_eq!(settings.llm.audio_format, "mp3");
+        settings.migrate();
+        assert_eq!(settings.ai.providers.len(), 2);
+        assert!(settings.llm.base_url.is_empty() && settings.comics.image_model.is_empty());
+        let mut fresh = Settings::default();
+        fresh.migrate();
+        assert!(fresh.ai.providers.is_empty());
+    }
+
+    #[test]
+    fn saved_settings_restore_keys_separately_and_remove_deleted_provider_keys() {
+        let vault = crate::credentials::tests::MemoryVault::default();
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("settings-test-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("settings.json");
+        let mut settings = Settings::default();
+        settings.ai.providers.push(crate::ai::Provider {
+            id: "my-ai".into(),
+            name: "AI".into(),
+            base_url: "https://example.com/v1".into(),
+            models: vec!["audio".into()],
+            api_key: "ai-test-key".into(),
+        });
+        settings.music.api_key = "music-test-key".into();
+        settings.sync.password = "webdav-test-key".into();
+        settings.sync.passphrase = "passphrase-test-key".into();
+        settings.save_with(&vault, &path).unwrap();
+        let json = std::fs::read_to_string(&path).unwrap();
+        assert!(!json.contains("test-key"));
+        let mut loaded: Settings = serde_json::from_str(&json).unwrap();
+        loaded.load_credentials_from(&vault, &path).unwrap();
+        assert!(loaded.ai.providers[0].api_key == "ai-test-key");
+        assert!(loaded.music.api_key == "music-test-key");
+        assert!(loaded.sync.password == "webdav-test-key");
+        assert!(loaded.sync.passphrase == "passphrase-test-key");
+        loaded.ai.providers.clear();
+        loaded.music.api_key.clear();
+        loaded.sync.password.clear();
+        loaded.sync.passphrase.clear();
+        loaded.save_with(&vault, &path).unwrap();
+        assert!(vault.values.borrow().is_empty());
+        let before = std::fs::read(&path).unwrap();
+        loaded.credential_error = Some("Vault is unavailable".into());
+        loaded.music.api_key = "must-not-be-saved".into();
+        assert!(loaded.save_with(&vault, &path).is_err());
+        assert!(vault.values.borrow().is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(
+            directory.starts_with(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"))
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
     fn language_and_parallelism_roundtrip_without_credentials() {
         let s = Settings {
+            sync: crate::sync::Settings {
+                password: "webdav-session-secret".into(),
+                passphrase: "sync-session-secret".into(),
+                ..Default::default()
+            },
             comics: crate::comics::Settings {
                 image_key: "image-session-secret".into(),
                 ..Default::default()
@@ -259,6 +493,7 @@ mod tests {
                 model: "custom-model".into(),
                 ..Default::default()
             },
+            ..Default::default()
         };
         let bytes = serde_json::to_vec(&s).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains("session-secret"));
@@ -266,7 +501,7 @@ mod tests {
         assert_eq!(loaded.language, Language::English);
         assert_eq!(loaded.subtitle_concurrency, 4);
         assert!(loaded.llm.api_key.is_empty());
-        assert_eq!(loaded.llm.model, "custom-model");
+        assert!(loaded.llm.model.is_empty());
         assert_eq!(
             serde_json::from_str::<Settings>("{}").unwrap().language,
             Language::Chinese

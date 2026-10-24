@@ -145,7 +145,7 @@ fn errors_do_not_echo_credentials_or_upstream_bodies() {
                 .err()
                 .unwrap()
                 .to_string()
-                .contains("CHKSZ_API_KEY")
+                .contains("Music settings")
         );
     });
     worker.join().unwrap();
@@ -182,6 +182,11 @@ fn download_is_local_playable_reusable_and_never_sends_api_key_to_cdn() {
         assert_eq!(info.title.as_deref(), Some("Resolved title"));
         assert_eq!(info.artist.as_deref(), Some("Resolved artist"));
         assert_eq!(info.album.as_deref(), Some("Resolved album"));
+        let origin = crate::media::LocalMetadata::load(&path).online.unwrap();
+        assert_eq!(origin.source, song.source);
+        assert_eq!(origin.id, song.id);
+        assert_eq!(origin.title, "Resolved title");
+        assert!(origin.cover.is_some());
         assert!(info.artwork.is_some());
         let sidecar = path.with_extension("lrc");
         assert!(
@@ -252,7 +257,7 @@ fn invalid_download_is_not_published_and_partial_is_cleaned() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 fn live_chksz(index: usize) {
-    let settings = Settings::default();
+    let settings = crate::test_config::settings().unwrap().music;
     let key = settings.key().unwrap();
     assert!(!key.is_empty(), "CHKSZ_API_KEY is missing");
     runtime().block_on(async {

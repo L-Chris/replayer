@@ -47,63 +47,32 @@ impl Config {
     }
     #[cfg(test)]
     pub fn load(settings: &Settings, language: crate::settings::Language) -> Result<Self> {
-        Self::load_with(settings, &crate::settings::Settings::load().llm, language)
+        let provider = crate::ai::Provider {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            base_url: settings.image_base_url.clone(),
+            api_key: settings.image_key.clone(),
+            models: vec![settings.image_model.clone()],
+        };
+        let ai = crate::ai::Settings {
+            providers: vec![provider],
+        };
+        let mut settings = settings.clone();
+        settings.image_selected = crate::ai::ModelRef {
+            provider: "fixture".into(),
+            model: settings.image_model.clone(),
+        };
+        Self::load_with(&settings, &ai, language)
     }
     pub fn load_with(
         settings: &Settings,
-        llm: &crate::settings::LlmSettings,
+        ai: &crate::ai::Settings,
         language: crate::settings::Language,
     ) -> Result<Self> {
-        let defaults = crate::subtitles::LlmConfig::defaults()?;
-        let field = |value: &str, name: &str, fallback: &[&str]| -> Result<String> {
-            if !value.trim().is_empty() {
-                return Ok(value.trim().into());
-            }
-            if let Some(value) = crate::env_config::get(name)? {
-                return Ok(value);
-            }
-            for name in fallback {
-                if let Some(value) = crate::env_config::get(name)? {
-                    return Ok(value);
-                }
-            }
-            Ok(String::new())
-        };
-        let base = field(&settings.image_base_url, "IMAGE_BASE_URL", &[])?;
-        let base = if base.is_empty() {
-            if llm.base_url.trim().is_empty() {
-                defaults.base_url
-            } else {
-                llm.base_url.trim().to_owned()
-            }
-        } else {
-            base
-        };
-        let url = source::http_url(&base)
-            .map_err(|_| anyhow!("图像接口地址无效 / Invalid image API endpoint"))?;
-        ensure!(
-            url.query().is_none() && url.fragment().is_none(),
-            "图像服务地址请勿携带查询参数 / Image endpoint cannot contain query parameters"
-        );
-        let key = field(&settings.image_key, "IMAGE_API_KEY", &[])?;
-        let key = if key.is_empty() {
-            if llm.api_key.trim().is_empty() {
-                defaults.api_key
-            } else {
-                llm.api_key.trim().into()
-            }
-        } else {
-            key
-        };
-        let model = field(&settings.image_model, "IMAGE_MODEL", &[])?;
-        ensure!(
-            !model.is_empty(),
-            "请在漫画设置或 .env 配置 IMAGE_MODEL / Set an image editing model"
-        );
-        ensure!(
-            !key.is_empty(),
-            "请配置 IMAGE_API_KEY / Set an image API key"
-        );
+        let connection = ai.resolve(&settings.image_selected)?;
+        let base = connection.base_url;
+        let key = connection.api_key;
+        let model = connection.model;
         let target = match settings.target.as_str() {
             "zh-CN" => "Simplified Chinese",
             "en-US" => "English",

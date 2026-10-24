@@ -46,6 +46,9 @@ enum Glyph {
 
 impl App {
     pub(super) fn navigate(&mut self, page: Page) {
+        if page == Page::Home && self.workspace.page != Page::Home {
+            self.comic.refresh_on_home(&self.settings, Instant::now());
+        }
         self.update_library();
         self.library.flush();
         self.comic.flush();
@@ -66,8 +69,7 @@ impl App {
                 .collect();
         }
         if page == Page::Settings && !self.settings_open {
-            self.llm_draft = self.settings.llm.clone();
-            self.online_music.draft = self.settings.music.clone();
+            self.preferences_draft = self.settings.clone();
             self.config_message.clear();
         }
         self.settings_open = page == Page::Settings;
@@ -86,9 +88,11 @@ impl App {
         if ctx.input(|i| i.key_pressed(Key::Escape))
             && !(self.workspace.page == Page::Comic && self.comic.reading())
         {
-            if self.fullscreen {
+            if window::fullscreen(&ctx) {
                 self.fullscreen = false;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                window::set_fullscreen(&ctx, false);
+            } else if self.workspace.page == Page::Settings && egui::Popup::is_any_open(&ctx) {
+                egui::Popup::close_all(&ctx);
             } else if self.volume_open {
                 self.volume_open = false;
             } else if self.online_music.open {
@@ -104,6 +108,7 @@ impl App {
             }
         }
         if !ctx.egui_wants_keyboard_input()
+            && !self.updater.dialog_visible
             && !self.magnet_open
             && !self.online_music.open
             && !(self.workspace.page == Page::Comic && self.comic.reading())
@@ -160,7 +165,7 @@ impl App {
                 Rect::from_min_size(
                     content.min + vec2(22.0, 8.0),
                     vec2(
-                        (content.width() - 56.0 - window::CONTROLS_WIDTH).max(180.0),
+                        (content.width() - 56.0 - window::controls_width(&ctx)).max(180.0),
                         36.0,
                     ),
                 ),
@@ -182,63 +187,69 @@ impl App {
                 root,
                 "listening-tabs",
                 Rect::from_min_size(
-                    pos2(content.max.x - width - 24.0, content.min.y + 64.0),
-                    vec2(width, 34.0),
+                    pos2(
+                        content.max.x - width - 24.0,
+                        content.min.y + music::TABS_TOP,
+                    ),
+                    vec2(width, design::CONTROL_HEIGHT),
                 ),
             );
             design::segmented(&mut tabs, &mut self.workspace.listening_tab, &labels);
             self.music_view(root, screen, content, &mut act);
         } else {
-            let mut top = child(
-                root,
-                "workspace-header",
-                Rect::from_min_size(
-                    content.min + vec2(28.0, 12.0),
-                    vec2(
-                        (content
-                            .max
-                            .x
-                            .min(screen.max.x - window::CONTROLS_WIDTH - 12.0)
-                            - content.min.x
-                            - 56.0)
-                            .max(120.0),
-                        38.0,
+            let settings_page = self.workspace.page == Page::Settings;
+            if !settings_page {
+                let mut top = child(
+                    root,
+                    "workspace-header",
+                    Rect::from_min_size(
+                        content.min + vec2(28.0, 12.0),
+                        vec2(
+                            (content
+                                .max
+                                .x
+                                .min(screen.max.x - window::controls_width(&ctx) - 12.0)
+                                - content.min.x
+                                - 56.0)
+                                .max(120.0),
+                            38.0,
+                        ),
                     ),
-                ),
-            );
-            // TextEdit paints its frame and hover stroke outside its allocation.
-            // Keep that decoration inside the caption's clip, including its top.
-            top.set_clip_rect(Rect::from_min_max(
-                content.min + vec2(24.0, 4.0),
-                pos2(
-                    (screen.max.x - window::CONTROLS_WIDTH - 8.0).min(content.max.x),
-                    content.min.y + 60.0,
-                ),
-            ));
-            top.horizontal(|ui| {
-                let width = ui.available_width().clamp(100.0, 530.0);
-                let input = design::search_field(
-                    ui,
-                    &mut self.workspace.query,
-                    width,
-                    language.text("搜索媒体、音乐或漫画", "Search your media"),
                 );
-                if input.lost_focus()
-                    && ui.input(|i| i.key_pressed(Key::Enter))
-                    && self.workspace.page == Page::Comic
-                {
-                    self.comic.search_for(self.workspace.query.clone());
-                }
-            });
-            root.painter().line_segment(
-                [
-                    pos2(content.min.x, content.min.y + 64.0),
-                    pos2(content.max.x, content.min.y + 64.0),
-                ],
-                Stroke::new(1.0, LINE),
-            );
+                // TextEdit paints its frame and hover stroke outside its allocation.
+                // Keep that decoration inside the caption's clip, including its top.
+                top.set_clip_rect(Rect::from_min_max(
+                    content.min + vec2(24.0, 4.0),
+                    pos2(
+                        (screen.max.x - window::controls_width(&ctx) - 8.0).min(content.max.x),
+                        content.min.y + 60.0,
+                    ),
+                ));
+                top.horizontal(|ui| {
+                    let width = ui.available_width().clamp(100.0, 530.0);
+                    let input = design::search_field(
+                        ui,
+                        &mut self.workspace.query,
+                        width,
+                        language.text("搜索媒体、音乐或漫画", "Search your media"),
+                    );
+                    if input.lost_focus()
+                        && ui.input(|i| i.key_pressed(Key::Enter))
+                        && self.workspace.page == Page::Comic
+                    {
+                        self.comic.search_for(self.workspace.query.clone());
+                    }
+                });
+                root.painter().line_segment(
+                    [
+                        pos2(content.min.x, content.min.y + 64.0),
+                        pos2(content.max.x, content.min.y + 64.0),
+                    ],
+                    Stroke::new(1.0, LINE),
+                );
+            }
             let body = Rect::from_min_max(
-                content.min + vec2(28.0, 84.0),
+                content.min + vec2(28.0, if settings_page { 52.0 } else { 84.0 }),
                 content.max - vec2(28.0, 14.0),
             );
             let mut ui = child(root, "workspace-content", body);
@@ -345,6 +356,8 @@ impl App {
         self.window_frame(root, !reader || self.comic.toolbar_visible());
         self.online_music_window(&ctx);
         self.magnet_dialog(&ctx);
+        self.history_notice(&ctx);
+        self.update_dialog(&ctx);
         self.apply_action(act, &ctx);
         if language != self.settings.language {
             self.comic.reload_images();
@@ -367,7 +380,7 @@ impl App {
         let mut ui = child(root, "main-navigation", rect.shrink2(vec2(12.0, 18.0)));
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::hover());
-            draw_play(ui.painter(), r.shrink(3.0), ACCENT);
+            branding::paint(ui.painter(), r);
             if !narrow {
                 ui.label(RichText::new("replayer").size(20.0).strong());
             }
@@ -490,65 +503,15 @@ fn nav_item(ui: &mut Ui, label: &str, icon: Glyph, selected: bool, narrow: bool)
         .on_hover_text(label)
 }
 fn glyph(p: &Painter, r: Rect, c: Color32, g: Glyph) {
-    let s = Stroke::new(1.6, c);
-    match g {
-        Glyph::Music => draw_music(p, r, c),
-        Glyph::Video => draw_video(p, r, c),
-        Glyph::Settings => draw_settings(p, r, c),
-        Glyph::Book => {
-            p.rect_stroke(r, 2, s, egui::StrokeKind::Inside);
-            p.line_segment(
-                [pos2(r.center().x, r.min.y), pos2(r.center().x, r.max.y)],
-                s,
-            );
-        }
-        Glyph::Home => {
-            p.line_segment(
-                [pos2(r.min.x, r.center().y), pos2(r.center().x, r.min.y)],
-                s,
-            );
-            p.line_segment(
-                [pos2(r.center().x, r.min.y), pos2(r.max.x, r.center().y)],
-                s,
-            );
-            p.rect_stroke(
-                Rect::from_min_max(pos2(r.min.x + 3.0, r.center().y), r.max - vec2(3.0, 0.0)),
-                1,
-                s,
-                egui::StrokeKind::Inside,
-            );
-        }
-        Glyph::Clock => {
-            p.circle_stroke(r.center(), r.width() * 0.47, s);
-            p.line_segment([r.center(), pos2(r.center().x, r.min.y + 4.0)], s);
-            p.line_segment([r.center(), pos2(r.max.x - 4.0, r.center().y + 3.0)], s);
-        }
-        Glyph::Download => {
-            p.line_segment(
-                [
-                    pos2(r.center().x, r.min.y),
-                    pos2(r.center().x, r.max.y - 5.0),
-                ],
-                s,
-            );
-            p.line_segment(
-                [
-                    pos2(r.min.x + 3.0, r.center().y),
-                    pos2(r.center().x, r.max.y - 5.0),
-                ],
-                s,
-            );
-            p.line_segment(
-                [
-                    pos2(r.max.x - 3.0, r.center().y),
-                    pos2(r.center().x, r.max.y - 5.0),
-                ],
-                s,
-            );
-            p.line_segment([pos2(r.min.x, r.max.y), r.max], s);
-        }
-        Glyph::Heart => {
-            design::heart(p, r, c, false);
-        }
-    }
+    let icon = match g {
+        Glyph::Home => icons::HOUSE,
+        Glyph::Music => icons::MUSIC_NOTES,
+        Glyph::Video => icons::FILM_SLATE,
+        Glyph::Book => icons::BOOK_OPEN,
+        Glyph::Heart => icons::HEART,
+        Glyph::Clock => icons::CLOCK_COUNTER_CLOCKWISE,
+        Glyph::Download => icons::DOWNLOAD_SIMPLE,
+        Glyph::Settings => icons::GEAR_SIX,
+    };
+    icons::paint(p, r, c, icon);
 }

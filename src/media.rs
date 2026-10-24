@@ -14,6 +14,7 @@ pub struct LocalMetadata {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub online: Option<crate::music_sources::OnlineSong>,
 }
 pub fn companion_path(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
@@ -43,7 +44,7 @@ impl LocalMetadata {
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         write_companion(path, ".replayer.json", &serde_json::to_vec(self)?)
     }
-    fn load(path: &Path) -> Self {
+    pub(crate) fn load(path: &Path) -> Self {
         read_bounded(&companion_path(path, ".replayer.json"), 64 * 1024)
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default()
