@@ -57,7 +57,7 @@ const
   SHCNF_PATHW_FLUSHNOWAIT = $00002005;
 
 procedure SHChangeNotify(EventID: Integer; Flags: Cardinal;
-  const ItemPath: String; Unused: NativeInt);
+  const ItemPath: String; Unused: Integer);
   external 'SHChangeNotify@shell32.dll stdcall';
 
 function ShouldUpdateDesktopShortcut: Boolean;
