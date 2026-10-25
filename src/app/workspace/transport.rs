@@ -62,11 +62,7 @@ impl App {
         metadata
             .add(egui::Label::new(RichText::new(&track_label).size(14.0).strong()).truncate())
             .on_hover_text(&track_label);
-        let path = self
-            .source
-            .as_ref()
-            .filter(|p| p.is_file())
-            .map(|p| p.to_string_lossy().into_owned());
+        let path = self.active_record_path();
         let selected = path.as_ref().is_some_and(|path| {
             self.library
                 .records
@@ -95,6 +91,21 @@ impl App {
                 false,
             );
         }
+        let status = self.music_buffer_status();
+        if !status.is_empty() {
+            let mut status_ui = child(
+                root,
+                "music-buffer-status",
+                Rect::from_min_max(
+                    bar.min + vec2(140.0, 62.0),
+                    pos2(
+                        (bar.center().x - 160.0).min(bar.min.x + 360.0),
+                        bar.min.y + 84.0,
+                    ),
+                ),
+            );
+            status_ui.add(egui::Label::new(RichText::new(status).small().color(MUTED)).truncate());
+        }
         let playing = self.player.as_ref().is_some_and(|p| p.is_playing());
         let (position, duration) = self
             .player
@@ -112,7 +123,7 @@ impl App {
             self.shuffle = !self.shuffle;
         }
         let mut previous_ui = control_slot(root, "music-previous", center + vec2(-60.0, 0.0), 28.0);
-        if self.player.is_none() {
+        if self.queue.previous_index().is_none() && self.player.is_none() {
             previous_ui.disable();
         }
         if icon_button(&mut previous_ui, 28.0, 1.0, draw_prev)
@@ -122,7 +133,7 @@ impl App {
             *act = Act::Previous;
         }
         let mut play_ui = control_slot(root, "music-play", center, 46.0);
-        if self.player.is_none() {
+        if self.player.is_none() && (self.queue.current.is_none() || self.online_music.busy()) {
             play_ui.disable();
         }
         if play_circle_button(&mut play_ui, 46.0, playing)
@@ -132,7 +143,7 @@ impl App {
             *act = Act::TogglePlay;
         }
         let mut next_ui = control_slot(root, "music-next", center + vec2(60.0, 0.0), 28.0);
-        if self.player.is_none() {
+        if self.queue.next_index().is_none() {
             next_ui.disable();
         }
         if icon_button(&mut next_ui, 28.0, 1.0, draw_next)

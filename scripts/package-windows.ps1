@@ -19,6 +19,13 @@ try {
     # Whitelist package contents: never copy the working tree, .env, settings or media.
     Copy-Item -LiteralPath $Binary -Destination (Join-Path $stage 'replayer.exe')
     Copy-Item -LiteralPath 'assets/branding/replayer.ico' -Destination $stage
+    # Explorer caches icons by path. A content-addressed filename changes only
+    # when the artwork does, including same-version installer rebuilds.
+    $iconDigest = (Get-FileHash -LiteralPath 'assets/branding/replayer.ico' -Algorithm SHA256).Hash.ToLowerInvariant()
+    $iconName = 'replayer-' + $iconDigest.Substring(0, 16) + '.ico'
+    $iconDirectory = Join-Path $stage 'icons'
+    New-Item -ItemType Directory -Path $iconDirectory -Force | Out-Null
+    Copy-Item -LiteralPath 'assets/branding/replayer.ico' -Destination (Join-Path $iconDirectory $iconName)
     $ffmpeg = $env:FFMPEG_DIR
     if (-not $ffmpeg) { $ffmpeg = Join-Path $root '.deps/ffmpeg-n9.0.1-84-g946fcce07b-win64-lgpl-shared-9.0' }
     $dlls = @(& "$PSScriptRoot/ffmpeg-runtime.ps1" -Binary $Binary -RuntimeDirectory (Join-Path $ffmpeg 'bin'))
@@ -40,7 +47,7 @@ try {
             $Iscc = @('C:/Program Files (x86)/Inno Setup 6/ISCC.exe','C:/Program Files/Inno Setup 6/ISCC.exe','C:/Program Files (x86)/Inno Setup 7/ISCC.exe') | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
         }
         if (-not $Iscc) { throw 'Inno Setup compiler not found; install Inno Setup or pass -Iscc.' }
-        & $Iscc "/DAppVersion=$version" "/DSourceDir=$stage" "/DOutputDir=$output" 'installer/replayer.iss'
+        & $Iscc "/DAppVersion=$version" "/DSourceDir=$stage" "/DOutputDir=$output" "/DAppIconFile=$iconName" 'installer/replayer.iss'
         if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
     }
     Get-ChildItem -LiteralPath $output -File | Where-Object { $_.Name -like "replayer-$version-windows-x86_64*" -and $_.Extension -in @('.zip','.exe') } | ForEach-Object {

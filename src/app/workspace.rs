@@ -14,9 +14,6 @@ pub(super) enum Page {
     Music,
     Video,
     Comic,
-    Favorites,
-    Recent,
-    Downloads,
     Settings,
     Listening,
     Playing,
@@ -29,7 +26,6 @@ pub(super) struct State {
     pub listening_tab: usize,
     filter: usize,
     pub resume: Option<(String, f64)>,
-    downloads: Vec<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -38,9 +34,6 @@ enum Glyph {
     Music,
     Video,
     Book,
-    Heart,
-    Clock,
-    Download,
     Settings,
 }
 
@@ -57,16 +50,6 @@ impl App {
             && let Some(player) = &self.player
         {
             player.set_playing(false);
-        }
-        if page == Page::Downloads {
-            self.workspace.downloads = std::fs::read_dir(self.settings.music.directory())
-                .into_iter()
-                .flatten()
-                .flatten()
-                .take(2000)
-                .map(|e| e.path().to_string_lossy().into_owned())
-                .filter(|p| crate::media::supported(p))
-                .collect();
         }
         if page == Page::Settings && !self.settings_open {
             self.preferences_draft = self.settings.clone();
@@ -268,20 +251,10 @@ impl App {
                         .ui(&mut ui, &mut self.settings, &mut self.settings_open);
                 }
                 Page::Settings => self.preferences_page(&mut ui),
-                Page::Music | Page::Video | Page::Favorites | Page::Recent | Page::Downloads => {
-                    self.media_library(&mut ui)
-                }
+                Page::Music | Page::Video => self.media_library(&mut ui),
                 _ => {}
             }
-            if matches!(
-                self.workspace.page,
-                Page::Home
-                    | Page::Music
-                    | Page::Video
-                    | Page::Recent
-                    | Page::Favorites
-                    | Page::Downloads
-            ) {
+            if matches!(self.workspace.page, Page::Home | Page::Music | Page::Video) {
                 let narrow = body.width() < 550.0;
                 let width = if narrow { 40.0 } else { 134.0 };
                 let mut actions = child(
@@ -404,34 +377,6 @@ impl App {
                 self.navigate(page);
             }
         }
-        ui.add_space(18.0);
-        ui.separator();
-        ui.add_space(12.0);
-        if !narrow {
-            ui.label(
-                RichText::new(l.text("我的资料库", "My library"))
-                    .small()
-                    .color(MUTED),
-            );
-            ui.add_space(6.0);
-        }
-        for (page, zh, en, glyph) in [
-            (Page::Favorites, "收藏", "Favorites", Glyph::Heart),
-            (Page::Recent, "最近播放", "Recent", Glyph::Clock),
-            (Page::Downloads, "下载", "Downloads", Glyph::Download),
-        ] {
-            if nav_item(
-                &mut ui,
-                l.text(zh, en),
-                glyph,
-                self.workspace.page == page,
-                narrow,
-            )
-            .clicked()
-            {
-                self.navigate(page);
-            }
-        }
         let settings = Rect::from_min_size(
             pos2(rect.min.x + 12.0, rect.max.y - 58.0),
             vec2(rect.width() - 24.0, 42.0),
@@ -508,9 +453,6 @@ fn glyph(p: &Painter, r: Rect, c: Color32, g: Glyph) {
         Glyph::Music => icons::MUSIC_NOTES,
         Glyph::Video => icons::FILM_SLATE,
         Glyph::Book => icons::BOOK_OPEN,
-        Glyph::Heart => icons::HEART,
-        Glyph::Clock => icons::CLOCK_COUNTER_CLOCKWISE,
-        Glyph::Download => icons::DOWNLOAD_SIMPLE,
         Glyph::Settings => icons::GEAR_SIX,
     };
     icons::paint(p, r, c, icon);

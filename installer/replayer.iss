@@ -4,6 +4,9 @@
 #ifndef SourceDir
   #error SourceDir is required
 #endif
+#ifndef AppIconFile
+  #error AppIconFile is required
+#endif
 [Setup]
 AppId={{18561AE2-CC3B-47E7-9468-1255D7569D86}
 AppName=replayer
@@ -21,8 +24,8 @@ OutputBaseFilename=replayer-{#AppVersion}-windows-x86_64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-SetupIconFile={#SourceDir}\replayer.ico
-UninstallDisplayIcon={app}\replayer.exe
+SetupIconFile={#SourceDir}\icons\{#AppIconFile}
+UninstallDisplayIcon={app}\icons\{#AppIconFile}
 CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
@@ -42,8 +45,85 @@ Type: files; Name: "{app}\avdevice-63.dll"
 Type: files; Name: "{app}\avfilter-12.dll"
 
 [Icons]
-Name: "{group}\replayer"; Filename: "{app}\replayer.exe"; IconFilename: "{app}\replayer.exe"; IconIndex: 0
-Name: "{autodesktop}\replayer"; Filename: "{app}\replayer.exe"; IconFilename: "{app}\replayer.exe"; IconIndex: 0; Tasks: desktopicon
+Name: "{group}\replayer"; Filename: "{app}\replayer.exe"; IconFilename: "{app}\icons\{#AppIconFile}"; IconIndex: 0
+Name: "{autodesktop}\replayer"; Filename: "{app}\replayer.exe"; IconFilename: "{app}\icons\{#AppIconFile}"; IconIndex: 0; Check: ShouldUpdateDesktopShortcut
 
 [Run]
 Filename: "{app}\replayer.exe"; Description: "Launch replayer"; Flags: nowait postinstall skipifsilent
+
+[Code]
+const
+  SHCNE_UPDATEITEM = $00002000;
+  SHCNF_PATHW_FLUSHNOWAIT = $00002005;
+
+procedure SHChangeNotify(EventID: Integer; Flags: Cardinal;
+  const ItemPath: String; Unused: NativeInt);
+  external 'SHChangeNotify@shell32.dll stdcall';
+
+function ShouldUpdateDesktopShortcut: Boolean;
+begin
+  Result := WizardIsTaskSelected('desktopicon') or
+    FileExists(ExpandConstant('{autodesktop}\replayer.lnk'));
+end;
+
+procedure NotifyIconChanged(const FileName: String);
+begin
+  if FileExists(FileName) then
+    SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW_FLUSHNOWAIT, FileName, 0);
+end;
+
+procedure RefreshPinnedIcons;
+var
+  Shell, Shortcut: Variant;
+  FindRec: TFindRec;
+  PinnedDir, LinkPath, TargetPath, IconPath: String;
+begin
+  { Windows keeps its own copies of pinned links. Update only this
+    installation's icon, preserving the pin, target, arguments and AppID. }
+  PinnedDir := ExpandConstant(
+    '{userappdata}\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar');
+  IconPath := ExpandConstant('{app}\icons\{#AppIconFile}');
+  if not FindFirst(PinnedDir + '\*.lnk', FindRec) then
+    Exit;
+  try
+    Shell := CreateOleObject('WScript.Shell');
+    repeat
+      if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+      begin
+        LinkPath := PinnedDir + '\' + FindRec.Name;
+        try
+          Shortcut := Shell.CreateShortcut(LinkPath);
+          TargetPath := Shell.ExpandEnvironmentStrings(Shortcut.TargetPath);
+          if CompareText(TargetPath, ExpandConstant('{app}\replayer.exe')) = 0 then
+          begin
+            Shortcut.IconLocation := '"' + IconPath + '",0';
+            Shortcut.Save;
+            NotifyIconChanged(LinkPath);
+            Log('Updated pinned replayer icon: ' + LinkPath);
+          end;
+        except
+          { A locked/custom link must not prevent the application update. }
+          Log('Could not update pinned icon: ' + LinkPath + ': ' + GetExceptionMessage);
+        end;
+      end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    NotifyIconChanged(ExpandConstant('{app}\replayer.exe'));
+    NotifyIconChanged(ExpandConstant('{app}\icons\{#AppIconFile}'));
+    NotifyIconChanged(ExpandConstant('{group}\replayer.lnk'));
+    NotifyIconChanged(ExpandConstant('{autodesktop}\replayer.lnk'));
+    try
+      RefreshPinnedIcons;
+    except
+      Log('Could not refresh pinned icons: ' + GetExceptionMessage);
+    end;
+  end;
+end;

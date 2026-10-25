@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-const MAX_BYTES: u64 = 512 * 1024 * 1024;
+pub(super) const MAX_BYTES: u64 = 512 * 1024 * 1024;
 struct Partial {
     file: Option<File>,
     path: PathBuf,
@@ -23,7 +23,7 @@ impl Drop for Partial {
         let _ = std::fs::remove_file(&self.path);
     }
 }
-fn filename(song: &Song, quality: &str, extension: &str) -> String {
+pub(super) fn filename(song: &Song, quality: &str, extension: &str) -> String {
     let text = format!("{} - {}", song.artist, song.title);
     let safe: String = text
         .chars()
@@ -44,7 +44,7 @@ fn filename(song: &Song, quality: &str, extension: &str) -> String {
         extension
     )
 }
-fn validate(path: &Path) -> Result<()> {
+pub(super) fn validate(path: &Path) -> Result<()> {
     // Opening only completed local files avoids signed URLs entering FFmpeg logs.
     let media = ffmpeg_next::format::input(path)
         .map_err(|_| anyhow!("Downloaded file is not playable audio"))?;
@@ -57,7 +57,7 @@ fn validate(path: &Path) -> Result<()> {
     );
     Ok(())
 }
-async fn enrich(path: &Path, track: &ResolvedTrack) -> Result<()> {
+pub(super) async fn enrich(path: &Path, track: &ResolvedTrack) -> Result<()> {
     track
         .metadata
         .save(path)
@@ -119,23 +119,7 @@ pub async fn download(
     directory: &Path,
     progress: Arc<AtomicU64>,
 ) -> Result<PathBuf> {
-    let mut track = source.resolve(song, quality).await?;
-    let mut online = OnlineSong::from(song);
-    if !track.metadata.title.is_empty() {
-        online.title = track.metadata.title.clone();
-    }
-    if !track.metadata.artist.is_empty() {
-        online.artist = track.metadata.artist.clone();
-    }
-    if !track.metadata.album.is_empty() {
-        online.album = track.metadata.album.clone();
-    }
-    online.cover = track
-        .cover
-        .as_ref()
-        .map(ToString::to_string)
-        .or(online.cover);
-    track.metadata.online = Some(online);
+    let mut track = resolve_track(source, song, quality).await?;
     if track.lyrics.is_none() {
         // Lyrics are best-effort: an unavailable endpoint never fails playback.
         track.lyrics = source.lyrics(song).await.ok().flatten();
@@ -207,4 +191,29 @@ pub async fn download(
     std::fs::hard_link(&partial.path, &target).context("Cannot publish downloaded music file")?;
     enrich(&target, &track).await?;
     Ok(target)
+}
+
+pub(super) async fn resolve_track(
+    source: &dyn MusicSource,
+    song: &Song,
+    quality: &str,
+) -> Result<ResolvedTrack> {
+    let mut track = source.resolve(song, quality).await?;
+    let mut online = OnlineSong::from(song);
+    if !track.metadata.title.is_empty() {
+        online.title = track.metadata.title.clone();
+    }
+    if !track.metadata.artist.is_empty() {
+        online.artist = track.metadata.artist.clone();
+    }
+    if !track.metadata.album.is_empty() {
+        online.album = track.metadata.album.clone();
+    }
+    online.cover = track
+        .cover
+        .as_ref()
+        .map(ToString::to_string)
+        .or(online.cover);
+    track.metadata.online = Some(online);
+    Ok(track)
 }

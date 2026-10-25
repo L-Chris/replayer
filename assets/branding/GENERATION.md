@@ -33,8 +33,25 @@ pages with the main sidebar use this mark. Immersive players and the comic
 reader keep their existing layout without a brand header.
 
 `build.rs` embeds the ICO in the executable. `src/main.rs` supplies the PNG to the
-native window. The installer uses the ICO for Setup/Uninstall and the
-executable's icon for shortcuts and the installed-apps entry.
+native window. Packaging also copies the ICO to `icons/replayer-<sha256-prefix>.ico`.
+The installer uses that content-addressed file for Setup, desktop/Start Menu
+shortcuts and the installed-apps entry. This gives changed artwork a new Windows
+icon-cache key, including same-version rebuilds; existing icon files are retained
+for older custom shortcuts until uninstall.
+
+After installation, existing taskbar shortcut copies targeting this installation's
+`replayer.exe` have only their icon location updated and saved. Their target,
+arguments and application identity are retained. The installer sends targeted
+`SHCNE_UPDATEITEM` notifications for the executable and affected shortcuts; it
+neither restarts Explorer nor clears other applications' icon caches. The app's
+inferred taskbar identity is kept rather than introducing a new AppUserModelID
+that would split existing pinned groups.
+
+Windows CI runs `scripts/test-installed-icons.ps1` against the built installer.
+It checks desktop, Start Menu and existing taskbar links on installation and
+reinstallation, including an unchecked desktop task, and verifies an unrelated
+pinned link is unchanged. Manual verification should also check the visible
+pinned/running taskbar icon after upgrading an older installation.
 
 ## Initial generation
 

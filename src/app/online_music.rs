@@ -19,6 +19,13 @@ fn music_error(language: Language, error: &anyhow::Error) -> String {
             "该音质没有可播放地址，请尝试其他音质"
         }
         "Unsupported music download URL" => "音乐源返回了不支持的下载地址",
+        "Unsupported audio format" => "音乐源返回了不支持的音频格式",
+        "Invalid music content range"
+        | "Invalid music range length"
+        | "Invalid music response length" => "音乐源返回的数据范围不正确，请重试",
+        "Music server changed or stopped supporting ranges" => {
+            "音乐地址已失效或不再支持分段读取，请重试"
+        }
         "Music download connection failed or timed out" => "音乐下载连接失败或超时",
         "Music download interrupted or timed out" => "音乐下载中断或超时，请重试",
         "Incomplete music download" => "音乐下载不完整，请重试",
@@ -66,14 +73,33 @@ pub(super) struct State {
     songs: Vec<Song>,
     search: Option<Job<SearchPage>>,
     download: Option<Job<PathBuf>>,
+    downloading: Option<String>,
     status: String,
     failed: bool,
-    pub autoplay: bool,
+    pub preparing: Option<Job<music_sources::streaming::Prepared>>,
+    pub stream: Option<music_sources::streaming::Stream>,
+    pub errors: HashMap<String, String>,
+    attempts: u8,
+    retry_at: Option<Instant>,
+    stream_finished: bool,
     providers: Vec<Arc<dyn MusicSource>>,
     covers: HashMap<String, Job<Arc<crate::media::Artwork>>>,
     cover_attempts: std::collections::HashSet<String>,
 }
 impl State {
+    pub fn cancel_playback(&mut self) {
+        self.preparing = None;
+        self.stream = None;
+        self.retry_at = None;
+        self.stream_finished = false;
+    }
+    pub fn reset_attempts(&mut self) {
+        self.attempts = 0;
+    }
+    pub fn busy(&self) -> bool {
+        self.preparing.is_some() || self.retry_at.is_some()
+    }
+
     pub(super) fn clear_search(&mut self) {
         self.search = None;
         self.songs.clear();
@@ -90,9 +116,15 @@ impl State {
             songs: Vec::new(),
             search: None,
             download: None,
+            downloading: None,
             status: String::new(),
             failed: false,
-            autoplay: false,
+            preparing: None,
+            stream: None,
+            errors: HashMap::new(),
+            attempts: 0,
+            retry_at: None,
+            stream_finished: false,
             providers: music_sources::sources("").unwrap_or_default(),
             covers: HashMap::new(),
             cover_attempts: Default::default(),
@@ -152,12 +184,51 @@ impl App {
         online: music_sources::OnlineSong,
         resume: Option<f64>,
     ) {
-        if self.online_music.download.is_some() {
+        if self.online_music.downloading.as_deref() == Some(&online.key()) {
+            self.online_music.download = None;
+            self.online_music.downloading = None;
+        }
+        self.mode = UiMode::Music;
+        self.ui_kind_music = Some(true);
+        self.workspace.page = workspace::Page::Listening;
+        self.settings_open = false;
+        self.player = None;
+        self.source = None;
+        self.media_info = None;
+        self.artwork = None;
+        self.subtitle_job = None;
+        self.subtitles.clear();
+        self.lyrics = Default::default();
+        self.video.clear();
+        self.loading = true;
+        self.title = online.title.clone();
+        self.online_origin = Some(online.clone());
+        if !self
+            .library
+            .records
+            .iter()
+            .any(|r| r.online.as_ref().is_some_and(|s| s.key() == online.key()))
+        {
+            self.library
+                .bind_online(format!("online://{}", online.key()), online.clone());
+        }
+        self.error = None;
+        self.workspace.resume = resume.map(|p| (format!("online://{}", online.key()), p));
+        if let Some(path) = self
+            .library
+            .records
+            .iter()
+            .find(|r| {
+                r.online.as_ref().is_some_and(|s| s.key() == online.key())
+                    && std::path::Path::new(&r.path).is_file()
+            })
+            .map(|r| r.path.clone())
+        {
+            self.load_online_media(path, online);
             return;
         }
         let result = online.song().and_then(|song| {
-            let providers = music_sources::sources(&self.settings.music.key()?)?;
-            let source = providers
+            let source = music_sources::sources(&self.settings.music.key()?)?
                 .into_iter()
                 .find(|p| p.descriptor().id == song.source)
                 .ok_or_else(|| anyhow::anyhow!("音乐源暂不可用 / Music source is unavailable"))?;
@@ -167,21 +238,73 @@ impl App {
             Ok((song, source)) => {
                 let quality = self.settings.music.quality.clone();
                 let directory = self.settings.music.directory();
-                self.online_music.autoplay = true;
-                self.online_music.failed = false;
-                self.online_music.status.clear();
-                self.workspace.resume = resume.map(|p| (format!("online://{}", online.key()), p));
-                self.online_music.download = Some(Job::spawn(move |bytes| async move {
-                    music_sources::download(source.as_ref(), &song, &quality, &directory, bytes)
-                        .await
+                self.online_music.preparing = Some(Job::spawn(move |_| async move {
+                    music_sources::streaming::prepare(source, song, quality, directory).await
                 }));
             }
-            Err(error) => {
-                self.error = Some(music_error(self.settings.language, &error));
-            }
+            Err(error) => self.fail_online_playback(error),
         }
     }
-    pub(super) fn poll_online_music(&mut self) {
+    fn load_online_media(&mut self, path: String, online: music_sources::OnlineSong) {
+        let progressive = path.starts_with("http://");
+        self.load_media(path, progressive);
+        let binding = self
+            .library
+            .records
+            .iter()
+            .find(|r| r.online.as_ref().is_some_and(|s| s.key() == online.key()))
+            .map(|r| r.path.clone())
+            .unwrap_or_else(|| format!("online://{}", online.key()));
+        self.library.bind_online(binding, online.clone());
+        self.title = online.title.clone();
+        self.online_origin = Some(online);
+        self.ui_kind_music = Some(true);
+    }
+    pub(super) fn fail_online_playback(&mut self, error: anyhow::Error) {
+        let Some(song) = self.online_origin.clone() else {
+            return;
+        };
+        if let Some(player) = &self.player {
+            let position = player.position();
+            if position > 1.0 {
+                self.workspace.resume = Some((format!("online://{}", song.key()), position));
+            }
+        }
+        self.update_library();
+        self.player = None;
+        self.source = None;
+        self.online_music.cancel_playback();
+        if self.online_music.attempts == 0 {
+            self.online_music.attempts = 1;
+            self.online_music.retry_at = Some(Instant::now() + Duration::from_millis(500));
+            self.loading = true;
+            return;
+        }
+        let message = music_error(self.settings.language, &error);
+        self.online_music.errors.insert(song.key(), message.clone());
+        self.error = Some(message);
+        self.loading = false;
+        let next = self.next_playable_queue_index(true);
+        if let Some(next) = next {
+            self.play_queue(next);
+        }
+    }
+    fn downloaded_music(&mut self, path: PathBuf) {
+        if let Some(song) = crate::media::LocalMetadata::load(&path).online {
+            let active = self
+                .online_origin
+                .as_ref()
+                .is_some_and(|s| s.key() == song.key());
+            self.library
+                .bind_online(path.to_string_lossy().into_owned(), song);
+            if active {
+                self.lyrics = crate::lyrics::Lyrics::load_for(&path).unwrap_or_default();
+            }
+        }
+        self.metadata_cache.remove(path.to_string_lossy().as_ref());
+        self.art_textures.remove(path.to_string_lossy().as_ref());
+    }
+    pub(super) fn poll_online_music(&mut self, ctx: &egui::Context) {
         let ready: Vec<_> = self
             .online_music
             .covers
@@ -191,6 +314,16 @@ impl App {
         for (path, result) in ready {
             self.online_music.covers.remove(&path);
             if let Ok(artwork) = result {
+                if self.active_record_path().as_deref() == Some(&path) {
+                    self.artwork = Some(ctx.load_texture(
+                        "online-music-artwork",
+                        egui::ColorImage::from_rgba_unmultiplied(
+                            [artwork.width, artwork.height],
+                            &artwork.rgba,
+                        ),
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
                 self.metadata_cache.complete(
                     path,
                     Some(Arc::new(crate::media::Info {
@@ -202,6 +335,53 @@ impl App {
                     })),
                 );
             }
+        }
+        if self
+            .online_music
+            .retry_at
+            .is_some_and(|at| Instant::now() >= at)
+        {
+            self.online_music.retry_at = None;
+            if let Some(song) = self.online_origin.clone() {
+                let resume = self.workspace.resume.as_ref().map(|(_, p)| *p);
+                self.start_online_record(song, resume);
+            }
+        }
+        if let Some(result) = self.online_music.preparing.as_ref().and_then(Job::poll) {
+            self.online_music.preparing = None;
+            match result {
+                Ok(music_sources::streaming::Prepared::Local(path)) => {
+                    self.downloaded_music(path.clone());
+                    if let Some(song) = self.online_origin.clone() {
+                        self.load_online_media(path.to_string_lossy().into_owned(), song);
+                    }
+                }
+                Ok(music_sources::streaming::Prepared::Stream(stream)) => {
+                    self.load_online_media(stream.url.clone(), stream.song.clone());
+                    self.online_music.stream = Some(stream);
+                }
+                Err(error) => self.fail_online_playback(error),
+            }
+        }
+        if !self.online_music.stream_finished
+            && let Some(result) = self.online_music.stream.as_ref().and_then(|s| s.poll())
+        {
+            self.online_music.stream_finished = true;
+            match result {
+                Ok(path) => self.downloaded_music(path),
+                Err(error) => self.fail_online_playback(error),
+            }
+        }
+        if self.artwork.is_none()
+            && let Some(path) = self.active_record_path()
+            && let Some(record) = self
+                .library
+                .records
+                .iter()
+                .find(|r| r.path == path)
+                .cloned()
+        {
+            self.request_online_art(&record, ctx);
         }
         if let Some(result) = self.online_music.search.as_ref().and_then(Job::poll) {
             self.online_music.search = None;
@@ -218,43 +398,51 @@ impl App {
         }
         if let Some(result) = self.online_music.download.as_ref().and_then(Job::poll) {
             self.online_music.download = None;
+            self.online_music.downloading = None;
             match result {
                 Ok(path) => {
-                    if let Some(song) = crate::media::LocalMetadata::load(&path).online {
-                        if let Some((old, _)) = &mut self.workspace.resume
-                            && *old == format!("online://{}", song.key())
-                        {
-                            *old = path.to_string_lossy().into_owned();
-                        }
-                        self.library
-                            .bind_online(path.to_string_lossy().into_owned(), song);
-                    }
-                    self.metadata_cache.remove(path.to_string_lossy().as_ref());
-                    self.art_textures.remove(path.to_string_lossy().as_ref());
                     self.online_music.failed = false;
                     self.online_music.status = format!(
                         "{} {}",
                         self.settings.language.text("已下载：", "Downloaded:"),
                         path.display()
                     );
-                    if self.online_music.autoplay {
-                        self.online_music.autoplay = false;
-                        self.set_active_queue(true);
-                        let text = path.to_string_lossy().into_owned();
-                        let index = self.queue.items.iter().position(|item| matches!(&item.source, crate::queue::Source::File(p) if p == &text)).unwrap_or_else(|| {
-                            let index = self.queue.items.len();
-                            self.queue.items.push(crate::queue::Item::file(text)); index
-                        });
-                        self.mode = UiMode::Music;
-                        self.play_queue(index);
-                    }
+                    self.downloaded_music(path);
                 }
                 Err(error) => {
-                    self.online_music.autoplay = false;
                     self.online_music.failed = true;
                     self.online_music.status = music_error(self.settings.language, &error);
                 }
             }
+        }
+    }
+    pub(super) fn music_buffer_status(&self) -> String {
+        let l = self.settings.language;
+        if self.online_music.busy() {
+            return l.text("正在解析…", "Resolving…").into();
+        }
+        let buffering = self
+            .player
+            .as_ref()
+            .is_some_and(|p| p.snapshot().state == PlaybackState::Buffering);
+        if let Some(stream) = &self.online_music.stream
+            && !self.online_music.stream_finished
+        {
+            let bytes = stream.bytes.load(Ordering::Relaxed);
+            let prefix = if buffering {
+                l.text("缓冲中", "Buffering")
+            } else {
+                l.text("下载中", "Downloading")
+            };
+            return match stream.length() {
+                Some(total) => format!("{prefix} {:.0}%", bytes as f64 / total as f64 * 100.0),
+                None => format!("{prefix} {:.1} MiB", bytes as f64 / 1048576.0),
+            };
+        }
+        if buffering {
+            l.text("缓冲中…", "Buffering…").into()
+        } else {
+            String::new()
         }
     }
     pub(super) fn preferences_music_sources(&mut self, ui: &mut Ui) {
@@ -419,14 +607,22 @@ impl App {
                                     .color(MUTED),
                             );
                         });
-                        ui.add_enabled_ui(self.online_music.download.is_none(), |ui| {
-                            if ui.button(l.text("播放", "Play")).clicked() {
-                                download_song = Some((song.clone(), true));
-                            }
-                            if ui.button(l.text("下载", "Download")).clicked() {
-                                download_song = Some((song.clone(), false));
-                            }
-                        });
+                        if ui.button(l.text("播放", "Play")).clicked() {
+                            download_song = Some((song.clone(), true));
+                        }
+                        let active = self.online_origin.as_ref().is_some_and(|s| {
+                            s.key() == music_sources::OnlineSong::from(song).key()
+                        }) && (self.online_music.busy()
+                            || self.online_music.stream.is_some());
+                        if ui
+                            .add_enabled(
+                                self.online_music.download.is_none() && !active,
+                                egui::Button::new(l.text("下载", "Download")),
+                            )
+                            .clicked()
+                        {
+                            download_song = Some((song.clone(), false));
+                        }
                     });
                     ui.separator();
                 }
@@ -465,21 +661,47 @@ impl App {
                         self.start_music_search(source.clone(), page);
                     }
                     if let Some((song, play)) = download_song {
-                        let quality = self.settings.music.quality.clone();
-                        let directory = self.settings.music.directory();
-                        self.online_music.autoplay = play;
-                        self.online_music.failed = false;
-                        self.online_music.status.clear();
-                        self.online_music.download = Some(Job::spawn(move |bytes| async move {
-                            music_sources::download(
-                                source.as_ref(),
-                                &song,
-                                &quality,
-                                &directory,
-                                bytes,
-                            )
-                            .await
-                        }));
+                        if play {
+                            let online = music_sources::OnlineSong::from(&song);
+                            let path = self
+                                .library
+                                .records
+                                .iter()
+                                .find(|r| {
+                                    r.online.as_ref().is_some_and(|s| s.key() == online.key())
+                                })
+                                .map(|r| r.path.clone())
+                                .unwrap_or_else(|| format!("online://{}", online.key()));
+                            self.library.bind_online(path.clone(), online.clone());
+                            self.play_record(
+                                library::Record {
+                                    path,
+                                    title: online.title.clone(),
+                                    music: true,
+                                    online: Some(online),
+                                    ..Default::default()
+                                },
+                                false,
+                            );
+                        } else {
+                            let quality = self.settings.music.quality.clone();
+                            let directory = self.settings.music.directory();
+                            self.online_music.failed = false;
+                            self.online_music.status.clear();
+                            self.online_music.downloading =
+                                Some(music_sources::OnlineSong::from(&song).key());
+                            self.online_music.download =
+                                Some(Job::spawn(move |bytes| async move {
+                                    music_sources::download(
+                                        source.as_ref(),
+                                        &song,
+                                        &quality,
+                                        &directory,
+                                        bytes,
+                                    )
+                                    .await
+                                }));
+                        }
                     }
                 }
                 Err(error) => {
@@ -499,7 +721,7 @@ impl App {
                 ));
                 if ui.button(l.text("取消下载", "Cancel download")).clicked() {
                     self.online_music.download = None;
-                    self.online_music.autoplay = false;
+                    self.online_music.downloading = None;
                     self.online_music.status = l.text("已取消", "Cancelled").into();
                 }
             });

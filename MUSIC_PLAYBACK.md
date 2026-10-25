@@ -72,7 +72,7 @@ replaces the queue and begins the first item. Directories are not scanned.
 The queue accepts mixed local music/video files. It advances after actual playback
 completion and changes the interface accordingly. Items can be selected, moved up
 or down, or removed; the currently playing item cannot be removed. Removing a
-queue entry never deletes the media file. Queue order is kept for the current run.
+queue entry never deletes the media file. Music and video queues are saved independently. Online entries retain their provider/song identity rather than an expiring URL.
 
 The sidebar opens when a nonempty queue is available. Hide collapses it; the Queue
 button toggles it again. Its visibility is retained when switching between music
@@ -81,6 +81,26 @@ and video. The playback area shrinks to leave room for the sidebar.
 Magnet file selection includes music and video. The selected item and the other
 supported files form a queue for that torrent. Moving to local files or stopping
 the torrent removes that torrent's entries and retains its disk cache.
+
+## Favorites and online queues
+
+The sidebar contains Home, Music, Video, Comics and Settings. Favorites live in
+those media pages; Home keeps recent playback and resume cards. Removing the
+former shared Favorites, Recent and Downloads pages does not delete library data
+or downloaded files.
+
+Music and video favorites use descending collection time with a stable identity
+as the tie breaker. Playback and metadata refresh preserve collection time;
+unfavoriting and favoriting again moves an item to the front. Legacy favorites
+without timestamps remain behind timestamped entries. Listening history still
+uses playback time.
+
+Play all replaces the music queue with the displayed, filtered favorites and
+starts its first entry, including songs synchronized from another device that
+have no local audio yet. Online playback shares a disk cache with its background
+download, buffers on missing data, and prioritizes range requests for seeks.
+Completed audio is published without restarting the active playback session.
+See [Music sources](MUSIC_SOURCES.md) for cancellation, retries and source limits.
 
 ## Video
 

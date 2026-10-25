@@ -451,19 +451,6 @@ impl State {
             .collect();
         self.preview_entries(ui, settings, entries, false)
     }
-    pub(super) fn favorite_preview(
-        &mut self,
-        ui: &mut Ui,
-        settings: &crate::settings::Settings,
-    ) -> bool {
-        let entries: Vec<_> = self
-            .entries()
-            .iter()
-            .filter(|e| e.favorite)
-            .cloned()
-            .collect();
-        self.preview_entries(ui, settings, entries, true)
-    }
     fn preview_entries(
         &mut self,
         ui: &mut Ui,
@@ -474,7 +461,7 @@ impl State {
         if entries.is_empty() {
             return false;
         }
-        entries.sort_by_key(|e| std::cmp::Reverse(e.last_read));
+        domain::library::sort_favorites(&mut entries);
         ui.label(
             RichText::new(settings.language.text("漫画书架", "Comic library"))
                 .size(21.0)

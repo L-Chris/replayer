@@ -473,7 +473,7 @@ async fn cached_file(
     .await;
     result.unwrap_or_else(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())
 }
-fn byte_range(header: Option<&str>, length: u64) -> Result<(u64, u64, bool)> {
+pub(crate) fn byte_range(header: Option<&str>, length: u64) -> Result<(u64, u64, bool)> {
     ensure!(length > 0, "Empty file");
     let Some(header) = header else {
         return Ok((0, length - 1, false));

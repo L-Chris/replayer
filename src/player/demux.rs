@@ -160,6 +160,14 @@ fn run(
         video.is_some() || audio.is_some(),
         "no playable audio or video stream"
     );
+    if progressive && input.format().name() == "mp3" {
+        // Otherwise mp3_seek may build its index by scanning all intervening
+        // packets, defeating on-demand HTTP ranges. Keep local seeks unchanged.
+        // https://ffmpeg.org/doxygen/trunk/mp3dec_8c_source.html (mp3_seek)
+        unsafe {
+            (*input.as_mut_ptr()).flags |= ffmpeg::ffi::AVFMT_FLAG_FAST_SEEK;
+        }
+    }
     let info = Arc::new(crate::media::info(&input, std::path::Path::new(&path)));
     // FFmpeg exposes format start_time only through its FFI context.
     let start = unsafe { (*input.as_ptr()).start_time };

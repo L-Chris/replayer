@@ -70,8 +70,7 @@ jobs:
         run: |
           $installDir = Join-Path $env:RUNNER_TEMP 'replayer-smoke'
           $setup = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
-          $process = Start-Process -FilePath $setup.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR="' + $installDir + '"')) -WindowStyle Hidden -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          ./scripts/test-installed-icons.ps1 -Installer $setup.FullName -InstallDirectory $installDir
           $media = Join-Path $env:RUNNER_TEMP 'replayer-smoke.mp4'
           & "$env:FFMPEG_DIR/bin/ffmpeg.exe" -v error -y -f lavfi -i 'testsrc2=size=320x180:rate=24:duration=4' -c:v mpeg4 $media
           if ($LASTEXITCODE -ne 0) { throw 'Smoke media creation failed.' }

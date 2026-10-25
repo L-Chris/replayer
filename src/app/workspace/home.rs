@@ -125,6 +125,15 @@ impl App {
                     ACCENT,
                 );
             }
+            response.context_menu(|ui| {
+                if ui
+                    .button(l.text("删除播放记录", "Remove playback history"))
+                    .clicked()
+                {
+                    self.remove_history(&record.path);
+                    ui.close();
+                }
+            });
             if response
                 .on_hover_text(l.text("继续播放", "Resume playback"))
                 .clicked()

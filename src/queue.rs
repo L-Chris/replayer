@@ -2,6 +2,7 @@
 pub enum Source {
     File(String),
     Torrent(usize),
+    Online(crate::music_sources::OnlineSong),
 }
 #[derive(Clone, Debug)]
 pub struct Item {
@@ -9,6 +10,12 @@ pub struct Item {
     pub title: String,
 }
 impl Item {
+    pub fn online(song: crate::music_sources::OnlineSong) -> Self {
+        Self {
+            title: song.title.clone(),
+            source: Source::Online(song),
+        }
+    }
     pub fn file(path: String) -> Self {
         let title = std::path::Path::new(&path)
             .file_name()
@@ -27,8 +34,17 @@ pub struct Queue {
 }
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct SavedQueue {
-    pub items: Vec<String>,
+    pub items: Vec<SavedItem>,
     pub current: Option<usize>,
+}
+// Untagged strings keep existing saved local queues readable.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum SavedItem {
+    File(String),
+    Online {
+        online: crate::music_sources::OnlineSong,
+    },
 }
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 pub struct SavedQueues {
@@ -40,17 +56,29 @@ impl Queue {
         let mut items = Vec::new();
         let mut current = None;
         for (index, item) in self.items.iter().enumerate() {
-            if let Source::File(path) = &item.source {
-                if self.current == Some(index) {
-                    current = Some(items.len());
-                }
-                items.push(path.clone());
+            let saved = match &item.source {
+                Source::File(path) => SavedItem::File(path.clone()),
+                Source::Online(song) => SavedItem::Online {
+                    online: song.clone(),
+                },
+                Source::Torrent(_) => continue,
+            };
+            if self.current == Some(index) {
+                current = Some(items.len());
             }
+            items.push(saved);
         }
         SavedQueue { items, current }
     }
     pub fn restore(&mut self, saved: SavedQueue) {
-        self.items = saved.items.into_iter().map(Item::file).collect();
+        self.items = saved
+            .items
+            .into_iter()
+            .map(|item| match item {
+                SavedItem::File(path) => Item::file(path),
+                SavedItem::Online { online } => Item::online(online),
+            })
+            .collect();
         self.current = saved.current.filter(|current| *current < self.items.len());
     }
     pub fn select(&mut self, index: usize) -> Option<Item> {
@@ -154,5 +182,37 @@ mod tests {
         q.select(0);
         assert_eq!(q.next_index(), None);
         assert_eq!(q.previous_index(), None);
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    #[test]
+    fn online_identity_and_selection_survive_reorder_removal_and_old_queue_import() {
+        let legacy: SavedQueue =
+            serde_json::from_str(r#"{"items":["old.flac"],"current":0}"#).unwrap();
+        let mut queue = Queue::default();
+        queue.restore(legacy);
+        let song = crate::music_sources::OnlineSong {
+            source: "chksz-163".into(),
+            id: "42".into(),
+            title: "Cloud track".into(),
+            ..Default::default()
+        };
+        queue.items.push(Item::online(song.clone()));
+        queue.items.push(Item {
+            source: Source::Torrent(0),
+            title: "Transient".into(),
+        });
+        queue.select(1);
+        queue.relocate(1, 0);
+        queue.remove(1);
+        let json = serde_json::to_string(&queue.saved()).unwrap();
+        assert!(!json.contains("http://") && !json.contains("Transient"));
+        queue.restore(serde_json::from_str(&json).unwrap());
+        assert_eq!(queue.items.len(), 1);
+        assert_eq!(queue.current, Some(0));
+        assert_eq!(queue.items[0].source, Source::Online(song));
     }
 }

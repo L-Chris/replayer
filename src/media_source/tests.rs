@@ -167,7 +167,11 @@ fn encrypted_music_plays_seeks_and_finishes() {
     use std::time::{Duration, Instant};
     let fixture = Fixture::new();
     let flac = fixture.0.join("plain.flac");
-    let ffmpeg = PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join("bin/ffmpeg.exe");
+    let ffmpeg = PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join(if cfg!(windows) {
+        "bin/ffmpeg.exe"
+    } else {
+        "bin/ffmpeg"
+    });
     assert!(
         std::process::Command::new(ffmpeg)
             .args([

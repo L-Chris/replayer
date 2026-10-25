@@ -39,34 +39,46 @@ impl App {
         records.sort_by_key(|r| std::cmp::Reverse(r.played));
         records
     }
-    pub(super) fn play_record(&mut self, record: Record, resume: bool) {
-        if let Some(song) = &record.online
-            && !std::path::Path::new(&record.path).is_file()
-        {
-            let position = resume.then(|| record.resume_at()).flatten();
-            self.start_online_record(song.clone(), position);
-            return;
-        }
+    pub(super) fn play_records(&mut self, records: &[Record]) {
+        let Some(first) = records.first() else { return };
+        self.update_library();
+        self.comic.flush();
+        self.set_active_queue(first.music);
+        self.queue.items = records.iter().map(record_item).collect();
+        self.queue.current = None;
+        self.online_music.errors.clear();
+        self.workspace.resume = None;
+        self.queue_open = true;
+        self.play_queue(0);
+    }
+    pub(in crate::app) fn play_record(&mut self, record: Record, resume: bool) {
         self.update_library();
         self.comic.flush();
         self.set_active_queue(record.music);
+        let item = record_item(&record);
         let index = self
             .queue
             .items
             .iter()
-            .position(
-                |item| matches!(&item.source,crate::queue::Source::File(p) if *p==record.path),
-            )
+            .position(|old| match (&old.source, &item.source) {
+                (crate::queue::Source::Online(a), crate::queue::Source::Online(b)) => {
+                    a.key() == b.key()
+                }
+                _ => old.source == item.source,
+            })
             .unwrap_or_else(|| {
-                self.queue
-                    .items
-                    .push(crate::queue::Item::file(record.path.clone()));
+                self.queue.items.push(item);
                 self.queue.items.len() - 1
             });
+        let identity = record
+            .online
+            .as_ref()
+            .map(|s| format!("online://{}", s.key()))
+            .unwrap_or_else(|| record.path.clone());
         self.workspace.resume = resume
             .then(|| record.resume_at())
             .flatten()
-            .map(|position| (record.path.clone(), position));
+            .map(|position| (identity, position));
         self.play_queue(index);
     }
     pub(super) fn record_art(&mut self, ui: &Ui, rect: Rect, record: &Record) {
@@ -132,6 +144,7 @@ impl App {
             (ui.available_width() - 12.0 * columns.saturating_sub(1) as f32) / columns as f32;
         let mut play = None;
         let mut favorite = None;
+        let mut remove = None;
         for row in records.chunks(columns) {
             ui.horizontal_top(|ui| {
                 for record in row {
@@ -188,6 +201,18 @@ impl App {
                             favorite = Some(record.clone());
                         }
                         response.context_menu(|ui| {
+                            if record.played > 0
+                                && ui
+                                    .button(
+                                        self.settings
+                                            .language
+                                            .text("删除播放记录", "Remove playback history"),
+                                    )
+                                    .clicked()
+                            {
+                                remove = Some(record.path.clone());
+                                ui.close();
+                            }
                             if ui
                                 .button(
                                     self.settings
@@ -207,6 +232,9 @@ impl App {
                 }
             });
         }
+        if let Some(path) = remove {
+            self.remove_history(&path);
+        }
         if let Some(record) = favorite {
             self.library
                 .toggle_favorite(&record.path, &record.title, record.music);
@@ -222,15 +250,13 @@ impl App {
         let title = match page {
             Page::Music => l.text("音乐", "Music"),
             Page::Video => l.text("视频", "Video"),
-            Page::Favorites => l.text("收藏", "Favorites"),
-            Page::Downloads => l.text("下载", "Downloads"),
-            _ => l.text("最近播放", "Recently played"),
+            _ => return,
         };
         page_heading(ui, title, None);
         if page == Page::Music {
             ui.horizontal(|ui| {
                 for (i, zh, en) in [
-                    (0, "本地音乐", "Local music"),
+                    (0, "收藏音乐", "Favorite music"),
                     (1, "在线搜索", "Online search"),
                 ] {
                     design::selectable_value(ui, &mut self.workspace.music_tab, i, l.text(zh, en));
@@ -252,32 +278,11 @@ impl App {
             ui.add_space(12.0);
         }
         let mut records = self.records();
-        if page == Page::Downloads {
-            for path in self.workspace.downloads.clone() {
-                if !records.iter().any(|r| r.path == path) {
-                    records.push(Record {
-                        title: std::path::Path::new(&path)
-                            .file_stem()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                        path,
-                        music: true,
-                        ..Default::default()
-                    });
-                }
-            }
-        }
         let query = self.workspace.query.to_lowercase();
         records.retain(|r| {
             let included = match page {
                 Page::Music => r.music && r.favorite,
                 Page::Video => !r.music && r.favorite,
-                Page::Favorites => r.favorite,
-                Page::Recent => r.played > 0,
-                Page::Downloads => {
-                    std::path::Path::new(&r.path).starts_with(self.settings.music.directory())
-                }
                 _ => true,
             };
             included
@@ -286,6 +291,7 @@ impl App {
                         .to_lowercase()
                         .contains(&query))
         });
+        library::sort_favorites(&mut records);
         ui.label(
             RichText::new(format!(
                 "{} {}",
@@ -309,11 +315,11 @@ impl App {
                     ui.add_space(10.0);
                     self.media_cards(
                         ui,
-                        &records
-                            .iter()
-                            .filter(|r| r.played > 0)
+                        &self
+                            .records()
+                            .into_iter()
+                            .filter(|r| r.music && r.played > 0)
                             .take(4)
-                            .cloned()
                             .collect::<Vec<_>>(),
                     );
                     ui.add_space(16.0);
@@ -330,7 +336,7 @@ impl App {
                             .strong(),
                         );
                         if primary(ui, l.text("播放全部", "Play all")).clicked() {
-                            self.play_record(records[0].clone(), false);
+                            self.play_records(&records);
                         }
                     });
                     ui.add_space(12.0);
@@ -381,8 +387,8 @@ impl App {
                             l.text("还没有收藏视频", "No favorite videos yet")
                         },
                         l.text(
-                            "播放时点击爱心收藏，也可以在最近播放中收藏",
-                            "Use the heart while playing or in Recently played to add favorites",
+                            "播放时点击爱心，收藏喜欢的内容",
+                            "Use the heart while playing to add favorites",
                         ),
                     )
                 } else {
@@ -397,19 +403,10 @@ impl App {
                 ui.label(RichText::new(title).size(22.0).strong());
                 ui.label(RichText::new(hint).color(MUTED));
             }
-            if page == Page::Favorites {
-                ui.add_space(20.0);
-                if self.comic.favorite_preview(ui, &self.settings) {
-                    self.navigate(Page::Comic);
-                }
-            }
         });
     }
     fn track_row(&mut self, ui: &mut Ui, record: &Record, index: usize) {
-        let current = self
-            .source
-            .as_ref()
-            .is_some_and(|s| s.to_string_lossy() == record.path);
+        let current = self.active_record_path().as_deref() == Some(record.path.as_str());
         let (r, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), 62.0), Sense::click());
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -448,60 +445,13 @@ impl App {
                 (&record.path, "album"),
                 Rect::from_min_max(
                     pos2(r.min.x + end + 12.0, r.min.y + 18.0),
-                    pos2(
-                        r.max.x
-                            - if self.workspace.page == Page::Recent {
-                                154.0
-                            } else {
-                                116.0
-                            },
-                        r.max.y,
-                    ),
+                    pos2(r.max.x - 118.0, r.max.y),
                 ),
             );
             album.add(egui::Label::new(RichText::new(&record.album).color(MUTED)).truncate());
         }
-        let recent = self.workspace.page == Page::Recent;
-        let favorite_rect = Rect::from_center_size(
-            pos2(r.max.x - if recent { 62.0 } else { 24.0 }, r.center().y),
-            Vec2::splat(32.0),
-        );
-        if recent {
-            let rect =
-                Rect::from_center_size(pos2(r.max.x - 24.0, r.center().y), Vec2::splat(32.0));
-            let remove = ui
-                .interact(
-                    rect,
-                    ui.id().with((&record.path, "delete-history")),
-                    Sense::click(),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(
-                    self.settings
-                        .language
-                        .text("删除播放记录", "Remove playback history"),
-                );
-            remove.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
-                    true,
-                    self.settings
-                        .language
-                        .text("删除播放记录", "Remove playback history"),
-                )
-            });
-            if response.hovered() || remove.hovered() || remove.has_focus() || response.has_focus()
-            {
-                if remove.hovered() || remove.has_focus() {
-                    ui.painter().rect_filled(rect, 6, SURFACE);
-                }
-                draw_trash(ui.painter(), rect.shrink(7.0), MUTED);
-            }
-            if remove.clicked() {
-                self.remove_history(&record.path);
-                return;
-            }
-        }
+        let favorite_rect =
+            Rect::from_center_size(pos2(r.max.x - 24.0, r.center().y), Vec2::splat(32.0));
         if record.duration > 0.0 {
             ui.painter().text(
                 pos2(favorite_rect.min.x - 12.0, r.center().y),
@@ -551,5 +501,96 @@ impl App {
                 ui.close();
             }
         });
+    }
+}
+
+fn record_item(record: &Record) -> crate::queue::Item {
+    match &record.online {
+        Some(song) => crate::queue::Item::online(song.clone()),
+        None => crate::queue::Item::file(record.path.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn play_all_enqueues_cloud_only_tracks_preserves_video_and_cancels_obsolete_preparation() {
+        let ctx = egui::Context::default();
+        let mut app = comic::visual_tests::settings_fixture(&ctx);
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-data")
+            .join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&directory).unwrap();
+        app.library = library::Library::open(directory.join("library.json"));
+        app.queue_kind_music = true;
+        app.queue = Default::default();
+        app.queue_inactive.items = vec![crate::queue::Item::file("video.mp4".into())];
+        let records: Vec<_> = (0..3)
+            .map(|i| {
+                let online = crate::music_sources::OnlineSong {
+                    source: "unavailable-test-source".into(),
+                    id: i.to_string(),
+                    title: format!("Cloud {i}"),
+                    ..Default::default()
+                };
+                Record {
+                    path: format!("online://{}", online.key()),
+                    title: online.title.clone(),
+                    music: true,
+                    favorite: true,
+                    favorited_at: 10 - i,
+                    online: Some(online),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        app.library.records = records.clone();
+        app.play_records(&records);
+        assert_eq!(
+            app.queue.items.len(),
+            3,
+            "all cloud items enter the queue before downloading"
+        );
+        assert_eq!(app.queue.current, Some(0));
+        assert_eq!(app.queue.items[2].title, "Cloud 2");
+        assert!(app.queue_open);
+        assert_eq!(app.queue_inactive.items[0].title, "video.mp4");
+        let mut restored = crate::queue::Queue::default();
+        restored.restore(app.queue.saved());
+        assert_eq!(restored.items[1].source, record_item(&records[1]).source);
+        app.online_music.cancel_playback();
+        let stale = directory.join("obsolete.wav");
+        app.online_music.preparing = Some(crate::jobs::Job::spawn(move |_| async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok(crate::music_sources::streaming::Prepared::Local(stale))
+        }));
+        app.play_queue(1);
+        std::thread::sleep(Duration::from_millis(80));
+        app.poll_online_music(&ctx);
+        assert_eq!(app.queue.current, Some(1));
+        assert_eq!(app.online_origin.as_ref().unwrap().id, "1");
+        assert!(
+            app.library
+                .records
+                .iter()
+                .all(|r| r.path.starts_with("online://"))
+        );
+        app.fail_online_playback(anyhow::anyhow!("test failure"));
+        assert_eq!(
+            app.queue.current,
+            Some(2),
+            "a repeatedly failing song is skipped"
+        );
+        app.fail_online_playback(anyhow::anyhow!("test failure"));
+        assert_eq!(app.queue.current, Some(0));
+        app.fail_online_playback(anyhow::anyhow!("test failure"));
+        assert!(
+            !app.loading && !app.online_music.busy(),
+            "all failed tracks stop without looping"
+        );
+        assert_eq!(app.online_music.errors.len(), 3);
+        drop(app);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -396,3 +396,53 @@ async fn connection_probe_leaves_no_files_and_conditional_put_prevents_overwriti
         b"first"
     );
 }
+
+#[test]
+fn favorite_time_follows_the_winning_operation_and_old_booleans_stay_compatible() {
+    let snapshot = |favorite, at| {
+        values(&[
+            ("song/x/favorite", json!(favorite)),
+            ("song/x/favorited_at", json!(at)),
+        ])
+    };
+    let mut a = journal("a");
+    a.capture(snapshot(true, 100), &Snapshot::new());
+    assert!(!a.document.entries.contains_key("song/x/favorited_at"));
+    assert_eq!(
+        a.document.entries["song/x/favorite"].value,
+        Some(json!(true))
+    );
+    let mut b = journal("b");
+    b.merge(&a.document).unwrap();
+    b.observed = b.values();
+    a.capture(snapshot(false, 100), &Snapshot::new());
+    b.capture(snapshot(false, 100), &Snapshot::new());
+    b.capture(snapshot(true, 200), &Snapshot::new());
+    let mut reverse = b.clone();
+    reverse.merge(&a.document).unwrap();
+    a.merge(&b.document).unwrap();
+    assert_eq!(a.values(), reverse.values());
+    assert_eq!(a.values()["song/x/favorite"], json!(false));
+    assert_eq!(a.values()["song/x/favorited_at"], json!(100));
+    b.merge(&a.document).unwrap();
+    b.observed = b.values();
+    b.capture(snapshot(true, 300), &Snapshot::new());
+    a.merge(&b.document).unwrap();
+    assert_eq!(a.values()["song/x/favorited_at"], json!(300));
+    // A cancel/refavorite between sync ticks changes the timestamp even though
+    // the final boolean is still true, and must produce a new operation.
+    b.capture(snapshot(true, 400), &Snapshot::new());
+    a.merge(&b.document).unwrap();
+    assert_eq!(a.values()["song/x/favorited_at"], json!(400));
+    let mut legacy = a.document.clone();
+    legacy
+        .entries
+        .get_mut("song/x/favorite")
+        .unwrap()
+        .favorited_at = None;
+    let mut fresh = journal("fresh");
+    fresh.merge(&legacy).unwrap();
+    fresh.merge(&a.document).unwrap();
+    a.merge(&legacy).unwrap();
+    assert_eq!(fresh.values(), a.values());
+}

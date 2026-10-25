@@ -13,6 +13,7 @@ pub(super) struct Record {
     pub duration: f64,
     pub played: u64,
     pub favorite: bool,
+    pub favorited_at: u64,
     pub online: Option<crate::music_sources::OnlineSong>,
 }
 impl Record {
@@ -23,6 +24,26 @@ impl Record {
             && self.position < self.duration - 2.0)
             .then_some(self.position)
     }
+}
+
+pub(super) fn favorite_time() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+pub(super) fn sort_favorites(records: &mut [Record]) {
+    records.sort_by_cached_key(|r| {
+        (
+            std::cmp::Reverse(r.favorited_at),
+            r.online
+                .as_ref()
+                .map(|s| s.key())
+                .unwrap_or_else(|| r.path.clone()),
+        )
+    });
 }
 
 pub(super) struct Library {
@@ -69,9 +90,11 @@ impl Library {
                     .is_some_and(|(a, b)| a.key() == b.key())
         }) {
             let favorite = old.favorite;
+            let favorited_at = old.favorited_at;
             let online = old.online.clone();
             *old = record;
             old.favorite = favorite;
+            old.favorited_at = favorited_at;
             if old.online.is_none() {
                 old.online = online;
             }
@@ -86,12 +109,16 @@ impl Library {
     pub fn toggle_favorite(&mut self, path: &str, title: &str, music: bool) {
         if let Some(record) = self.records.iter_mut().find(|r| r.path == path) {
             record.favorite = !record.favorite;
+            if record.favorite {
+                record.favorited_at = favorite_time().max(record.favorited_at.saturating_add(1));
+            }
         } else {
             self.records.push(Record {
                 path: path.into(),
                 title: title.into(),
                 music,
                 favorite: true,
+                favorited_at: favorite_time(),
                 ..Default::default()
             });
         }
@@ -203,11 +230,25 @@ impl Drop for Library {
 }
 
 impl App {
-    pub(super) fn remove_history(&mut self, path: &str) {
-        let active = self
-            .source
+    pub(super) fn active_record_path(&self) -> Option<String> {
+        if let Some(song) = &self.online_origin {
+            return Some(
+                self.library
+                    .records
+                    .iter()
+                    .find(|r| r.online.as_ref().is_some_and(|s| s.key() == song.key()))
+                    .map(|r| r.path.clone())
+                    .unwrap_or_else(|| format!("online://{}", song.key())),
+            );
+        }
+        self.source
             .as_ref()
-            .is_some_and(|s| s.to_string_lossy() == path);
+            .filter(|p| p.is_file())
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+
+    pub(super) fn remove_history(&mut self, path: &str) {
+        let active = self.active_record_path().as_deref() == Some(path);
         if let Some(removed) = self.library.remove_history(path, active) {
             self.history_undo = Some((removed, Instant::now()));
             if self
@@ -254,14 +295,13 @@ impl App {
     }
 
     pub(super) fn update_library(&mut self) {
-        let Some(source) = self.source.as_ref().filter(|p| p.is_file()) else {
+        let Some(path) = self.active_record_path() else {
             return;
         };
         let Some(player) = &self.player else { return };
         if self.loading || !player.duration().is_finite() {
             return;
         }
-        let path = source.to_string_lossy().into_owned();
         let position = self
             .pending_seek
             .map_or_else(|| player.position(), |(_, t)| t);
@@ -283,6 +323,7 @@ impl App {
                 .unwrap_or_default()
                 .as_secs(),
             favorite: false,
+            favorited_at: 0,
             online: self
                 .online_origin
                 .clone()
@@ -294,6 +335,51 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn favorite_timestamps_survive_metadata_binding_history_and_restart() {
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/test-data")
+            .join(uuid::Uuid::new_v4().to_string());
+        let path = folder.join("library.json");
+        let mut library = Library::open(path.clone());
+        library.toggle_favorite("old.flac", "Old", true);
+        let at = library.records[0].favorited_at;
+        assert!(at > 0);
+        library.remember(Record {
+            path: "old.flac".into(),
+            title: "Refreshed".into(),
+            played: u64::MAX,
+            music: true,
+            ..Default::default()
+        });
+        library.bind_online(
+            "old.flac".into(),
+            crate::music_sources::OnlineSong {
+                source: "chksz-163".into(),
+                id: "1".into(),
+                ..Default::default()
+            },
+        );
+        library.records.push(Record {
+            path: "new.mp4".into(),
+            favorited_at: at + 1,
+            favorite: true,
+            ..Default::default()
+        });
+        library.save_records().unwrap();
+        drop(library);
+        let mut library = Library::open(path);
+        sort_favorites(&mut library.records);
+        assert_eq!(library.records[0].path, "new.mp4");
+        assert_eq!(library.records[1].favorited_at, at);
+        library.toggle_favorite("old.flac", "Old", true);
+        library.toggle_favorite("old.flac", "Old", true);
+        assert!(library.records[1].favorited_at > at);
+        let old: Record = serde_json::from_str(r#"{"favorite":true}"#).unwrap();
+        assert_eq!(old.favorited_at, 0);
+        drop(library);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
     #[test]
     fn deleting_history_persists_keeps_favorites_and_suppresses_only_current_session() {
         let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

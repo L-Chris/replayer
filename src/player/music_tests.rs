@@ -4,7 +4,11 @@ use std::{
     time::{Duration, Instant},
 };
 fn ffmpeg(args: &[&str], output: &Path) {
-    let exe = PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join("bin/ffmpeg.exe");
+    let exe = PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join(if cfg!(windows) {
+        "bin/ffmpeg.exe"
+    } else {
+        "bin/ffmpeg"
+    });
     assert!(
         std::process::Command::new(exe)
             .args(["-v", "error", "-y"])

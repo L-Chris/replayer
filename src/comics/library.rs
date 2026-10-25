@@ -17,6 +17,7 @@ pub struct Entry {
     pub book: Book,
     pub chapters: Vec<Chapter>,
     pub favorite: bool,
+    pub favorited_at: u64,
     pub progress: Option<Progress>,
     pub last_read: u64,
     pub checked: u64,
@@ -84,6 +85,14 @@ impl Entry {
         self.check_error = None;
     }
     pub fn set_favorite(&mut self, favorite: bool) {
+        if favorite && !self.favorite {
+            self.favorited_at = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .min(u64::MAX as u128) as u64)
+                .max(self.favorited_at.saturating_add(1));
+        }
         self.favorite = favorite;
         if !favorite {
             self.new_unread.clear();
@@ -145,4 +154,8 @@ impl Library {
         entry.refresh(detail);
         self.save(entry)
     }
+}
+
+pub fn sort_favorites(entries: &mut [Entry]) {
+    entries.sort_by_cached_key(|e| (std::cmp::Reverse(e.favorited_at), e.book.key()));
 }

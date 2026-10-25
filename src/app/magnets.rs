@@ -2,6 +2,10 @@ use super::*;
 
 impl App {
     pub(super) fn start_magnet(&mut self) {
+        self.update_library();
+        self.online_music.cancel_playback();
+        self.online_origin = None;
+        self.workspace.resume = None;
         self.torrent_job = None;
         self.loading = false;
         self.set_active_queue(false);

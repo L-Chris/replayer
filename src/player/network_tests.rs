@@ -23,7 +23,11 @@ fn progressive_http_freezes_while_buffering_and_interrupts_old_seek() {
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("sample.mp4");
     let ffmpeg =
-        std::path::PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join("bin/ffmpeg.exe");
+        std::path::PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join(if cfg!(windows) {
+            "bin/ffmpeg.exe"
+        } else {
+            "bin/ffmpeg"
+        });
     let status = std::process::Command::new(ffmpeg)
         .args([
             "-v",

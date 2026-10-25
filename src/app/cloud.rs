@@ -110,6 +110,7 @@ impl App {
                 json!({"book":entry.book,"chapters":entry.chapters}),
             );
             data.insert(format!("{prefix}/favorite"), json!(entry.favorite));
+            data.insert(format!("{prefix}/favorited_at"), json!(entry.favorited_at));
             if let Some(progress) = &entry.progress {
                 data.insert(
                     format!("{prefix}/progress"),
@@ -136,6 +137,7 @@ impl App {
             }
             data.insert(format!("{prefix}/song"), json!(song));
             data.insert(format!("{prefix}/favorite"), json!(record.favorite));
+            data.insert(format!("{prefix}/favorited_at"), json!(record.favorited_at));
             data.insert(format!("{prefix}/progress"), json!({"position":record.position,"duration":record.duration,"played":record.played}));
         }
         data
@@ -437,6 +439,10 @@ impl App {
                 .get(&format!("{prefix}/favorite"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            entry.favorited_at = values
+                .get(&format!("{prefix}/favorited_at"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             if let Some(progress) = values.get(&format!("{prefix}/progress")) {
                 entry.progress = Some(serde_json::from_value(progress["position"].clone())?);
                 entry.last_read = progress["read_at"].as_u64().unwrap_or(0);
@@ -495,6 +501,10 @@ impl App {
                 .get(&format!("{prefix}/favorite"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            record.favorited_at = values
+                .get(&format!("{prefix}/favorited_at"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             if let Some(p) = values.get(&format!("{prefix}/progress")) {
                 record.position = p["position"]
                     .as_f64()
@@ -840,6 +850,10 @@ mod tests {
         assert!(second.library.records[0].path.starts_with("online://"));
         assert_eq!(second.library.records[0].resume_at(), Some(45.0));
         assert!(second.library.records[0].favorite);
+        assert_eq!(
+            second.library.records[0].favorited_at,
+            first.library.records[0].favorited_at
+        );
         second
             .library
             .bind_online("F:/second/song.flac".into(), song.clone());
@@ -857,6 +871,10 @@ mod tests {
             song.key()
         );
         assert!(second.library.records[0].favorite);
+        assert_eq!(
+            second.library.records[0].favorited_at,
+            first.library.records[0].favorited_at
+        );
         drop((first, second));
         std::fs::remove_dir_all(da).unwrap();
         std::fs::remove_dir_all(db).unwrap();

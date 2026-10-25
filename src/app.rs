@@ -415,7 +415,7 @@ impl App {
         self.settings_open = false;
         self.update_library();
         self.library.flush();
-        self.online_music.autoplay = false;
+        self.online_music.cancel_playback();
         self.library.begin_playback();
         self.online_origin = crate::media::LocalMetadata::load(std::path::Path::new(&path)).online;
         if let Some(song) = &self.online_origin {
@@ -489,12 +489,35 @@ impl App {
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.comic.poll(ctx, &self.settings);
-        self.poll_online_music();
+        self.poll_online_music(ctx);
         let mut advance = false;
+        let mut online_failure = None;
         if let Some(player) = &self.player {
             while let Some(event) = player.poll_event() {
                 match event {
                     Event::MediaInfo(info) => {
+                        let info = if let Some(song) = &self.online_origin {
+                            let mut info = (*info).clone();
+                            if info.title.as_ref().is_none_or(|s| s.is_empty()) {
+                                info.title = Some(song.title.clone());
+                            }
+                            if info.artist.as_ref().is_none_or(|s| s.is_empty()) {
+                                info.artist = Some(song.artist.clone());
+                            }
+                            if info.album.as_ref().is_none_or(|s| s.is_empty()) {
+                                info.album = Some(song.album.clone());
+                            }
+                            if info.artwork.is_none() {
+                                info.artwork = self
+                                    .active_record_path()
+                                    .and_then(|path| self.metadata_cache.get(&path))
+                                    .and_then(|info| info.as_ref())
+                                    .and_then(|info| info.artwork.clone());
+                            }
+                            Arc::new(info)
+                        } else {
+                            info
+                        };
                         self.mode = if info.kind == crate::media::Kind::Music {
                             UiMode::Music
                         } else {
@@ -525,16 +548,16 @@ impl eframe::App for App {
                                 egui::TextureOptions::LINEAR,
                             )
                         });
-                        if let Some(source) = &self.source {
-                            let path = source.to_string_lossy().into_owned();
+                        if let Some(path) = self.active_record_path() {
                             self.metadata_cache.playback(path, info.clone());
                         }
                         self.media_info = Some(info);
                         if let Some((path, position)) = self.workspace.resume.take()
-                            && self
-                                .source
-                                .as_ref()
-                                .is_some_and(|s| s.to_string_lossy() == path)
+                            && (self.active_record_path().as_ref() == Some(&path)
+                                || self
+                                    .online_origin
+                                    .as_ref()
+                                    .is_some_and(|s| format!("online://{}", s.key()) == path))
                             && let Some(player) = &self.player
                         {
                             self.pending_seek = Some((player.seek(position), position));
@@ -549,13 +572,22 @@ impl eframe::App for App {
                     Event::Recovered => {
                         self.error = None;
                     }
-                    Event::Error(error) | Event::Warning(error) => {
+                    Event::Error(error) => {
                         self.loading = false;
-                        self.error = Some(error);
+                        if self.online_origin.is_some() {
+                            online_failure = Some(error);
+                        } else {
+                            self.error = Some(error);
+                        }
                     }
+                    Event::Warning(error) => self.error = Some(error),
                     _ => {}
                 }
             }
+        }
+        if let Some(error) = online_failure {
+            self.fail_online_playback(anyhow::anyhow!(error));
+            advance = false;
         }
         if advance {
             let replay = |app: &mut App| {
@@ -566,13 +598,11 @@ impl eframe::App for App {
             if self.loop_single {
                 replay(self);
             } else {
-                let next = self
-                    .queue
-                    .next_index_with_shuffle(self.shuffle)
-                    .or_else(|| (!self.queue.items.is_empty()).then_some(0));
+                let next = self.next_playable_queue_index(true);
                 match next {
                     Some(next) if Some(next) != self.queue.current => self.play_queue(next),
-                    Some(_) | None => replay(self),
+                    Some(_) => replay(self),
+                    None => {}
                 }
             }
         }
@@ -582,7 +612,7 @@ impl eframe::App for App {
                 PlaybackState::Paused | PlaybackState::Failed
             )
         });
-        if busy || self.online_music.autoplay {
+        if busy || self.online_music.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
@@ -1226,7 +1256,12 @@ impl App {
         let pos = self.player.as_ref().map_or(0.0, |p| p.position());
         match act {
             Act::TogglePlay => {
-                if let Some(p) = &self.player {
+                if self.player.is_none()
+                    && !self.online_music.busy()
+                    && let Some(index) = self.queue.current
+                {
+                    self.play_queue(index);
+                } else if let Some(p) = &self.player {
                     p.toggle_play();
                 }
             }
@@ -1268,7 +1303,7 @@ impl App {
                 }
             }
             Act::Next => {
-                if let Some(i) = self.queue.next_index_with_shuffle(self.shuffle) {
+                if let Some(i) = self.next_playable_queue_index(false) {
                     self.play_queue(i);
                 }
             }
@@ -1284,6 +1319,11 @@ impl App {
             Act::QueuePlay(i) => self.play_queue(i),
             Act::QueueRemove(i) => {
                 if self.queue.current == Some(i) {
+                    self.update_library();
+                    self.online_music.cancel_playback();
+                    self.online_origin = None;
+                    self.loading = false;
+                    self.workspace.resume = None;
                     self.player = None;
                     self.media_info = None;
                     self.artwork = None;

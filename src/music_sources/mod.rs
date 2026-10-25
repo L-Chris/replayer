@@ -1,6 +1,7 @@
-//! Provider-neutral discovery and download boundary. Playback receives local files only.
+//! Provider-neutral discovery, durable downloads and shared progressive playback caches.
 mod chksz;
 mod download;
+pub mod streaming;
 #[cfg(test)]
 mod tests;
 

@@ -13,6 +13,7 @@ fn item_is_music(item: &Item) -> bool {
                 crate::media::VIDEO_EXTENSIONS.contains(&s.to_ascii_lowercase().as_str())
             }),
         Source::Torrent(_) => false,
+        Source::Online(_) => true,
     }
 }
 
@@ -20,17 +21,17 @@ impl App {
     pub(super) fn remove_torrent_queue(&mut self) {
         let current = self.queue.current.and_then(|i| {
             self.queue.items.get(i).and_then(|item| {
-                matches!(item.source, Source::File(_)).then(|| {
+                (!matches!(item.source, Source::Torrent(_))).then(|| {
                     self.queue.items[..i]
                         .iter()
-                        .filter(|item| matches!(item.source, Source::File(_)))
+                        .filter(|item| !matches!(item.source, Source::Torrent(_)))
                         .count()
                 })
             })
         });
         self.queue
             .items
-            .retain(|item| matches!(item.source, Source::File(_)));
+            .retain(|item| !matches!(item.source, Source::Torrent(_)));
         self.queue.current = current;
         self.persist_queue();
     }
@@ -104,16 +105,58 @@ impl App {
         }
         self.persist_queue();
     }
+    pub(super) fn next_playable_queue_index(&self, wrap: bool) -> Option<usize> {
+        let count = self.queue.items.len();
+        if self.online_music.errors.is_empty() {
+            return self
+                .queue
+                .next_index_with_shuffle(self.shuffle)
+                .or_else(|| (wrap && count > 0).then_some(0));
+        }
+        let current = self.queue.current;
+        let playable = |i: usize| match &self.queue.items[i].source {
+            Source::Online(song) => !self.online_music.errors.contains_key(&song.key()),
+            _ => true,
+        };
+        if self.shuffle {
+            let candidates: Vec<_> = (0..count)
+                .filter(|i| Some(*i) != current && playable(*i))
+                .collect();
+            if !candidates.is_empty() {
+                return Some(
+                    candidates
+                        [(uuid::Uuid::new_v4().as_u128() % candidates.len() as u128) as usize],
+                );
+            }
+            return current.filter(|i| wrap && playable(*i));
+        }
+        let start = current.map_or(0, |i| i + 1);
+        (start..count)
+            .chain(0..if wrap { start.min(count) } else { 0 })
+            .find(|i| playable(*i))
+    }
     pub(super) fn play_queue(&mut self, index: usize) {
         self.update_library();
         self.library.flush();
         let Some(item) = self.queue.select(index) else {
             return;
         };
-        self.online_music.autoplay = false;
+        self.online_music.cancel_playback();
+        self.online_music.reset_attempts();
         match item.source {
+            Source::Online(song) => {
+                self.online_music.errors.remove(&song.key());
+                let resume = self
+                    .workspace
+                    .resume
+                    .as_ref()
+                    .filter(|(path, _)| *path == format!("online://{}", song.key()))
+                    .map(|(_, p)| *p);
+                self.start_online_record(song, resume);
+            }
             Source::File(path) => self.load(path),
             Source::Torrent(id) => {
+                self.online_origin = None;
                 if let Some(job) = &self.torrent_job {
                     self.player = None;
                     self.media_info = None;
@@ -140,9 +183,17 @@ impl App {
                 let current = self.queue.current == Some(index);
                 let path = match &item.source {
                     Source::File(path) => Some(path.clone()),
+                    Source::Online(song) => self
+                        .library
+                        .records
+                        .iter()
+                        .find(|r| r.online.as_ref().is_some_and(|s| s.key() == song.key()))
+                        .map(|r| r.path.clone()),
                     Source::Torrent(_) => None,
                 };
-                if let Some(path) = &path {
+                if let Some(path) = &path
+                    && !path.starts_with("online://")
+                {
                     self.metadata_cache.request(path, &self.metadata_requests);
                 }
                 let metadata = path
@@ -154,6 +205,10 @@ impl App {
                     .as_ref()
                     .and_then(|info| info.title.as_deref())
                     .unwrap_or(&item.title);
+                let failure = match &item.source {
+                    Source::Online(song) => self.online_music.errors.get(&song.key()),
+                    _ => None,
+                };
                 let detail = metadata
                     .as_ref()
                     .map(|info| {
@@ -163,7 +218,20 @@ impl App {
                             .collect::<Vec<_>>()
                             .join(" · ")
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| match &item.source {
+                        Source::Online(song) => [song.artist.as_str(), song.album.as_str()]
+                            .into_iter()
+                            .filter(|s| !s.is_empty())
+                            .collect::<Vec<_>>()
+                            .join(" · "),
+                        _ => String::new(),
+                    });
+                let detail = failure.map_or(detail, |error| {
+                    format!(
+                        "{}: {error}",
+                        language.text("失败，点击重试", "Failed, click to retry")
+                    )
+                });
                 ui.push_id(index, |ui| {
                     // The scroll area already reserves its own gutter; only
                     // subtract the card's padding from its content width.
@@ -258,7 +326,7 @@ impl App {
                                     language.text("播放此项", "Play item")
                                 };
                                 if resp.on_hover_text(tip).clicked() {
-                                    *act = if current {
+                                    *act = if current && failure.is_none() {
                                         Act::TogglePlay
                                     } else {
                                         Act::QueuePlay(index)
@@ -534,13 +602,29 @@ impl App {
                     ui.label(value);
                     ui.add_space(16.0);
                 }
-                if let Some(source) = &self.source {
+                if let Some(path) = self
+                    .active_record_path()
+                    .filter(|p| std::path::Path::new(p).is_file())
+                {
                     ui.label(
                         RichText::new(language.text("文件", "File"))
                             .size(12.0)
                             .color(MUTED),
                     );
-                    ui.add(egui::Label::new(source.to_string_lossy()).wrap());
+                    ui.add(egui::Label::new(path).wrap());
+                } else if let Some(song) = &self.online_origin {
+                    ui.label(
+                        RichText::new(language.text("来源", "Source"))
+                            .size(12.0)
+                            .color(MUTED),
+                    );
+                    let providers = crate::music_sources::sources("").unwrap_or_default();
+                    let name = providers
+                        .iter()
+                        .find(|p| p.descriptor().id == song.source)
+                        .map(|p| p.descriptor().name)
+                        .unwrap_or(&song.source);
+                    ui.label(name);
                 }
             } else if self.lyrics.lines.is_empty() {
                 let mut ui = workspace::child(root, "no-lyrics", rect.shrink(28.0));

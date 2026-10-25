@@ -10,6 +10,10 @@ pub struct Entry {
     pub clock: BTreeMap<String, u64>,
     pub time: u64,
     pub author: String,
+    // Travels with the winning boolean, including concurrent cancellations.
+    // Older clients can still read the boolean value and ignore this metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favorited_at: Option<u64>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Document {
@@ -55,6 +59,7 @@ impl Journal {
                 clock,
                 time,
                 author: self.document.device.clone(),
+                favorited_at: None,
             },
         );
     }
@@ -90,8 +95,20 @@ impl Journal {
             .cloned()
             .collect();
         for key in keys {
+            // Favorite timestamps are metadata on the favorite operation, never
+            // separate registers that could select a different conflict winner.
+            if key.ends_with("/favorited_at") {
+                continue;
+            }
             let value = snapshot.get(&key);
-            if self.observed.get(&key) == value {
+            let favorite_time = |data: &Snapshot| {
+                data.get(&key.replace("/favorite", "/favorited_at"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+            };
+            let at = key.ends_with("/favorite").then(|| favorite_time(&snapshot));
+            let time_changed = at.is_some_and(|at| at != favorite_time(&self.observed));
+            if self.observed.get(&key) == value && !time_changed {
                 continue;
             }
             // An empty/new device must not publish defaults over an existing account.
@@ -101,7 +118,8 @@ impl Journal {
             {
                 continue;
             }
-            self.write(key, value.cloned());
+            self.write(key.clone(), value.cloned());
+            self.document.entries.get_mut(&key).unwrap().favorited_at = at;
             changed = true;
         }
         self.observed = snapshot;
@@ -137,11 +155,13 @@ impl Journal {
                                 incoming.time,
                                 &incoming.author,
                                 serde_json::to_string(&incoming.value).unwrap_or_default(),
+                                incoming.favorited_at,
                             ) > (
                                 deletion(local),
                                 local.time,
                                 &local.author,
                                 serde_json::to_string(&local.value).unwrap_or_default(),
+                                local.favorited_at,
                             ) {
                         incoming
                     } else {
@@ -163,11 +183,19 @@ impl Journal {
         Ok(changed)
     }
     pub fn values(&self) -> Snapshot {
-        self.document
-            .entries
-            .iter()
-            .filter_map(|(k, e)| e.value.clone().map(|v| (k.clone(), v)))
-            .collect()
+        let mut values = Snapshot::new();
+        for (key, entry) in &self.document.entries {
+            if let Some(value) = &entry.value {
+                values.insert(key.clone(), value.clone());
+                if let Some(prefix) = key.strip_suffix("/favorite") {
+                    values.insert(
+                        format!("{prefix}/favorited_at"),
+                        Value::from(entry.favorited_at.unwrap_or(0)),
+                    );
+                }
+            }
+        }
+        values
     }
     pub fn digest(&self) -> String {
         crate::comics::digest(&serde_json::to_vec(&self.document).unwrap_or_default())

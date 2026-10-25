@@ -218,13 +218,11 @@ impl State {
                         })
                         .cloned()
                         .collect();
-                    entries.sort_by_key(|e| {
-                        std::cmp::Reverse(if self.tab == Tab::History {
-                            e.last_read
-                        } else {
-                            e.checked.max(e.last_read)
-                        })
-                    });
+                    if self.tab == Tab::History {
+                        entries.sort_by_key(|e| std::cmp::Reverse(e.last_read));
+                    } else {
+                        domain::library::sort_favorites(&mut entries);
+                    }
                     let title = match self.tab {
                         Tab::Shelf => l.text("我的书架", "My library"),
                         Tab::History => l.text("最近阅读", "Recently read"),

@@ -545,3 +545,46 @@ fn library_updates_history_and_url_migration_survive_restart() {
     drop(library);
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn favorite_order_is_independent_of_refresh_reading_and_restart() {
+    let mut library = library::Library::open(std::path::Path::new(":memory:")).unwrap();
+    for (url, at) in [("older", 100), ("newer", 200), ("legacy", 0)] {
+        let mut entry = library::Entry {
+            book: Book {
+                url: url.into(),
+                ..Default::default()
+            },
+            favorite: true,
+            favorited_at: at,
+            ..Default::default()
+        };
+        entry.refresh(Detail {
+            book: entry.book.clone(),
+            chapters: vec![],
+        });
+        entry.last_read = u64::MAX;
+        library.save(entry).unwrap();
+    }
+    let mut entries = library.entries.clone();
+    library::sort_favorites(&mut entries);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|e| e.book.url.as_str())
+            .collect::<Vec<_>>(),
+        ["newer", "older", "legacy"]
+    );
+    assert_eq!(entries[1].favorited_at, 100);
+    entries[1].set_favorite(true);
+    assert_eq!(
+        entries[1].favorited_at, 100,
+        "refreshing an existing favorite must not move it"
+    );
+    entries[1].set_favorite(false);
+    entries[1].set_favorite(true);
+    library::sort_favorites(&mut entries);
+    assert_eq!(entries[0].book.url, "older");
+    let legacy: library::Entry = serde_json::from_str(r#"{"favorite":true}"#).unwrap();
+    assert_eq!(legacy.favorited_at, 0);
+}

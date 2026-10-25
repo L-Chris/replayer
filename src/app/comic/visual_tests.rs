@@ -920,7 +920,17 @@ fn home_comic_shelf_only_shows_favorites_without_favorite_controls() {
             },
             |ui| {
                 if show_controls {
-                    state.favorite_preview(ui, &Default::default());
+                    state.preview_entries(
+                        ui,
+                        &Default::default(),
+                        state
+                            .entries()
+                            .iter()
+                            .filter(|e| e.favorite)
+                            .cloned()
+                            .collect(),
+                        true,
+                    );
                 } else {
                     state.home_preview(ui, &Default::default());
                 }
@@ -959,7 +969,7 @@ fn app_frame(
 }
 
 #[test]
-fn history_delete_button_and_undo_update_recent_and_home_without_changing_the_queue() {
+fn history_context_menu_and_undo_update_home_without_changing_the_queue() {
     let ctx = egui::Context::default();
     let mut app = settings_fixture(&ctx);
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -981,15 +991,42 @@ fn history_delete_button_and_undo_update_recent_and_home_without_changing_the_qu
     app.queue
         .items
         .push(crate::queue::Item::file("fixture-song.flac".into()));
-    app.workspace.page = workspace::Page::Recent;
+    app.workspace.page = workspace::Page::Home;
     let size = vec2(1280.0, 800.0);
     let mut output = app_frame(&ctx, &mut app, size, vec![]);
     for _ in 0..2 {
         output = app_frame(&ctx, &mut app, size, vec![]);
     }
-    let row = settings_text(&output, "History fixture").unwrap();
-    output = app_frame(&ctx, &mut app, size, vec![egui::Event::PointerMoved(row)]);
-    let trash = settings_text(&output, icons::TRASH).expect("Delete action appears on hover");
+    let row = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            Shape::Text(t) if t.galley.text() == "History fixture" => {
+                Some(t.pos + t.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .max_by(|a, b| a.y.total_cmp(&b.y))
+        .unwrap();
+    let row = row - vec2(0.0, 80.0);
+    for pressed in [true, false] {
+        app_frame(
+            &ctx,
+            &mut app,
+            size,
+            vec![
+                egui::Event::PointerMoved(row),
+                egui::Event::PointerButton {
+                    pos: row,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    output = app_frame(&ctx, &mut app, size, vec![]);
+    let trash = settings_text(&output, "删除播放记录").expect("History menu action");
     for pressed in [true, false] {
         app_frame(
             &ctx,
@@ -1045,6 +1082,21 @@ fn media_update_visuals() {
     let mut capture = Capture::new();
     let ctx = egui::Context::default();
     let mut app = settings_fixture(&ctx);
+    // The Windows production font is unavailable on a macOS render host.
+    #[cfg(target_os = "macos")]
+    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/STHeiti Light.ttc") {
+        ctx.add_font(egui::epaint::text::FontInsert {
+            name: "review-cjk".into(),
+            data: egui::FontData::from_owned(bytes),
+            families: [egui::FontFamily::Proportional, egui::FontFamily::Monospace]
+                .into_iter()
+                .map(|family| egui::epaint::text::InsertFontFamily {
+                    family,
+                    priority: egui::epaint::text::FontPriority::Lowest,
+                })
+                .collect(),
+        });
+    }
     app.library.records.clear();
     app.queue = Default::default();
     app.queue_inactive = Default::default();
@@ -1062,6 +1114,50 @@ fn media_update_visuals() {
         &directory.join("music-lyrics-fixed.png"),
         |ui| eframe::App::ui(&mut app, ui, &mut frame),
     );
+    app.workspace.page = workspace::Page::Music;
+    app.loading = false;
+    app.title.clear();
+    app.library.records = (0..8)
+        .map(|i| {
+            let song = crate::music_sources::OnlineSong {
+                source: "chksz-163".into(),
+                id: format!("preview-{i}"),
+                title: format!("收藏歌曲 {}", i + 1),
+                artist: "山川遥".into(),
+                album: "远方的声音".into(),
+                ..Default::default()
+            };
+            crate::app::library::Record {
+                path: format!("online://{}", song.key()),
+                title: song.title.clone(),
+                artist: song.artist.clone(),
+                album: song.album.clone(),
+                music: true,
+                favorite: true,
+                favorited_at: 100 - i,
+                online: Some(song),
+                ..Default::default()
+            }
+        })
+        .collect();
+    app.queue.items = app
+        .library
+        .records
+        .iter()
+        .map(|r| crate::queue::Item::online(r.online.clone().unwrap()))
+        .collect();
+    app.queue.current = Some(0);
+    app.queue_open = true;
+    capture.save(
+        &ctx,
+        [1280, 800],
+        &directory.join("music-favorites-cloud-queue.png"),
+        |ui| eframe::App::ui(&mut app, ui, &mut frame),
+    );
+    app.queue_open = false;
+    app.library.records.clear();
+    app.queue = Default::default();
+    app.workspace.page = workspace::Page::Listening;
     app.updater.offer_fixture();
     capture.save(
         &ctx,
@@ -1671,4 +1767,58 @@ fn comic_catalog_visuals() {
             design::selectable_value(ui, &mut selected, 2, "漫画相关");
         },
     );
+}
+
+#[test]
+fn navigation_has_only_home_media_and_settings_and_favorites_use_collection_order() {
+    let ctx = egui::Context::default();
+    let mut app = settings_fixture(&ctx);
+    app.queue = Default::default();
+    app.queue_inactive = Default::default();
+    app.library.records = vec![
+        crate::app::library::Record {
+            path: "new.flac".into(),
+            title: "New favorite".into(),
+            music: true,
+            favorite: true,
+            favorited_at: 20,
+            ..Default::default()
+        },
+        crate::app::library::Record {
+            path: "old.flac".into(),
+            title: "Old favorite".into(),
+            music: true,
+            favorite: true,
+            favorited_at: 10,
+            played: 999,
+            ..Default::default()
+        },
+    ];
+    app.workspace.page = workspace::Page::Music;
+    let mut output = app_frame(&ctx, &mut app, vec2(1280.0, 900.0), vec![]);
+    for _ in 0..2 {
+        output = app_frame(&ctx, &mut app, vec2(1280.0, 900.0), vec![]);
+    }
+    for removed in ["我的资料库", "最近播放", "下载", "收藏"] {
+        assert!(
+            settings_text(&output, removed).is_none(),
+            "removed navigation: {removed}"
+        );
+    }
+    for page in ["首页", "音乐", "视频", "漫画", "设置"] {
+        assert!(settings_text(&output, page).is_some());
+    }
+    // The old song still leads the listening history cards; the table below
+    // must independently put the newly favorited song first.
+    let positions = |title: &str| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                Shape::Text(t) if t.galley.text() == title => Some(t.pos.y),
+                _ => None,
+            })
+            .fold(f32::NEG_INFINITY, f32::max)
+    };
+    assert!(positions("New favorite") < positions("Old favorite"));
 }
