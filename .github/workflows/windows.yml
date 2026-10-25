@@ -22,6 +22,19 @@ jobs:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
     steps:
       - uses: actions/checkout@v4
+      - name: Check installer script before building
+        shell: pwsh
+        run: |
+          $stage = Join-Path $PWD 'target/installer-check'
+          $output = Join-Path $PWD 'target/installer-check-output'
+          New-Item -ItemType Directory -Path (Join-Path $stage 'icons') -Force | Out-Null
+          Copy-Item assets/branding/replayer.ico (Join-Path $stage 'icons/replayer-check.ico')
+          # Only compile the installer script; this fixture is never launched or published.
+          Set-Content -LiteralPath (Join-Path $stage 'replayer.exe') -Value 'Installer syntax fixture' -Encoding ascii
+          $iscc = @('C:/Program Files (x86)/Inno Setup 6/ISCC.exe', 'C:/Program Files/Inno Setup 6/ISCC.exe', 'C:/Program Files (x86)/Inno Setup 7/ISCC.exe') | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $iscc) { throw 'Inno Setup compiler not found.' }
+          & $iscc '/DAppVersion=0.0.0' "/DSourceDir=$stage" "/DOutputDir=$output" '/DAppIconFile=replayer-check.ico' 'installer/replayer.iss'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
