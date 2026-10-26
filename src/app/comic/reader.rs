@@ -178,9 +178,7 @@ impl State {
                 let raw = reader.sizes.get(&index).copied().unwrap_or((800.0, 1120.0));
                 page_dimensions(viewport_h, avail_w, raw, compare, zoom)
             };
-            let content_width = (0..count)
-                .map(|i| size_for(i).x)
-                .fold(0.0_f32, f32::max);
+            let content_width = (0..count).map(|i| size_for(i).x).fold(0.0_f32, f32::max);
             let offset = (0..reader.current)
                 .map(|i| size_for(i).y + 10.0)
                 .sum::<f32>()
@@ -218,8 +216,7 @@ impl State {
                         Sense::hover(),
                     );
                     let rect = Rect::from_center_size(row.center(), page_size);
-                    let response =
-                        ui.interact(rect, ui.id().with(("page", index)), Sense::click());
+                    let response = ui.interact(rect, ui.id().with(("page", index)), Sense::click());
                     if !viewport.intersects(rect) {
                         continue;
                     }

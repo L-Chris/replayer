@@ -988,7 +988,10 @@ impl eframe::App for App {
                 root,
                 "video-open",
                 Rect::from_min_size(
-                    pos2(header_content.max.x - design::CONTROL_HEIGHT, screen.min.y + 12.0),
+                    pos2(
+                        header_content.max.x - design::CONTROL_HEIGHT,
+                        screen.min.y + 12.0,
+                    ),
                     Vec2::splat(design::CONTROL_HEIGHT),
                 ),
             );

@@ -328,8 +328,10 @@ impl App {
             let mut ui = child(root, "workspace-error", r.shrink2(vec2(14.0, 8.0)));
             ui.horizontal(|ui| {
                 ui.add(
-                    egui::Label::new(RichText::new(language.error(&error)).color(Color32::LIGHT_RED))
-                        .truncate(),
+                    egui::Label::new(
+                        RichText::new(language.error(&error)).color(Color32::LIGHT_RED),
+                    )
+                    .truncate(),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if design::compact_icon_button(

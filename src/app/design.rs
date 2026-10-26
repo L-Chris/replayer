@@ -129,7 +129,13 @@ pub fn text_edit(value: &mut String) -> egui::TextEdit<'_> {
         .background_color(FIELD)
 }
 
-fn paint_field_box(painter: &egui::Painter, slot: egui::layers::ShapeIdx, rect: egui::Rect, hovered: bool, focused: bool) {
+fn paint_field_box(
+    painter: &egui::Painter,
+    slot: egui::layers::ShapeIdx,
+    rect: egui::Rect,
+    hovered: bool,
+    focused: bool,
+) {
     let fill = if focused {
         FIELD_FOCUS
     } else if hovered {
@@ -200,7 +206,13 @@ pub fn input_field(
             response.request_focus();
         }
     }
-    paint_field_box(ui.painter(), slot, response.rect, hovered && ui.is_enabled(), focused);
+    paint_field_box(
+        ui.painter(),
+        slot,
+        response.rect,
+        hovered && ui.is_enabled(),
+        focused,
+    );
     response
 }
 
@@ -212,9 +224,9 @@ pub fn unit_field(
     unit: &str,
 ) -> egui::Response {
     let slot = ui.painter().add(egui::Shape::Noop);
-    let unit_galley =
-        ui.painter()
-            .layout_no_wrap(unit.into(), FontId::proportional(12.5), MUTED);
+    let unit_galley = ui
+        .painter()
+        .layout_no_wrap(unit.into(), FontId::proportional(12.5), MUTED);
     let right_pad = (unit_galley.size().x + 20.0).ceil() as i8;
     let margin = egui::Margin {
         left: 12,
@@ -297,19 +309,21 @@ pub fn secret_field(
         top: 8,
         bottom: 8,
     };
-    let mut response = ui.push_id(reveal_id.with("input"), |ui| {
-        ui.add(
-            egui::TextEdit::singleline(value)
-                .font(FontId::proportional(14.0))
-                .password(!revealed)
-                .frame(egui::Frame::new().inner_margin(margin))
-                .margin(margin)
-                .min_size(vec2(width.max(80.0), CONTROL_HEIGHT))
-                .desired_width(width)
-                .vertical_align(egui::Align::Center)
-                .hint_text(hint),
-        )
-    }).inner;
+    let mut response = ui
+        .push_id(reveal_id.with("input"), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(value)
+                    .font(FontId::proportional(14.0))
+                    .password(!revealed)
+                    .frame(egui::Frame::new().inner_margin(margin))
+                    .margin(margin)
+                    .min_size(vec2(width.max(80.0), CONTROL_HEIGHT))
+                    .desired_width(width)
+                    .vertical_align(egui::Align::Center)
+                    .hint_text(hint),
+            )
+        })
+        .inner;
     let mut hovered = response.hovered();
     let eye_rect = egui::Rect::from_center_size(
         egui::pos2(response.rect.max.x - 18.0, response.rect.center().y),
@@ -322,7 +336,11 @@ pub fn secret_field(
     super::icons::paint(
         ui.painter(),
         eye_rect.shrink(5.5),
-        if eye.hovered() || revealed { TEXT } else { MUTED },
+        if eye.hovered() || revealed {
+            TEXT
+        } else {
+            MUTED
+        },
         if revealed {
             super::icons::EYE_SLASH
         } else {
@@ -406,7 +424,10 @@ pub fn stepper_usize(
     );
     for x in [dec_rect.max.x, inc_rect.min.x] {
         ui.painter().line_segment(
-            [egui::pos2(x, rect.min.y + 6.0), egui::pos2(x, rect.max.y - 6.0)],
+            [
+                egui::pos2(x, rect.min.y + 6.0),
+                egui::pos2(x, rect.max.y - 6.0),
+            ],
             Stroke::new(1.0, LINE),
         );
     }
@@ -458,78 +479,69 @@ pub fn dropdown_ui(
     selected_text: &str,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
-    let response = ui
-        .push_id(id_salt, |ui| {
-            let (rect, response) =
-                ui.allocate_exact_size(vec2(width, CONTROL_HEIGHT), egui::Sense::click());
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::ComboBox,
-                    ui.is_enabled(),
-                    selected_text,
-                )
-            });
-            let popup = egui::Popup::menu(&response)
-                .gap(4.0)
-                .width(width.max(148.0));
-            let is_open = popup.is_open();
-            let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
-            let fill = if is_open {
-                FIELD_FOCUS
-            } else if hovered {
-                FIELD_HOVER
+    ui.push_id(id_salt, |ui| {
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(width, CONTROL_HEIGHT), egui::Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), selected_text)
+        });
+        let popup = egui::Popup::menu(&response)
+            .gap(4.0)
+            .width(width.max(148.0));
+        let is_open = popup.is_open();
+        let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
+        let fill = if is_open {
+            FIELD_FOCUS
+        } else if hovered {
+            FIELD_HOVER
+        } else {
+            FIELD
+        };
+        let stroke = if is_open {
+            Stroke::new(1.5, ACCENT)
+        } else if hovered {
+            Stroke::new(1.0, BORDER)
+        } else {
+            Stroke::new(1.0, LINE)
+        };
+        ui.painter().rect_filled(rect, 8, fill);
+        ui.painter()
+            .rect_stroke(rect, 8, stroke, egui::StrokeKind::Inside);
+        let text_clip = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + 12.0, rect.min.y),
+            egui::pos2((rect.max.x - 32.0).max(rect.min.x + 12.0), rect.max.y),
+        )
+        .intersect(ui.clip_rect());
+        let galley = ui.painter().layout_no_wrap(
+            selected_text.into(),
+            FontId::proportional(14.0),
+            if ui.is_enabled() { TEXT } else { MUTED },
+        );
+        ui.painter().with_clip_rect(text_clip).galley(
+            egui::pos2(rect.min.x + 12.0, rect.center().y - galley.size().y * 0.5),
+            galley,
+            TEXT,
+        );
+        super::icons::paint(
+            ui.painter(),
+            egui::Rect::from_center_size(
+                egui::pos2(rect.max.x - 16.0, rect.center().y),
+                vec2(14.0, 14.0),
+            ),
+            if is_open { ACCENT } else { MUTED },
+            if is_open {
+                super::icons::CARET_UP
             } else {
-                FIELD
-            };
-            let stroke = if is_open {
-                Stroke::new(1.5, ACCENT)
-            } else if hovered {
-                Stroke::new(1.0, BORDER)
-            } else {
-                Stroke::new(1.0, LINE)
-            };
-            ui.painter().rect_filled(rect, 8, fill);
-            ui.painter()
-                .rect_stroke(rect, 8, stroke, egui::StrokeKind::Inside);
-            let text_clip = egui::Rect::from_min_max(
-                egui::pos2(rect.min.x + 12.0, rect.min.y),
-                egui::pos2((rect.max.x - 32.0).max(rect.min.x + 12.0), rect.max.y),
-            )
-            .intersect(ui.clip_rect());
-            let galley = ui.painter().layout_no_wrap(
-                selected_text.into(),
-                FontId::proportional(14.0),
-                if ui.is_enabled() { TEXT } else { MUTED },
-            );
-            ui.painter().with_clip_rect(text_clip).galley(
-                egui::pos2(
-                    rect.min.x + 12.0,
-                    rect.center().y - galley.size().y * 0.5,
-                ),
-                galley,
-                TEXT,
-            );
-            super::icons::paint(
-                ui.painter(),
-                egui::Rect::from_center_size(
-                    egui::pos2(rect.max.x - 16.0, rect.center().y),
-                    vec2(14.0, 14.0),
-                ),
-                if is_open { ACCENT } else { MUTED },
-                if is_open {
-                    super::icons::CARET_UP
-                } else {
-                    super::icons::CARET_DOWN
-                },
-            );
-            popup.show(|ui| {
-                ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
-                add_contents(ui);
-            });
-            response.on_hover_cursor(egui::CursorIcon::PointingHand)
-        })
-        .inner;
-    response
+                super::icons::CARET_DOWN
+            },
+        );
+        popup.show(|ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
+            add_contents(ui);
+        });
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    })
+    .inner
 }
 
 pub fn menu_item(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
@@ -544,11 +556,8 @@ pub fn menu_item(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Respon
         )
     });
     if selected || response.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            6,
-            if selected { SELECTED } else { HOVER },
-        );
+        ui.painter()
+            .rect_filled(rect, 6, if selected { SELECTED } else { HOVER });
     }
     let text_color = if selected { ACCENT } else { TEXT };
     let text_clip = egui::Rect::from_min_max(
@@ -560,10 +569,7 @@ pub fn menu_item(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Respon
         .painter()
         .layout_no_wrap(label.into(), FontId::proportional(13.5), text_color);
     ui.painter().with_clip_rect(text_clip).galley(
-        egui::pos2(
-            rect.min.x + 10.0,
-            rect.center().y - galley.size().y * 0.5,
-        ),
+        egui::pos2(rect.min.x + 10.0, rect.center().y - galley.size().y * 0.5),
         galley,
         text_color,
     );
@@ -606,8 +612,10 @@ pub fn nav_item(
     selected: bool,
     narrow: bool,
 ) -> egui::Response {
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(ui.available_width(), NAV_ITEM_HEIGHT), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), NAV_ITEM_HEIGHT),
+        egui::Sense::click(),
+    );
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label)
     });
@@ -673,12 +681,7 @@ pub fn empty_state(ui: &mut egui::Ui, glyph: &str, title: &str) {
     ui.vertical_centered(|ui| {
         ui.add_space(28.0);
         let (icon_rect, _) = ui.allocate_exact_size(vec2(34.0, 34.0), egui::Sense::hover());
-        super::icons::paint(
-            ui.painter(),
-            icon_rect,
-            MUTED.gamma_multiply(0.65),
-            glyph,
-        );
+        super::icons::paint(ui.painter(), icon_rect, MUTED.gamma_multiply(0.65), glyph);
         ui.add_space(8.0);
         ui.label(egui::RichText::new(title).size(14.0).color(MUTED));
         ui.add_space(16.0);
@@ -991,12 +994,7 @@ pub fn back_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
     icon_button(ui, super::icons::ARROW_LEFT, tooltip, false)
 }
 
-pub fn icon_button(
-    ui: &mut egui::Ui,
-    glyph: &str,
-    tooltip: &str,
-    active: bool,
-) -> egui::Response {
+pub fn icon_button(ui: &mut egui::Ui, glyph: &str, tooltip: &str, active: bool) -> egui::Response {
     icon_button_sized(ui, CONTROL_HEIGHT, 1.0, active, tooltip, |p, r, c| {
         super::icons::paint(p, r, c, glyph);
     })
@@ -1214,11 +1212,8 @@ pub fn segmented(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bo
             )
         });
         if index == *selected || response.hovered() {
-            ui.painter().rect_filled(
-                segment,
-                6,
-                if index == *selected { ACCENT } else { HOVER },
-            );
+            ui.painter()
+                .rect_filled(segment, 6, if index == *selected { ACCENT } else { HOVER });
         }
         ui.painter().text(
             segment.center(),

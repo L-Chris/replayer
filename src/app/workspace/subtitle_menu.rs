@@ -82,8 +82,7 @@ impl App {
                 ui.close();
             }
             ui.add_enabled_ui(ready, |ui| {
-                if design::menu_item(ui, false, language.text("导出 SRT…", "Export SRT…"))
-                    .clicked()
+                if design::menu_item(ui, false, language.text("导出 SRT…", "Export SRT…")).clicked()
                 {
                     *act = Act::ExportSubtitles;
                     ui.close();

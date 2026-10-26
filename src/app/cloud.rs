@@ -536,22 +536,16 @@ impl App {
             } else {
                 old.label()
             };
-            design::dropdown_ui(
-                ui,
-                "cloud-provider",
-                ui.available_width(),
-                selected,
-                |ui| {
-                    for provider in sync::Provider::ALL {
-                        let name = if provider == sync::Provider::Custom {
-                            l.text("自定义", "Custom")
-                        } else {
-                            provider.label()
-                        };
-                        design::menu_value(ui, &mut settings.provider, provider, name);
-                    }
-                },
-            );
+            design::dropdown_ui(ui, "cloud-provider", ui.available_width(), selected, |ui| {
+                for provider in sync::Provider::ALL {
+                    let name = if provider == sync::Provider::Custom {
+                        l.text("自定义", "Custom")
+                    } else {
+                        provider.label()
+                    };
+                    design::menu_value(ui, &mut settings.provider, provider, name);
+                }
+            });
             if settings.provider != old {
                 settings.base_url = settings.provider.url().into();
             }

@@ -115,8 +115,13 @@ pub(super) fn show(
             egui::Popup::menu(&response).show(|ui| {
                 ui.set_min_width(168.0);
                 for display in [Display::Original, Display::Translated, Display::Compare] {
-                    if design::menu_value(ui, &mut reader.display, display, display_name(display, l))
-                        .changed()
+                    if design::menu_value(
+                        ui,
+                        &mut reader.display,
+                        display,
+                        display_name(display, l),
+                    )
+                    .changed()
                     {
                         reader.restore = true;
                         ui.close();
@@ -177,7 +182,8 @@ pub(super) fn show(
         let old_zoom = reader.zoom;
         zoom.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if design::icon_button(ui, icons::MINUS, l.text("缩小", "Zoom out"), false).clicked() {
+            if design::icon_button(ui, icons::MINUS, l.text("缩小", "Zoom out"), false).clicked()
+            {
                 reader.zoom = (reader.zoom - 0.1).max(0.5);
             }
             if design::control(

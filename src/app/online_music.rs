@@ -447,7 +447,12 @@ impl App {
     }
     pub(super) fn preferences_music_sources(&mut self, ui: &mut Ui) {
         let l = self.settings.language;
-        providers::secret_field(ui, "music-api-key", &mut self.preferences_draft.music.api_key, l);
+        providers::secret_field(
+            ui,
+            "music-api-key",
+            &mut self.preferences_draft.music.api_key,
+            l,
+        );
         preferences::form_row(ui, "", l, |ui| {
             ui.hyperlink_to(
                 l.text("获取密钥", "Get API key"),
@@ -543,12 +548,8 @@ impl App {
                 input_width,
                 l.text("歌曲 / 歌手", "Song / artist"),
             );
-            if (design::primary_icon_button(
-                ui,
-                icons::MAGNIFYING_GLASS,
-                l.text("搜索", "Search"),
-            )
-            .clicked()
+            if (design::primary_icon_button(ui, icons::MAGNIFYING_GLASS, l.text("搜索", "Search"))
+                .clicked()
                 || (input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))))
                 && !self.online_music.keyword.trim().is_empty()
             {
@@ -596,10 +597,8 @@ impl App {
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 4.0;
                     for (idx, song) in self.online_music.songs.iter().enumerate() {
-                        let (row, row_resp) = ui.allocate_exact_size(
-                            vec2(ui.available_width(), 54.0),
-                            Sense::click(),
-                        );
+                        let (row, row_resp) = ui
+                            .allocate_exact_size(vec2(ui.available_width(), 54.0), Sense::click());
                         let row_resp = row_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         if row_resp.hovered() {
                             ui.painter().rect_filled(row, 8, SURFACE);
@@ -614,9 +613,7 @@ impl App {
                         );
                         info.style_mut().interaction.selectable_labels = false;
                         info.spacing_mut().item_spacing.y = 2.0;
-                        info.add(
-                            egui::Label::new(RichText::new(&song.title).strong()).truncate(),
-                        );
+                        info.add(egui::Label::new(RichText::new(&song.title).strong()).truncate());
                         info.add(
                             egui::Label::new(
                                 RichText::new(format!("{} · {}", song.artist, song.album))

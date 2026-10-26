@@ -248,13 +248,8 @@ impl State {
             );
             submit = input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             if !self.search.is_empty() {
-                if design::icon_button(
-                    ui,
-                    icons::X,
-                    l.text("取消搜索", "Cancel search"),
-                    false,
-                )
-                .clicked()
+                if design::icon_button(ui, icons::X, l.text("取消搜索", "Cancel search"), false)
+                    .clicked()
                 {
                     self.search.clear();
                 }
@@ -587,9 +582,15 @@ impl State {
                         icons::SORT_ASCENDING
                     },
                     if self.reverse {
-                        l.text("当前倒序（点击切为正序）", "Descending (click for ascending)")
+                        l.text(
+                            "当前倒序（点击切为正序）",
+                            "Descending (click for ascending)",
+                        )
                     } else {
-                        l.text("当前正序（点击切为倒序）", "Ascending (click for descending)")
+                        l.text(
+                            "当前正序（点击切为倒序）",
+                            "Ascending (click for descending)",
+                        )
                     },
                     self.reverse,
                 )
@@ -651,14 +652,8 @@ impl State {
                                 .is_some_and(|p| p.chapter == chapter.key());
                             let is_new = entry.new_unread.contains(chapter.key());
                             let is_read = entry.read.contains(chapter.key());
-                            let response = chapter_card(
-                                ui,
-                                width,
-                                &chapter.name,
-                                is_current,
-                                is_new,
-                                is_read,
-                            );
+                            let response =
+                                chapter_card(ui, width, &chapter.name, is_current, is_new, is_read);
                             if response.clicked() {
                                 read = Some(*index);
                             }
@@ -712,8 +707,12 @@ fn chapter_card(
         design::LINE
     };
     ui.painter().rect_filled(rect, 8, fill);
-    ui.painter()
-        .rect_stroke(rect, 8, Stroke::new(1.0, stroke_color), egui::StrokeKind::Inside);
+    ui.painter().rect_stroke(
+        rect,
+        8,
+        Stroke::new(1.0, stroke_color),
+        egui::StrokeKind::Inside,
+    );
     let has_indicator = current || new_unread || read;
     if current {
         icons::paint(
@@ -745,12 +744,15 @@ fn chapter_card(
     } else {
         design::TEXT
     };
-    let galley = ui
-        .painter()
-        .layout_no_wrap(name.into(), egui::FontId::proportional(13.5), text_color);
+    let galley =
+        ui.painter()
+            .layout_no_wrap(name.into(), egui::FontId::proportional(13.5), text_color);
     let truncated = galley.size().x > (rect.max.x - 10.0 - text_x).max(0.0);
-    let clip = Rect::from_min_max(pos2(text_x, rect.min.y), pos2(rect.max.x - 10.0, rect.max.y))
-        .intersect(ui.clip_rect());
+    let clip = Rect::from_min_max(
+        pos2(text_x, rect.min.y),
+        pos2(rect.max.x - 10.0, rect.max.y),
+    )
+    .intersect(ui.clip_rect());
     ui.painter().with_clip_rect(clip).galley(
         pos2(text_x, rect.center().y - galley.size().y * 0.5),
         galley,

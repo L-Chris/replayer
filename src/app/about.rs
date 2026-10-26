@@ -11,9 +11,7 @@ impl App {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.label(RichText::new("replayer").size(22.0).strong());
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).color(MUTED),
-                    );
+                    ui.label(RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).color(MUTED));
                     ui.hyperlink_to(language.text("项目主页", "Project"), updater::REPOSITORY);
                 });
             });
@@ -37,9 +35,7 @@ impl App {
             Status::Checking => language
                 .text("正在检查更新…", "Checking for updates…")
                 .to_owned(),
-            Status::Current => language
-                .text("已是最新版本", "Up to date")
-                .to_owned(),
+            Status::Current => language.text("已是最新版本", "Up to date").to_owned(),
             Status::Available => language
                 .text("发现新版本", "A new version is available")
                 .to_owned(),
@@ -91,11 +87,8 @@ impl App {
             }
             if self.updater.update.is_some() && !busy {
                 if self.updater.can_install() {
-                    if workspace::primary(
-                        ui,
-                        language.text("安装并重启", "Install and restart"),
-                    )
-                    .clicked()
+                    if workspace::primary(ui, language.text("安装并重启", "Install and restart"))
+                        .clicked()
                         && self.updater.install().is_ok()
                     {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);

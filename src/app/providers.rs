@@ -276,7 +276,9 @@ fn provider_editor(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: L
                 icons::CARET_DOWN
             },
         );
-        let _ = response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+        let _ = response
+            .clone()
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         popup.show(|ui| models_panel(ui, provider, state, l));
     });
     remove
@@ -384,7 +386,10 @@ fn models_panel(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: Lang
                     galley,
                     design::TEXT,
                 );
-                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                if resp
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
                     if selected {
                         provider.models.retain(|m| m != id);
                     } else {
@@ -487,7 +492,7 @@ pub(super) fn model_selector(
         )
         .intersect(ui.clip_rect());
         let galley = ui.painter().layout_no_wrap(
-            current.into(),
+            current,
             egui::FontId::proportional(14.0),
             if selected.provider.is_empty() {
                 MUTED

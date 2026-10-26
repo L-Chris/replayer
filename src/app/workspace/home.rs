@@ -4,7 +4,11 @@ impl App {
     pub(super) fn home_page(&mut self, ui: &mut Ui) {
         let l = self.settings.language;
         let query = self.workspace.query.trim().to_lowercase();
-        page_heading(ui, l.text("为你续上精彩", "Pick up where you left off"), None);
+        page_heading(
+            ui,
+            l.text("为你续上精彩", "Pick up where you left off"),
+            None,
+        );
         design::scroll().auto_shrink([false, false]).show(ui, |ui| {
             let records: Vec<_> = self
                 .records()
@@ -68,10 +72,7 @@ impl App {
             }
             if self.workspace.filter == 0 || self.workspace.filter == 3 {
                 ui.add_space(18.0);
-                if self
-                    .comic
-                    .home_preview_filtered(ui, &self.settings, &query)
-                {
+                if self.comic.home_preview_filtered(ui, &self.settings, &query) {
                     self.navigate(Page::Comic);
                 }
             }
@@ -129,12 +130,8 @@ impl App {
                 );
             }
             response.context_menu(|ui| {
-                if design::menu_item(
-                    ui,
-                    false,
-                    l.text("删除播放记录", "Remove playback history"),
-                )
-                .clicked()
+                if design::menu_item(ui, false, l.text("删除播放记录", "Remove playback history"))
+                    .clicked()
                 {
                     self.remove_history(&record.path);
                     ui.close();

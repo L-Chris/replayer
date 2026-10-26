@@ -22,17 +22,20 @@ impl App {
                         language.text("更多", "More"),
                         false,
                     );
-                    egui::Popup::menu(&response).gap(4.0).width(148.0).show(|ui| {
-                        if design::menu_item(
-                            ui,
-                            false,
-                            language.text("恢复默认", "Restore defaults"),
-                        )
-                        .clicked()
-                        {
-                            self.reset_preferences(language);
-                        }
-                    });
+                    egui::Popup::menu(&response)
+                        .gap(4.0)
+                        .width(148.0)
+                        .show(|ui| {
+                            if design::menu_item(
+                                ui,
+                                false,
+                                language.text("恢复默认", "Restore defaults"),
+                            )
+                            .clicked()
+                            {
+                                self.reset_preferences(language);
+                            }
+                        });
                 });
             }
         });
@@ -46,12 +49,37 @@ impl App {
         );
         nav.spacing_mut().item_spacing.y = 4.0;
         for (tab, zh, en, glyph) in [
-            (PrefTab::General, "通用", "General", icons::SLIDERS_HORIZONTAL),
-            (PrefTab::Providers, "AI 提供商", "AI providers", icons::SPARKLE),
-            (PrefTab::Subtitles, "AI 字幕", "AI subtitles", icons::SUBTITLES),
-            (PrefTab::MusicSources, "音乐相关", "Music", icons::MUSIC_NOTES),
+            (
+                PrefTab::General,
+                "通用",
+                "General",
+                icons::SLIDERS_HORIZONTAL,
+            ),
+            (
+                PrefTab::Providers,
+                "AI 提供商",
+                "AI providers",
+                icons::SPARKLE,
+            ),
+            (
+                PrefTab::Subtitles,
+                "AI 字幕",
+                "AI subtitles",
+                icons::SUBTITLES,
+            ),
+            (
+                PrefTab::MusicSources,
+                "音乐相关",
+                "Music",
+                icons::MUSIC_NOTES,
+            ),
             (PrefTab::Comics, "漫画相关", "Comics", icons::BOOK_OPEN),
-            (PrefTab::Cloud, "云同步", "Cloud sync", icons::CLOUD_ARROW_UP),
+            (
+                PrefTab::Cloud,
+                "云同步",
+                "Cloud sync",
+                icons::CLOUD_ARROW_UP,
+            ),
             (PrefTab::About, "关于", "About", icons::INFO),
         ] {
             if design::nav_item(
@@ -266,20 +294,15 @@ impl App {
             );
         });
         form_row(ui, l.text("并发请求", "Parallel requests"), l, |ui| {
-            design::stepper_usize(
-                ui,
-                &mut self.preferences_draft.subtitle_concurrency,
-                1..=6,
-            );
+            design::stepper_usize(ui, &mut self.preferences_draft.subtitle_concurrency, 1..=6);
         });
         form_row(ui, l.text("思考等级", "Reasoning effort"), l, |ui| {
-            let selected_label = if settings.reasoning_effort.is_empty()
-                || settings.reasoning_effort == "default"
-            {
-                l.text("默认", "Default").to_owned()
-            } else {
-                settings.reasoning_effort.clone()
-            };
+            let selected_label =
+                if settings.reasoning_effort.is_empty() || settings.reasoning_effort == "default" {
+                    l.text("默认", "Default").to_owned()
+                } else {
+                    settings.reasoning_effort.clone()
+                };
             design::dropdown_ui(
                 ui,
                 "reasoning_effort",
