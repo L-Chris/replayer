@@ -12,6 +12,8 @@ from macos_bundle import architecture, run, verify_bundle
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, default=Path('dist'))
+    parser.add_argument('--skip-dmg-mount', action='store_true',
+                        help='Verify DMG integrity without mounting it; still fully test the ZIP app.')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     os.chdir(root)
@@ -36,13 +38,17 @@ def main():
         run(ffmpeg, '-v', 'error', '-y', '-f', 'lavfi', '-i',
             'testsrc2=size=320x180:rate=24:duration=4', '-c:v', 'mpeg4', '-an', media)
         for archive in files:
+            if archive.suffix == '.dmg' and args.skip_dmg_mount:
+                run('hdiutil', 'verify', archive, timeout=60)
+                print('PASS:', archive.name, 'checksum verified; mount test explicitly skipped')
+                continue
             destination = temporary / (archive.suffix[1:] + ' relocated app')
             destination.mkdir()
             if archive.suffix == '.zip':
                 run('ditto', '-x', '-k', archive, destination)
             else:
                 mount = temporary / 'mounted image'
-                run('hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', mount, archive)
+                run('hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', mount, archive, timeout=60)
                 try:
                     assert (mount / 'Applications').is_symlink()
                     run('ditto', mount / 'replayer.app', destination / 'replayer.app')

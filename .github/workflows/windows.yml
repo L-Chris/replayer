@@ -155,10 +155,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target/${{ matrix.target }}
-            target/debug/build
-            target/debug/deps
-          key: macos-rust-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'scripts/setup-macos.sh') }}
+            target/debug
+          key: macos-rust-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'scripts/setup-macos.sh') }}
           restore-keys: |
+            macos-rust-v2-${{ matrix.target }}-
             macos-rust-${{ matrix.target }}-
       - name: Lint and test
         run: |

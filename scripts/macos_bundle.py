@@ -7,8 +7,8 @@ import shutil
 import subprocess
 
 
-def run(*args):
-    return subprocess.check_output([str(arg) for arg in args], text=True).strip()
+def run(*args, timeout=None):
+    return subprocess.check_output([str(arg) for arg in args], text=True, timeout=timeout).strip()
 
 
 def system_library(path):
@@ -119,6 +119,9 @@ def verify_bundle(app, expected_arch, expected_version=None):
     minimum = tuple((list(map(int, info['LSMinimumSystemVersion'].split('.'))) + [0, 0])[:3])
     icon = contents / 'Resources' / info['CFBundleIconFile']
     assert icon.read_bytes()[:4] == b'icns', 'Missing macOS application icon'
+    assert {file.name for file in (contents / 'Resources/sources').iterdir()} == {
+        'ffmpeg-9.0.2.tar.xz', 'lame-4.0.tar.gz', 'setup-macos.sh', 'BUILD.txt'
+    }, 'Package sources must contain only the public build recipe and matching source archives'
     executable = contents / 'MacOS' / 'replayer'
     framework_dir = contents / 'Frameworks'
     libraries = list(framework_dir.glob('*.dylib'))

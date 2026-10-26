@@ -87,6 +87,8 @@ python3 scripts/package-macos.py
 python3 scripts/test-macos-package.py
 ```
 
+完整自检会只读挂载 DMG，系统可能申请 `diskutil` 权限；不希望在本机挂载时，可加 `--skip-dmg-mount`，仍会验证 DMG 校验和并完整测试 ZIP 中的应用。CI 始终执行完整验证。
+
 产物在 `dist/`：`replayer-VERSION-macos-aarch64.{dmg,zip}` 或 `replayer-VERSION-macos-x86_64.{dmg,zip}`，以及各架构的 SHA-256 清单。
 ZIP 解压后得到 `replayer.app`；DMG 内可将应用拖入“应用程序”。播放依赖全部随应用携带，安装后不需要 Homebrew。
 

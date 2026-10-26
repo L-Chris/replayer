@@ -38,6 +38,10 @@ python3 scripts/package-macos.py
 python3 scripts/test-macos-package.py
 ```
 
+The full smoke test mounts the DMG read-only, which can prompt for diskutil access
+on a local Mac. Use `--skip-dmg-mount` to verify the DMG checksum and test the ZIP
+app without mounting. CI always performs the full mounted-image test.
+
 `setup-macos.sh` pins FFmpeg 9.0.2 and LAME 4.0 source archives by SHA-256 and
 builds shared libraries without GPL/nonfree components or Homebrew runtime
 dependencies. The FFmpeg CLI is a build/test tool; it is not copied into the app.
