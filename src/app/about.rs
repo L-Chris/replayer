@@ -18,6 +18,13 @@ impl App {
         });
         ui.add_space(4.0);
         ui.separator();
+        if !cfg!(windows) {
+            ui.hyperlink_to(
+                language.text("下载更新", "Download updates"),
+                format!("{}/releases/latest", updater::REPOSITORY),
+            );
+            return;
+        }
         preferences::form_row(
             ui,
             language.text("自动检查更新", "Auto-check updates"),

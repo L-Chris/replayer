@@ -15,6 +15,8 @@ its SHA-256 matches the selected image-generation artifact.
 - `replayer-icon-256.png`: window/application icon with original clear space.
 - `replayer-mark-256.png`: same artwork with compact padding for the sidebar.
 - `replayer.ico`: Windows icons at 16, 20, 24, 32, 40, 48, 64, 128 and 256px.
+- `replayer.icns`: macOS application/Dock icon with Retina variants through 1024px,
+  resized from the same approved original. The macOS bundle references it in Info.plist.
 
 Regenerate the resized/encoded derivatives from the checkout in PowerShell:
 

@@ -21,6 +21,9 @@ images[256].save(root / 'replayer-icon-256.png')
 images[256].save(root / 'replayer.ico', format='ICO',
                  sizes=[(size, size) for size in sizes],
                  append_images=[images[size] for size in sizes if size != 256])
+mac_images = [logo.resize((size, size), Image.Resampling.LANCZOS)
+              for size in (32, 64, 128, 256, 512, 1024)]
+mac_images[-1].save(root / 'replayer.icns', format='ICNS', append_images=mac_images)
 
 # Ignore almost-transparent generation noise when measuring the sidebar crop;
 # only the crop bounds change, not the source pixels or their alpha values.

@@ -44,6 +44,16 @@ from `autobuild-2026-09-19-13-11`; upstream daily releases expire after 14 days.
 See the upstream build repository for bundled codec libraries, notices and source
 retrieval instructions. Replayer does not modify the FFmpeg libraries.
 
+macOS packages use FFmpeg 9.0.2 built without GPL/nonfree components and LAME 4.0
+as shared libraries. `Contents/Resources/licenses` contains their license texts;
+`Contents/Resources/sources` contains the matching unmodified source archives and
+`setup-macos.sh` with the public build recipe and SHA-256 values. Libraries remain
+separate and replaceable with ABI-compatible builds (a changed bundle must be
+signed again). Sources:
+
+- https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+- https://downloads.sourceforge.net/project/lame/lame/4.0/lame-4.0.tar.gz
+
 Magnet playback embeds `librqbit` 9.0.1 and its rqbit support crates, Copyright
 2021 Igor Katson, licensed under Apache-2.0. The license is bundled in
 `licenses/Apache-2.0.txt`. Source: https://github.com/ikatson/rqbit/tree/v9.0.1

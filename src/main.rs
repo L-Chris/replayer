@@ -27,6 +27,10 @@ use eframe::egui;
 fn main() -> eframe::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--version") {
+        println!("replayer {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     if args.first().map(String::as_str) == Some("--selftest-music") {
         if let Err(error) = selftest::music(args.get(1).cloned().unwrap_or_default()) {
             eprintln!("music selftest: {error:#}");

@@ -2,7 +2,7 @@
 
 > 本项目由 Qwen3.8 Max 开发。
 
-使用 Rust、FFmpeg、egui/WGPU 和 CPAL 开发的桌面音视频播放器与漫画阅读器，目前主要在 Windows 上验证。
+使用 Rust、FFmpeg、egui/WGPU 和 CPAL 开发的桌面音视频播放器与漫画阅读器，支持 Windows 和 macOS（Apple Silicon / Intel）构建。
 
 ## 功能
 
@@ -20,11 +20,14 @@
 - 兼容 OpenAI Chat Completions 音频输入的字幕生成：默认 MP3、120 秒分段、2 路并发，支持播放位置优先调度、取消、进度显示和 SRT 导出。
 - 语言相关的字幕标点、两行排版、阅读速度检查和白字黑描边。
 - Windows 安装包与便携版；设置中的“关于”支持版本检查、下载更新、校验并安装重启。
+- macOS 应用包、DMG 与 ZIP，内置播放依赖，可拖入“应用程序”安装。
 - 磁链文件列表解析、选片边下边播、暂停/恢复下载和按播放位置取块；AI 字幕仅读已下载缓存，说明见 [MAGNET_PLAYBACK.md](MAGNET_PLAYBACK.md)。
 
 ## 构建
 
-GitHub Actions 自动构建 Windows x64 安装包与便携 ZIP。推送与 Cargo 版本一致的 `v*` 标签会发布正式版本；普通分支构建仅上传构建产物。流程和自动更新说明见 [RELEASING.md](RELEASING.md)。
+GitHub Actions 同时构建 Windows x64，以及 macOS Apple Silicon / Intel 的独立安装产物。推送与 Cargo 版本一致的 `v*` 标签，所有平台通过测试后才会发布正式版本；普通分支构建仅上传构建产物。流程和自动更新说明见 [RELEASING.md](RELEASING.md)。
+
+### Windows
 
 需要 Rust 工具链、Windows C++ Build Tools / SDK、FFmpeg 9 共享库开发包，以及 libclang。
 
@@ -61,6 +64,34 @@ QQ 音乐文件支持范围和密钥导入方式见 [音乐播放说明](MUSIC_P
 
 设置 `REPLAYER_SOFTWARE=1` 可强制软件解码；`REPLAYER_STATS=1` 可输出播放诊断信息。
 预览脚本的 `-Stats` 将播放诊断（显示帧率、像素格式及上传耗时）保存到 `target/preview-stderr.log`。
+
+### macOS
+
+需要 macOS 15 或更新系统、Rust、Xcode Command Line Tools 和 `pkg-config`；Intel 构建还需要 `nasm`。
+
+```bash
+brew install pkg-config nasm
+./scripts/build-macos.sh
+./target/debug/replayer "path/to/video.mkv"
+```
+
+首次构建会从校验过 SHA-256 的源码编译 FFmpeg 9.0.2 和 LAME 4.0，并缓存到 `.deps/macos-aarch64` 或 `.deps/macos-x86_64`。
+无须安装 Homebrew FFmpeg。继续执行 Cargo 命令前，先载入脚本打印的 `env.sh` 路径，覆盖 Windows 的默认依赖配置：
+
+```bash
+source .deps/macos-aarch64/env.sh  # Intel 改为 macos-x86_64
+cargo clippy --locked --all-targets -- -D warnings
+REPLAYER_SETTINGS_FILE="$PWD/target/macos-test-settings.json" cargo test --locked
+./scripts/build-macos.sh --release
+python3 scripts/package-macos.py
+python3 scripts/test-macos-package.py
+```
+
+产物在 `dist/`：`replayer-VERSION-macos-aarch64.{dmg,zip}` 或 `replayer-VERSION-macos-x86_64.{dmg,zip}`，以及各架构的 SHA-256 清单。
+ZIP 解压后得到 `replayer.app`；DMG 内可将应用拖入“应用程序”。播放依赖全部随应用携带，安装后不需要 Homebrew。
+
+默认构建使用 ad-hoc 签名，尚无 Apple Developer ID 公证，下载后的首次打开可能需要在“系统设置 → 隐私与安全性”中确认。
+持有签名身份与公证配置时可使用发布文档中的可选参数。macOS 当前通过“关于”中的链接手动下载更新；系统密钥持久化和 Windows 安装器式自动升级尚未接入。
 
 ## AI 字幕
 
