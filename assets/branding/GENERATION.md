@@ -28,8 +28,12 @@ The script preserves the original artwork and validates transparent corners,
 a solid center and all ICO sizes. Generated assets are checked in; Windows CI
 needs no Python or image-generation service.
 
-`src/app/branding.rs` caches the sidebar artwork once per egui context. All
-pages with the main sidebar use this mark. Immersive players and the comic
+`src/app/branding.rs` decodes the sidebar artwork once, then downsamples it with
+premultiplied-alpha Lanczos filtering to the actual physical display size. The
+texture is cached per egui context and replaced only when its pixel size changes
+(for example, when moving between monitors with different display scales). Its
+rectangle is aligned to physical pixels to avoid a second fractional resampling.
+All pages with the main sidebar use this mark. Immersive players and the comic
 reader keep their existing layout without a brand header.
 
 `build.rs` embeds the ICO in the executable. `src/main.rs` supplies the PNG to the

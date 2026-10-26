@@ -90,9 +90,8 @@ pub struct SearchGroup {
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ReadingMode {
     #[default]
+    #[serde(alias = "LeftToRight", alias = "RightToLeft")]
     Vertical,
-    LeftToRight,
-    RightToLeft,
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]

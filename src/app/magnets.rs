@@ -116,109 +116,168 @@ impl App {
             .default_width((ctx.content_rect().width() - 60.0).clamp(280.0, 620.0))
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.label(language.text(
-                    "粘贴磁链，解析后选择音乐或视频",
-                    "Paste a magnet link, then choose music or video",
-                ));
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.magnet_input)
-                        .font(egui::FontId::proportional(14.0))
-                        .margin(egui::Margin::symmetric(12,7))
-                        .background_color(design::FIELD)
-                        .hint_text("magnet:?xt=urn:btih:…")
-                        .desired_rows(3)
-                        .desired_width(f32::INFINITY),
+                ui.spacing_mut().item_spacing.y = 10.0;
+                design::multiline_field(
+                    ui,
+                    &mut self.magnet_input,
+                    ui.available_width(),
+                    3,
+                    "magnet:?xt=urn:btih:…",
                 );
                 ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            !self.torrent_resolving,
-                            egui::Button::new(language.text("解析磁链", "Resolve magnet")),
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.add_enabled_ui(!self.torrent_resolving, |ui| {
+                        if design::control(
+                            ui,
+                            language.text("解析磁链", "Resolve"),
+                            None,
+                            design::Control::Primary,
+                            0.0,
+                        )
+                        .clicked()
+                        {
+                            resolve = true;
+                        }
+                    });
+                    if self.torrent_job.is_some()
+                        && design::icon_button(
+                            ui,
+                            icons::STOP,
+                            language.text("停止任务", "Stop task"),
+                            false,
                         )
                         .clicked()
                     {
-                        resolve = true;
-                    }
-                    if self.torrent_job.is_some()
-                        && ui.button(language.text("停止任务", "Stop task")).clicked()
-                    {
                         stop = true;
                     }
+                    if self.torrent_resolving {
+                        ui.spinner();
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        let info_tip = format!(
+                            "{}\n{}\n{}",
+                            language.text(
+                                "停止任务保留缓存；BT 上传限速 256 KiB/s",
+                                "Stopping retains cached files; BT upload limit 256 KiB/s",
+                            ),
+                            language.text(
+                                "TUN 开启时可复制 Clash 规则，将 PROXY 替换为实际策略组",
+                                "When TUN is enabled, copy Clash rules and replace PROXY with your policy group",
+                            ),
+                            crate::torrent::cache_dir().display()
+                        );
+                        design::compact_icon_button(ui, icons::INFO, &info_tip, false);
+                        if design::compact_icon_button(
+                            ui,
+                            icons::COPY,
+                            language.text("复制 Clash 分流规则", "Copy Clash routing rules"),
+                            false,
+                        )
+                        .clicked()
+                        {
+                            let executable = std::env::current_exe()
+                                .ok()
+                                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                                .unwrap_or_else(|| "replayer.exe".into());
+                            let base = self
+                                .settings
+                                .ai
+                                .providers
+                                .iter()
+                                .find(|p| p.id == self.settings.llm.selected.provider)
+                                .map_or("", |p| p.base_url.as_str());
+                            ctx.copy_text(crate::torrent::routing_rules(&executable, base));
+                        }
+                    });
                 });
-                if self.torrent_resolving {
-                    ui.spinner();
+                if !self.torrent_status.is_empty() {
+                    ui.small(RichText::new(&self.torrent_status).color(MUTED));
                 }
-                ui.label(&self.torrent_status);
-                design::scroll()
-                    .max_height(200.0)
-                    .show(ui, |ui| {
+                if !self.torrent_files.is_empty() {
+                    design::scroll().max_height(200.0).show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
                         for file in &self.torrent_files {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.button(language.text("播放", "Play")).clicked() {
+                            let (row, row_resp) = ui.allocate_exact_size(
+                                vec2(ui.available_width(), 40.0),
+                                Sense::click(),
+                            );
+                            if row_resp.hovered() {
+                                ui.painter().rect_filled(row, 8, SURFACE);
+                            }
+                            let mut row_ui = workspace::child(
+                                ui,
+                                ("torrent-file", file.id),
+                                row.shrink2(vec2(10.0, 5.0)),
+                            );
+                            row_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if design::compact_icon_button(
+                                    ui,
+                                    icons::PLAY,
+                                    language.text("播放", "Play"),
+                                    false,
+                                )
+                                .clicked()
+                                    || row_resp.double_clicked()
+                                {
                                     selected = Some(file.id);
                                 }
-                                ui.label(format!("{:.1} MiB", file.size as f64 / 1048576.0));
-                                ui.add(egui::Label::new(&file.name).truncate())
-                                    .on_hover_text(&file.name);
+                                ui.small(
+                                    RichText::new(format!(
+                                        "{:.1} MiB",
+                                        file.size as f64 / 1048576.0
+                                    ))
+                                    .color(MUTED),
+                                );
+                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                    ui.add(egui::Label::new(&file.name).truncate())
+                                        .on_hover_text(&file.name);
+                                });
                             });
                         }
                     });
+                }
                 if self.torrent_selected.is_some() {
                     let p = &self.torrent_progress;
                     ui.add(
                         egui::ProgressBar::new(p.downloaded as f32 / p.total.max(1) as f32)
                             .show_percentage(),
                     );
-                    ui.label(format!(
-                        "{:.1} / {:.1} MiB · {:.2} MiB/s",
-                        p.downloaded as f64 / 1048576.0,
-                        p.total as f64 / 1048576.0,
-                        p.download_mbps
-                    ));
-                    if let Some(job) = &self.torrent_job
-                        && ui
-                            .button(if p.paused {
-                                language.text("继续下载", "Resume download")
-                            } else {
-                                language.text("暂停下载", "Pause download")
-                            })
-                            .clicked()
-                    {
-                        job.pause(!p.paused);
-                        if !p.paused
-                            && let Some(player) = &self.player
-                        {
-                            player.set_playing(false);
+                    ui.horizontal(|ui| {
+                        ui.small(
+                            RichText::new(format!(
+                                "{:.1} / {:.1} MiB · {:.2} MiB/s",
+                                p.downloaded as f64 / 1048576.0,
+                                p.total as f64 / 1048576.0,
+                                p.download_mbps
+                            ))
+                            .color(MUTED),
+                        );
+                        if let Some(job) = &self.torrent_job {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if design::compact_icon_button(
+                                    ui,
+                                    if p.paused { icons::PLAY } else { icons::PAUSE },
+                                    if p.paused {
+                                        language.text("继续下载", "Resume download")
+                                    } else {
+                                        language.text("暂停下载", "Pause download")
+                                    },
+                                    false,
+                                )
+                                .clicked()
+                                {
+                                    job.pause(!p.paused);
+                                    if !p.paused
+                                        && let Some(player) = &self.player
+                                    {
+                                        player.set_playing(false);
+                                    }
+                                }
+                            });
                         }
-                    }
+                    });
                 }
-                ui.small(language.text(
-                    "关闭任务保留缓存；BT 上传限速 256 KiB/s",
-                    "Stopping keeps cached files; BT upload is limited to 256 KiB/s",
-                ));
-                ui.small(crate::torrent::cache_dir().display().to_string());
-                ui.separator();
-                ui.small(language.text(
-                    "TUN 开启后 BT 流量按下列规则走代理，本地流媒体连接保持直连",
-                    "With TUN on, BT traffic follows the rules below via the proxy; local streaming stays direct",
-                ));
-                if ui
-                    .button(language.text("复制 Clash 分流规则", "Copy Clash routing rules"))
-                    .clicked()
-                {
-                    let executable = std::env::current_exe()
-                        .ok()
-                        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                        .unwrap_or_else(|| "replayer.exe".into());
-                    let base = self.settings.ai.providers.iter()
-                        .find(|p| p.id == self.settings.llm.selected.provider)
-                        .map_or("", |p| p.base_url.as_str());
-                    ctx.copy_text(crate::torrent::routing_rules(&executable, base));
-                }
-                ui.small(language.text(
-                    "仅复制规则，不自动修改代理；PROXY 需对应你的策略组",
-                    "Copies rules only; replace PROXY with your actual policy group",
-                ));
             });
         self.magnet_open = open;
         if resolve {

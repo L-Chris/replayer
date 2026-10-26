@@ -447,7 +447,7 @@ impl App {
     }
     pub(super) fn preferences_music_sources(&mut self, ui: &mut Ui) {
         let l = self.settings.language;
-        providers::secret_field(ui, &mut self.preferences_draft.music.api_key, l);
+        providers::secret_field(ui, "music-api-key", &mut self.preferences_draft.music.api_key, l);
         preferences::form_row(ui, "", l, |ui| {
             ui.hyperlink_to(
                 l.text("获取密钥", "Get API key"),
@@ -455,12 +455,11 @@ impl App {
             );
         });
         preferences::form_row(ui, l.text("下载目录", "Download directory"), l, |ui| {
-            ui.add(
-                design::text_edit(&mut self.preferences_draft.music.directory)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(
-                        l.text("留空使用应用音乐目录", "Empty: use the app music directory"),
-                    ),
+            design::input_field(
+                ui,
+                &mut self.preferences_draft.music.directory,
+                ui.available_width(),
+                l.text("留空使用应用音乐目录", "Empty: use the app music directory"),
             );
         });
     }
@@ -494,20 +493,26 @@ impl App {
             self.settings.music.source = providers[0].descriptor().id.into();
         }
         let old_quality = self.settings.music.quality.clone();
+        let mut search_page = None;
         ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("music_provider")
-                .selected_text(providers[selected].descriptor().name)
-                .show_ui(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            design::dropdown_ui(
+                ui,
+                "music_provider",
+                136.0,
+                providers[selected].descriptor().name,
+                |ui| {
                     for provider in &providers {
                         let d = provider.descriptor();
-                        design::selectable_value(
+                        design::menu_value(
                             ui,
                             &mut self.settings.music.source,
                             d.id.into(),
                             d.name,
                         );
                     }
-                });
+                },
+            );
             selected = providers
                 .iter()
                 .position(|p| p.descriptor().id == self.settings.music.source)
@@ -520,26 +525,36 @@ impl App {
             {
                 self.settings.music.quality = descriptor.default_quality.into();
             }
-            ui.label(l.text("音质", "Quality"));
-            egui::ComboBox::from_id_salt("music_quality")
-                .selected_text(
-                    descriptor
-                        .qualities
-                        .iter()
-                        .find(|q| q.id == self.settings.music.quality)
-                        .unwrap()
-                        .name,
-                )
-                .show_ui(ui, |ui| {
-                    for q in descriptor.qualities {
-                        design::selectable_value(
-                            ui,
-                            &mut self.settings.music.quality,
-                            q.id.into(),
-                            q.name,
-                        );
-                    }
-                });
+            let quality_name = descriptor
+                .qualities
+                .iter()
+                .find(|q| q.id == self.settings.music.quality)
+                .map(|q| q.name)
+                .unwrap_or(descriptor.default_quality);
+            design::dropdown_ui(ui, "music_quality", 136.0, quality_name, |ui| {
+                for q in descriptor.qualities {
+                    design::menu_value(ui, &mut self.settings.music.quality, q.id.into(), q.name);
+                }
+            });
+            let input_width = (ui.available_width() - design::CONTROL_HEIGHT - 8.0).max(120.0);
+            let input = design::search_field(
+                ui,
+                &mut self.online_music.keyword,
+                input_width,
+                l.text("歌曲 / 歌手", "Song / artist"),
+            );
+            if (design::primary_icon_button(
+                ui,
+                icons::MAGNIFYING_GLASS,
+                l.text("搜索", "Search"),
+            )
+            .clicked()
+                || (input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))))
+                && !self.online_music.keyword.trim().is_empty()
+            {
+                self.online_music.searched = self.online_music.keyword.trim().into();
+                search_page = Some(0);
+            }
         });
         let changed = previous_source != self.settings.music.source;
         if changed {
@@ -552,102 +567,149 @@ impl App {
                 self.online_music.status = error.to_string();
             }
         }
-        let mut search_page = None;
-        let search_width = design::control_width(ui, l.text("搜索", "Search"), false);
-        ui.horizontal(|ui| {
-            let input = design::search_field(
-                ui,
-                &mut self.online_music.keyword,
-                (ui.available_width() - search_width - 12.0).max(100.0),
-                l.text("歌曲 / 歌手", "Song / artist"),
-            );
-            if (design::control(
-                ui,
-                l.text("搜索", "Search"),
-                None,
-                design::Control::Primary,
-                search_width,
-            )
-            .clicked()
-                || (input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter))))
-                && !self.online_music.keyword.trim().is_empty()
-            {
-                self.online_music.searched = self.online_music.keyword.trim().into();
-                search_page = Some(0);
-            }
-        });
         let mut download_song = None;
-        ui.separator();
+        ui.add_space(6.0);
         if self.online_music.search.is_some() {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(l.text("正在搜索…", "Searching…"));
-                if ui.button(l.text("取消", "Cancel")).clicked() {
+                if design::compact_icon_button(ui, icons::X, l.text("取消", "Cancel"), false)
+                    .clicked()
+                {
                     self.online_music.search = None;
                 }
             });
         } else if self.online_music.songs.is_empty() {
-            ui.label(l.text(
-                "输入关键词搜索；暂无搜索结果",
-                "Search by keyword; no results yet",
-            ));
-        }
-        design::scroll()
-            .id_salt("music_results")
-            .max_height((size.y - 340.0).clamp(100.0, 420.0))
-            .show(ui, |ui| {
-                for song in &self.online_music.songs {
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_width((ui.available_width() - 150.0).max(130.0));
-                            ui.label(RichText::new(&song.title).strong());
-                            ui.label(
+            design::empty_state(
+                ui,
+                icons::MUSIC_NOTES,
+                if self.online_music.searched.is_empty() {
+                    l.text("输入关键词搜索在线音乐", "Search online music")
+                } else {
+                    l.text("未找到匹配歌曲", "No matching songs")
+                },
+            );
+        } else {
+            design::scroll()
+                .id_salt("music_results")
+                .max_height((size.y - 220.0).clamp(140.0, 500.0))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    for (idx, song) in self.online_music.songs.iter().enumerate() {
+                        let (row, row_resp) = ui.allocate_exact_size(
+                            vec2(ui.available_width(), 54.0),
+                            Sense::click(),
+                        );
+                        let row_resp = row_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if row_resp.hovered() {
+                            ui.painter().rect_filled(row, 8, SURFACE);
+                        }
+                        let mut info = workspace::child(
+                            ui,
+                            ("online-song", idx),
+                            Rect::from_min_max(
+                                row.min + vec2(12.0, 8.0),
+                                pos2(row.max.x - 86.0, row.max.y - 6.0),
+                            ),
+                        );
+                        info.style_mut().interaction.selectable_labels = false;
+                        info.spacing_mut().item_spacing.y = 2.0;
+                        info.add(
+                            egui::Label::new(RichText::new(&song.title).strong()).truncate(),
+                        );
+                        info.add(
+                            egui::Label::new(
                                 RichText::new(format!("{} · {}", song.artist, song.album))
                                     .small()
                                     .color(MUTED),
-                            );
-                        });
-                        if ui.button(l.text("播放", "Play")).clicked() {
-                            download_song = Some((song.clone(), true));
-                        }
-                        let active = self.online_origin.as_ref().is_some_and(|s| {
-                            s.key() == music_sources::OnlineSong::from(song).key()
-                        }) && (self.online_music.busy()
-                            || self.online_music.stream.is_some());
-                        if ui
-                            .add_enabled(
-                                self.online_music.download.is_none() && !active,
-                                egui::Button::new(l.text("下载", "Download")),
+                            )
+                            .truncate(),
+                        );
+                        let mut actions_ui = workspace::child(
+                            ui,
+                            ("online-song-actions", idx),
+                            Rect::from_min_max(
+                                pos2(row.max.x - 80.0, row.min.y + 12.0),
+                                pos2(row.max.x - 10.0, row.max.y - 12.0),
+                            ),
+                        );
+                        actions_ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if design::compact_icon_button(
+                                ui,
+                                icons::PLAY,
+                                l.text("播放", "Play"),
+                                false,
                             )
                             .clicked()
-                        {
-                            download_song = Some((song.clone(), false));
-                        }
-                    });
-                    ui.separator();
-                }
-            });
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    self.online_music.page > 0 && self.online_music.search.is_none(),
-                    egui::Button::new(l.text("上一页", "Previous")),
-                )
-                .clicked()
-            {
-                search_page = Some(self.online_music.page - 1);
+                                || row_resp.double_clicked()
+                            {
+                                download_song = Some((song.clone(), true));
+                            }
+                            let active = self.online_origin.as_ref().is_some_and(|s| {
+                                s.key() == music_sources::OnlineSong::from(song).key()
+                            }) && (self.online_music.busy()
+                                || self.online_music.stream.is_some());
+                            ui.add_enabled_ui(
+                                self.online_music.download.is_none() && !active,
+                                |ui| {
+                                    if design::compact_icon_button(
+                                        ui,
+                                        icons::DOWNLOAD_SIMPLE,
+                                        l.text("下载", "Download"),
+                                        false,
+                                    )
+                                    .clicked()
+                                    {
+                                        download_song = Some((song.clone(), false));
+                                    }
+                                },
+                            );
+                        });
+                    }
+                });
+            if self.online_music.page > 0 || self.online_music.next {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.add_enabled_ui(
+                        self.online_music.page > 0 && self.online_music.search.is_none(),
+                        |ui| {
+                            if design::icon_button(
+                                ui,
+                                icons::CARET_LEFT,
+                                l.text("上一页", "Previous page"),
+                                false,
+                            )
+                            .clicked()
+                            {
+                                search_page = Some(self.online_music.page - 1);
+                            }
+                        },
+                    );
+                    ui.label(
+                        RichText::new(format!("{}", self.online_music.page + 1))
+                            .strong()
+                            .color(MUTED),
+                    );
+                    ui.add_enabled_ui(
+                        self.online_music.next && self.online_music.search.is_none(),
+                        |ui| {
+                            if design::icon_button(
+                                ui,
+                                icons::CARET_RIGHT,
+                                l.text("下一页", "Next page"),
+                                false,
+                            )
+                            .clicked()
+                            {
+                                search_page = Some(self.online_music.page + 1);
+                            }
+                        },
+                    );
+                });
             }
-            ui.label(format!("{}", self.online_music.page + 1));
-            if ui
-                .add_enabled(
-                    self.online_music.next && self.online_music.search.is_none(),
-                    egui::Button::new(l.text("下一页", "Next")),
-                )
-                .clicked()
-            {
-                search_page = Some(self.online_music.page + 1);
-            }
-        });
+        }
         if search_page.is_some() || download_song.is_some() {
             let result = self
                 .settings
@@ -719,7 +781,14 @@ impl App {
                     l.text("解析 / 下载中", "Resolving / downloading"),
                     bytes as f64 / 1048576.0
                 ));
-                if ui.button(l.text("取消下载", "Cancel download")).clicked() {
+                if design::compact_icon_button(
+                    ui,
+                    icons::X,
+                    l.text("取消下载", "Cancel download"),
+                    false,
+                )
+                .clicked()
+                {
                     self.online_music.download = None;
                     self.online_music.downloading = None;
                     self.online_music.status = l.text("已取消", "Cancelled").into();
@@ -728,15 +797,10 @@ impl App {
         }
         if !self.online_music.status.is_empty() {
             if self.online_music.failed {
-                ui.colored_label(
-                    Color32::LIGHT_RED,
-                    l.text(
-                        "操作失败，请检查密钥、网络或尝试其他音质。",
-                        "Failed: check your key, network or try another quality.",
-                    ),
-                );
+                ui.colored_label(Color32::LIGHT_RED, &self.online_music.status);
+            } else {
+                ui.small(RichText::new(&self.online_music.status).color(MUTED));
             }
-            ui.label(&self.online_music.status);
         }
     }
     pub(super) fn online_music_window(&mut self, ctx: &egui::Context) {

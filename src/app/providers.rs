@@ -76,9 +76,14 @@ impl App {
         }
         if let Some(error) = &self.preferences_draft.credential_error {
             ui.colored_label(Color32::LIGHT_RED, l.error(error));
-            if ui
-                .button(l.text("重新读取密钥", "Reload saved keys"))
-                .clicked()
+            if design::control(
+                ui,
+                l.text("重新读取密钥", "Reload saved keys"),
+                Some(icons::refresh),
+                design::Control::Outline,
+                0.0,
+            )
+            .clicked()
             {
                 self.config_message = match self
                     .preferences_draft
@@ -92,13 +97,20 @@ impl App {
         let mut remove = None;
         for provider in &mut self.preferences_draft.ai.providers {
             ui.push_id(provider.id.clone(), |ui| {
-                if provider_editor(ui, provider, state, l) {
-                    remove = Some(provider.id.clone());
-                }
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(21, 25, 28))
+                    .stroke(Stroke::new(1.0, design::LINE))
+                    .corner_radius(10)
+                    .inner_margin(16)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing.y = 12.0;
+                        if provider_editor(ui, provider, state, l) {
+                            remove = Some(provider.id.clone());
+                        }
+                    });
             });
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(8.0);
+            ui.add_space(4.0);
         }
         if let Some(id) = remove {
             self.preferences_draft.ai.providers.retain(|p| p.id != id);
@@ -118,7 +130,15 @@ impl App {
                 self.preferences_draft.comics.image_selected = Default::default();
             }
         }
-        if workspace::primary(ui, l.text("添加提供商", "Add provider")).clicked() {
+        if design::control(
+            ui,
+            l.text("添加提供商", "Add provider"),
+            Some(draw_add),
+            design::Control::Outline,
+            0.0,
+        )
+        .clicked()
+        {
             let provider = Provider {
                 name: l.text("新提供商", "New provider").into(),
                 ..Provider::new()
@@ -133,18 +153,19 @@ fn provider_editor(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: L
     let open = state.expanded.as_deref() == Some(&provider.id);
     let mut remove = false;
     super::preferences::form_row(ui, l.text("名称", "Name"), l, |ui| {
-        let width = (ui.available_width() - 92.0).max(40.0);
+        let width = (ui.available_width() - 80.0).max(40.0);
         if open {
-            ui.add(
-                design::text_edit(&mut provider.name)
-                    .hint_text(l.text("提供商名称", "Provider name"))
-                    .desired_width(width),
+            design::input_field(
+                ui,
+                &mut provider.name,
+                width,
+                l.text("提供商名称", "Provider name"),
             );
         } else {
             let response = ui
                 .add_sized(
                     vec2(width, design::CONTROL_HEIGHT),
-                    egui::Label::new(&provider.name)
+                    egui::Label::new(RichText::new(&provider.name).strong())
                         .truncate()
                         .sense(Sense::click()),
                 )
@@ -153,14 +174,16 @@ fn provider_editor(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: L
                 state.expanded = Some(provider.id.clone());
             }
         }
-        if design::control(
+        if design::compact_icon_button(
             ui,
-            "",
-            Some(if open { chevron_down } else { chevron_right }),
-            design::Control::Quiet,
-            34.0,
+            if open {
+                icons::CARET_UP
+            } else {
+                icons::CARET_DOWN
+            },
+            l.text("展开 / 收起", "Expand / collapse"),
+            false,
         )
-        .on_hover_text(l.text("展开 / 收起", "Expand / collapse"))
         .clicked()
         {
             state.expanded = if open {
@@ -169,9 +192,13 @@ fn provider_editor(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: L
                 Some(provider.id.clone())
             };
         }
-        if design::control(ui, "", Some(draw_trash), design::Control::Quiet, 34.0)
-            .on_hover_text(l.text("移除提供商", "Remove provider"))
-            .clicked()
+        if design::compact_icon_button(
+            ui,
+            icons::TRASH,
+            l.text("移除提供商", "Remove provider"),
+            false,
+        )
+        .clicked()
         {
             remove = true;
         }
@@ -187,7 +214,7 @@ fn provider_editor(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: L
         "https://api.example.com/v1",
         l,
     );
-    secret_field(ui, &mut provider.api_key, l);
+    secret_field(ui, &provider.id, &mut provider.api_key, l);
     if !before.same_connection(provider) {
         state.pending.remove(&provider.id);
         state.models.remove(&provider.id);
@@ -196,42 +223,86 @@ fn provider_editor(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: L
     super::preferences::form_row(ui, l.text("模型", "Models"), l, |ui| {
         let label = format!("{} {}", provider.models.len(), l.text("个模型", "models"));
         let width = ui.available_width();
-        let response = design::control(ui, &label, None, design::Control::Outline, width);
-        chevron_down(
-            ui.painter(),
-            Rect::from_center_size(
-                pos2(response.rect.max.x - 16.0, response.rect.center().y),
-                vec2(15.0, 11.0),
-            ),
-            MUTED,
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(width, design::CONTROL_HEIGHT), Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &label)
+        });
+        let popup = egui::Popup::menu(&response)
+            .gap(4.0)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let is_open = popup.is_open();
+        let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
+        ui.painter().rect_filled(
+            rect,
+            8,
+            if is_open {
+                design::FIELD_FOCUS
+            } else if hovered {
+                design::FIELD_HOVER
+            } else {
+                design::FIELD
+            },
         );
-        egui::Popup::menu(&response)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| models_panel(ui, provider, state, l));
+        ui.painter().rect_stroke(
+            rect,
+            8,
+            Stroke::new(
+                if is_open { 1.5 } else { 1.0 },
+                if is_open {
+                    ACCENT
+                } else if hovered {
+                    design::BORDER
+                } else {
+                    design::LINE
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().text(
+            pos2(rect.min.x + 12.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            &label,
+            egui::FontId::proportional(14.0),
+            design::TEXT,
+        );
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(rect.max.x - 16.0, rect.center().y), vec2(14.0, 14.0)),
+            if is_open { ACCENT } else { MUTED },
+            if is_open {
+                icons::CARET_UP
+            } else {
+                icons::CARET_DOWN
+            },
+        );
+        let _ = response.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+        popup.show(|ui| models_panel(ui, provider, state, l));
     });
     remove
 }
 
 fn models_panel(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: Language) {
-    ui.set_width((ui.ctx().content_rect().width() - 32.0).clamp(200.0, 340.0));
+    ui.set_width((ui.ctx().content_rect().width() - 32.0).clamp(220.0, 350.0));
+    ui.spacing_mut().item_spacing.y = 8.0;
     let query_id = ui.id().with("search");
     let mut query = ui
         .data_mut(|d| d.get_temp::<String>(query_id))
         .unwrap_or_default();
     let loading = state.pending.contains_key(&provider.id);
     ui.horizontal(|ui| {
-        let width = (ui.available_width() - 46.0).max(120.0);
-        ui.add(
-            design::text_edit(&mut query)
-                .desired_width(width)
-                .hint_text(l.text("搜索模型", "Search models")),
-        );
+        let width = (ui.available_width() - 48.0).max(120.0);
+        design::search_field(ui, &mut query, width, l.text("搜索模型", "Search models"));
         if loading {
             ui.spinner();
         } else if ui
             .add_enabled_ui(!provider.base_url.trim().is_empty(), |ui| {
-                design::control(ui, "", Some(icons::refresh), design::Control::Quiet, 34.0)
-                    .on_hover_text(l.text("获取模型", "Fetch models"))
+                design::icon_button(
+                    ui,
+                    icons::ARROWS_CLOCKWISE,
+                    l.text("获取模型", "Fetch models"),
+                    false,
+                )
             })
             .inner
             .clicked()
@@ -269,15 +340,55 @@ fn models_panel(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: Lang
     design::scroll()
         .auto_shrink([false, true])
         .max_height((ui.available_height() - 150.0).clamp(0.0, 220.0))
-        .show_rows(ui, 34.0, filtered.len(), |ui, rows| {
+        .show_rows(ui, 32.0, filtered.len(), |ui, rows| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             for index in rows {
                 let id = filtered[index];
-                let mut selected = provider.models.contains(id);
-                if ui.checkbox(&mut selected, id).changed() {
+                let selected = provider.models.contains(id);
+                let row_w = ui.available_width().max(120.0);
+                let (rect, resp) = ui.allocate_exact_size(vec2(row_w, 30.0), Sense::click());
+                if selected || resp.hovered() {
+                    ui.painter().rect_filled(
+                        rect,
+                        6,
+                        if selected {
+                            design::SELECTED
+                        } else {
+                            design::HOVER
+                        },
+                    );
+                }
+                if selected {
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(
+                            pos2(rect.min.x + 14.0, rect.center().y),
+                            vec2(14.0, 14.0),
+                        ),
+                        ACCENT,
+                        icons::CHECK,
+                    );
+                }
+                let text_clip = Rect::from_min_max(
+                    pos2(rect.min.x + 28.0, rect.min.y),
+                    pos2(rect.max.x - 8.0, rect.max.y),
+                )
+                .intersect(ui.clip_rect());
+                let galley = ui.painter().layout_no_wrap(
+                    id.into(),
+                    egui::FontId::proportional(13.5),
+                    if selected { ACCENT } else { design::TEXT },
+                );
+                ui.painter().with_clip_rect(text_clip).galley(
+                    pos2(rect.min.x + 28.0, rect.center().y - galley.size().y * 0.5),
+                    galley,
+                    design::TEXT,
+                );
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     if selected {
-                        provider.models.push(id.clone());
-                    } else {
                         provider.models.retain(|m| m != id);
+                    } else {
+                        provider.models.push(id.clone());
                     }
                 }
             }
@@ -285,17 +396,20 @@ fn models_panel(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: Lang
     ui.collapsing(l.text("手动添加", "Add manually"), |ui| {
         ui.horizontal(|ui| {
             let manual = state.manual.entry(provider.id.clone()).or_default();
-            let width = (ui.available_width() - 72.0).max(100.0);
-            ui.add(
-                design::text_edit(manual)
-                    .hint_text(l.text("模型 ID", "Model ID"))
-                    .desired_width(width),
-            );
+            let width = (ui.available_width() - 76.0).max(100.0);
+            design::input_field(ui, manual, width, l.text("模型 ID", "Model ID"));
+            let can_add = !manual.trim().is_empty();
             if ui
-                .add_enabled(
-                    !manual.trim().is_empty(),
-                    egui::Button::new(l.text("添加", "Add")),
-                )
+                .add_enabled_ui(can_add, |ui| {
+                    design::control(
+                        ui,
+                        l.text("添加", "Add"),
+                        None,
+                        design::Control::Primary,
+                        64.0,
+                    )
+                })
+                .inner
                 .clicked()
             {
                 let id = manual.trim().to_owned();
@@ -306,22 +420,6 @@ fn models_panel(ui: &mut Ui, provider: &mut Provider, state: &mut State, l: Lang
             }
         });
     });
-}
-fn chevron_down(p: &Painter, r: Rect, c: Color32) {
-    icons::paint(
-        p,
-        Rect::from_center_size(r.center(), Vec2::splat(18.0)),
-        c,
-        icons::CARET_DOWN,
-    );
-}
-fn chevron_right(p: &Painter, r: Rect, c: Color32) {
-    icons::paint(
-        p,
-        Rect::from_center_size(r.center(), Vec2::splat(18.0)),
-        c,
-        icons::CARET_RIGHT,
-    );
 }
 
 pub(super) fn model_selector(
@@ -344,31 +442,95 @@ pub(super) fn model_selector(
                     .into()
             }
         });
-    egui::ComboBox::from_id_salt("business-model")
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .width(ui.available_width().clamp(120.0, 440.0))
-        .selected_text(current)
-        .show_ui(ui, |ui| {
+    let width = ui.available_width().clamp(120.0, 360.0);
+    ui.push_id("business-model", |ui| {
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(width, design::CONTROL_HEIGHT), Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), &current)
+        });
+        let popup = egui::Popup::menu(&response)
+            .gap(4.0)
+            .width(width.max(240.0))
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+        let is_open = popup.is_open();
+        let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
+        ui.painter().rect_filled(
+            rect,
+            8,
+            if is_open {
+                design::FIELD_FOCUS
+            } else if hovered {
+                design::FIELD_HOVER
+            } else {
+                design::FIELD
+            },
+        );
+        ui.painter().rect_stroke(
+            rect,
+            8,
+            Stroke::new(
+                if is_open { 1.5 } else { 1.0 },
+                if is_open {
+                    ACCENT
+                } else if hovered {
+                    design::BORDER
+                } else {
+                    design::LINE
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+        let text_clip = Rect::from_min_max(
+            pos2(rect.min.x + 12.0, rect.min.y),
+            pos2((rect.max.x - 32.0).max(rect.min.x + 12.0), rect.max.y),
+        )
+        .intersect(ui.clip_rect());
+        let galley = ui.painter().layout_no_wrap(
+            current.into(),
+            egui::FontId::proportional(14.0),
+            if selected.provider.is_empty() {
+                MUTED
+            } else {
+                design::TEXT
+            },
+        );
+        ui.painter().with_clip_rect(text_clip).galley(
+            pos2(rect.min.x + 12.0, rect.center().y - galley.size().y * 0.5),
+            galley,
+            design::TEXT,
+        );
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(rect.max.x - 16.0, rect.center().y), vec2(14.0, 14.0)),
+            if is_open { ACCENT } else { MUTED },
+            if is_open {
+                icons::CARET_UP
+            } else {
+                icons::CARET_DOWN
+            },
+        );
+        popup.show(|ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
             let search_id = ui.id().with("model-search");
             let mut query = ui
                 .data_mut(|d| d.get_temp::<String>(search_id))
                 .unwrap_or_default();
-            ui.add(
-                design::text_edit(&mut query)
-                    .hint_text(l.text("搜索模型或提供商", "Search models or providers")),
+            design::search_field(
+                ui,
+                &mut query,
+                ui.available_width(),
+                l.text("搜索模型或提供商", "Search models or providers"),
             );
+            ui.add_space(4.0);
             ui.data_mut(|d| d.insert_temp(search_id, query.clone()));
             let query = query.to_lowercase();
-            if design::selectable_value(
+            design::menu_value(
                 ui,
                 selected,
                 ModelRef::default(),
                 l.text("未配置", "Not configured"),
-            )
-            .clicked()
-            {
-                ui.close();
-            }
+            );
             for provider in &ai.providers {
                 if provider.models.is_empty() {
                     continue;
@@ -384,10 +546,10 @@ pub(super) fn model_selector(
                 if models.is_empty() {
                     continue;
                 }
-                ui.separator();
-                ui.label(RichText::new(&provider.name).strong());
+                ui.add_space(4.0);
+                ui.label(RichText::new(&provider.name).size(12.0).color(MUTED));
                 for model in models {
-                    if design::selectable_value(
+                    design::menu_value(
                         ui,
                         selected,
                         ModelRef {
@@ -395,63 +557,36 @@ pub(super) fn model_selector(
                             model: model.clone(),
                         },
                         model,
-                    )
-                    .clicked()
-                    {
-                        ui.close();
-                    }
+                    );
                 }
             }
-        })
-        .response
+        });
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    })
+    .inner
 }
 
 fn text_field(ui: &mut Ui, label: &str, value: &mut String, hint: &str, l: Language) {
     super::preferences::form_row(ui, label, l, |ui| {
-        ui.add(
-            design::text_edit(value)
-                .hint_text(hint)
-                .desired_width(f32::INFINITY),
-        );
+        design::input_field(ui, value, ui.available_width(), hint);
     });
 }
 
-pub(super) fn secret_field(ui: &mut Ui, value: &mut String, l: Language) {
-    super::preferences::form_row(ui, "API Key", l, |ui| secret_input(ui, value, l));
-}
-
-fn secret_input(ui: &mut Ui, value: &mut String, l: Language) {
-    let response = ui.add(
-        design::text_edit(value)
-            .password(true)
-            .margin(egui::Margin {
-                left: 12,
-                right: 34,
-                top: 7,
-                bottom: 7,
-            })
-            .hint_text(l.text("输入 API Key", "Enter API key"))
-            .desired_width(f32::INFINITY),
-    );
-    if !value.is_empty() {
-        let rect = Rect::from_center_size(
-            pos2(response.rect.max.x - 17.0, response.rect.center().y),
-            vec2(26.0, 26.0),
+pub(super) fn secret_field(
+    ui: &mut Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    l: Language,
+) {
+    super::preferences::form_row(ui, "API Key", l, |ui| {
+        design::secret_field(
+            ui,
+            id_salt,
+            value,
+            ui.available_width(),
+            l.text("输入 API Key", "Enter API key"),
         );
-        let clear = ui
-            .interact(rect, response.id.with("clear"), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(l.text("清除密钥", "Clear API key"));
-        draw_close(
-            ui.painter(),
-            rect.shrink(7.0),
-            if clear.hovered() { design::TEXT } else { MUTED },
-        );
-        if clear.clicked() {
-            value.clear();
-            response.request_focus();
-        }
-    }
+    });
 }
 
 #[cfg(test)]

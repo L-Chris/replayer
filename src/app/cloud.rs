@@ -536,45 +536,51 @@ impl App {
             } else {
                 old.label()
             };
-            egui::ComboBox::from_id_salt("cloud-provider")
-                .selected_text(selected)
-                .width(ui.available_width())
-                .show_ui(ui, |ui| {
+            design::dropdown_ui(
+                ui,
+                "cloud-provider",
+                ui.available_width(),
+                selected,
+                |ui| {
                     for provider in sync::Provider::ALL {
                         let name = if provider == sync::Provider::Custom {
                             l.text("自定义", "Custom")
                         } else {
                             provider.label()
                         };
-                        ui.selectable_value(&mut settings.provider, provider, name);
+                        design::menu_value(ui, &mut settings.provider, provider, name);
                     }
-                });
+                },
+            );
             if settings.provider != old {
                 settings.base_url = settings.provider.url().into();
             }
         });
         if settings.provider == sync::Provider::Custom {
             preferences::form_row(ui, l.text("接口地址", "Base URL"), l, |ui| {
-                ui.add(design::text_edit(&mut settings.base_url).desired_width(f32::INFINITY));
-            });
-        }
-        for (label, value, password) in [
-            (l.text("用户名", "Username"), &mut settings.username, false),
-            (l.text("密码", "Password"), &mut settings.password, true),
-            (
-                l.text("设备名称", "Device name"),
-                &mut settings.device_name,
-                false,
-            ),
-        ] {
-            preferences::form_row(ui, label, l, |ui| {
-                ui.add(
-                    design::text_edit(value)
-                        .password(password)
-                        .desired_width(f32::INFINITY),
+                design::input_field(
+                    ui,
+                    &mut settings.base_url,
+                    ui.available_width(),
+                    "https://dav.example.com",
                 );
             });
         }
+        preferences::form_row(ui, l.text("用户名", "Username"), l, |ui| {
+            design::input_field(ui, &mut settings.username, ui.available_width(), "");
+        });
+        preferences::form_row(ui, l.text("密码", "Password"), l, |ui| {
+            design::secret_field(
+                ui,
+                "cloud-password",
+                &mut settings.password,
+                ui.available_width(),
+                "",
+            );
+        });
+        preferences::form_row(ui, l.text("设备名称", "Device name"), l, |ui| {
+            design::input_field(ui, &mut settings.device_name, ui.available_width(), "");
+        });
         preferences::form_row(ui, l.text("同步 API Key", "Sync API keys"), l, |ui| {
             design::toggle(
                 ui,
@@ -584,21 +590,29 @@ impl App {
         });
         if settings.sync_keys {
             preferences::form_row(ui, l.text("同步口令", "Sync passphrase"), l, |ui| {
-                ui.add(
-                    design::text_edit(&mut settings.passphrase)
-                        .password(true)
-                        .desired_width(f32::INFINITY)
-                        .hint_text(l.text("至少 12 个字符", "At least 12 characters")),
+                design::secret_field(
+                    ui,
+                    "cloud-passphrase",
+                    &mut settings.passphrase,
+                    ui.available_width(),
+                    l.text("至少 12 个字符", "At least 12 characters"),
                 );
             });
         }
-        ui.add_space(12.0);
+        ui.add_space(6.0);
         let busy = self.cloud.job.is_some() || self.cloud.probe.is_some();
         let mut test = false;
         let mut sync_now = false;
         preferences::form_row(ui, "", l, |ui| {
             ui.add_enabled_ui(!busy, |ui| {
-                test = ui.button(l.text("测试连接", "Test connection")).clicked();
+                test = design::control(
+                    ui,
+                    l.text("测试连接", "Test connection"),
+                    None,
+                    design::Control::Outline,
+                    0.0,
+                )
+                .clicked();
             });
             ui.add_enabled_ui(
                 !busy

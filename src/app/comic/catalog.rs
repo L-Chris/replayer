@@ -9,12 +9,7 @@ impl State {
             .filter(|e| e.favorite && !e.new_unread.is_empty())
             .count();
         let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
-        let compact = header.width() < 540.0;
-        let action_width = if compact {
-            34.0
-        } else {
-            design::control_width(ui, l.text("检查更新", "Check updates"), true)
-        };
+        let action_width = design::CONTROL_HEIGHT;
         let mut tabs = workspace::child(
             ui,
             "comic-catalog-tabs",
@@ -50,42 +45,37 @@ impl State {
             "comic-check-updates",
             Rect::from_min_size(
                 pos2(header.max.x - action_width, header.min.y),
-                vec2(action_width, 34.0),
+                vec2(action_width, design::CONTROL_HEIGHT),
             ),
         );
-        action.add_enabled_ui(
-            self.update_job.is_none() && self.update_queue.is_empty(),
-            |ui| {
-                if design::control(
-                    ui,
-                    if compact {
-                        ""
-                    } else {
-                        l.text("检查更新", "Check updates")
-                    },
-                    Some(icons::refresh),
-                    design::Control::Outline,
-                    action_width,
-                )
-                .on_hover_text(l.text("检查收藏更新", "Check favorite comics for updates"))
-                .clicked()
-                {
-                    self.begin_updates(Instant::now());
-                }
-            },
-        );
-        ui.add_space(6.0);
-        if self.update_job.is_some() || !self.update_queue.is_empty() {
-            ui.horizontal(|ui| {
+        let updating = self.update_job.is_some() || !self.update_queue.is_empty();
+        if updating {
+            action.centered_and_justified(|ui| {
                 ui.spinner();
-                ui.small(format!(
+            });
+            action
+                .interact(
+                    action.max_rect(),
+                    action.id().with("progress"),
+                    Sense::hover(),
+                )
+                .on_hover_text(format!(
                     "{} {}/{}",
                     l.text("检查更新中", "Checking updates"),
                     self.update_done,
                     self.update_total
                 ));
-            });
+        } else if design::icon_button(
+            &mut action,
+            icons::ARROWS_CLOCKWISE,
+            l.text("检查收藏更新", "Check favorite comics for updates"),
+            false,
+        )
+        .clicked()
+        {
+            self.begin_updates(Instant::now());
         }
+        ui.add_space(10.0);
         if self.tab == Tab::Search {
             self.search_controls(ui, settings);
             let groups: Vec<_> = self
@@ -102,92 +92,43 @@ impl State {
                 .iter()
                 .filter_map(|g| g.error.as_ref().map(|e| format!("{}: {e}", g.site.name)))
                 .collect();
-            let summary = |ui: &mut Ui| {
-                if !self.search.is_empty() {
-                    ui.spinner();
-                    ui.label(RichText::new(l.text("正在搜索…", "Searching…")).color(MUTED));
-                } else {
-                    ui.label(
-                        RichText::new(format!(
-                            "{} {} {} · {} {}",
-                            l.text("找到", "Found"),
-                            books.len(),
-                            l.text("部作品", "comics"),
-                            groups.len(),
-                            l.text("个来源", "sources")
-                        ))
-                        .small()
-                        .color(MUTED),
-                    );
-                }
-                if !failures.is_empty() {
-                    ui.label(
-                        RichText::new(l.text("部分来源暂不可用", "Some sources are unavailable"))
-                            .small()
-                            .color(Color32::from_rgb(218, 177, 126)),
-                    )
-                    .on_hover_text(failures.join("\n"));
-                }
-            };
-            if header.width() >= 660.0 {
-                let summary_ui = workspace::child(
-                    ui,
-                    "comic-search-summary",
-                    Rect::from_min_max(
-                        pos2(header.max.x - action_width - 282.0, header.min.y),
-                        pos2(header.max.x - action_width - 16.0, header.max.y),
-                    ),
-                );
-                let summary_rect = summary_ui.max_rect();
-                let text = if !self.search.is_empty() {
-                    l.text("正在搜索…", "Searching…").to_owned()
-                } else {
-                    format!(
-                        "{} {} {} · {} {}",
-                        l.text("找到", "Found"),
-                        books.len(),
-                        l.text("部作品", "comics"),
-                        groups.len(),
-                        l.text("个来源", "sources")
-                    )
-                };
-                summary_ui.painter().text(
-                    pos2(
-                        summary_rect.min.x,
-                        summary_rect.center().y - if failures.is_empty() { 0.0 } else { 7.0 },
-                    ),
-                    egui::Align2::LEFT_CENTER,
-                    text,
-                    egui::FontId::proportional(12.0),
-                    MUTED,
-                );
-                if !failures.is_empty() {
-                    summary_ui.painter().text(
-                        pos2(summary_rect.min.x, summary_rect.center().y + 9.0),
-                        egui::Align2::LEFT_CENTER,
-                        l.text("部分来源暂不可用", "Some sources are unavailable"),
-                        egui::FontId::proportional(11.0),
-                        Color32::from_rgb(218, 177, 126),
-                    );
-                    summary_ui
-                        .interact(summary_rect, summary_ui.id().with("errors"), Sense::hover())
+            if !self.search.is_empty() || !books.is_empty() || !failures.is_empty() {
+                ui.horizontal(|ui| {
+                    if !self.search.is_empty() {
+                        ui.spinner();
+                        ui.small(RichText::new(l.text("正在搜索…", "Searching…")).color(MUTED));
+                    } else if !books.is_empty() {
+                        ui.small(
+                            RichText::new(format!(
+                                "{} {}",
+                                books.len(),
+                                l.text("部作品", "comics")
+                            ))
+                            .color(MUTED),
+                        );
+                    }
+                    if !failures.is_empty() {
+                        ui.small(
+                            RichText::new(l.text("部分来源暂不可用", "Some sources unavailable"))
+                                .color(Color32::from_rgb(218, 177, 126)),
+                        )
                         .on_hover_text(failures.join("\n"));
-                }
-            } else {
-                ui.horizontal_wrapped(summary);
+                    }
+                });
+                ui.add_space(4.0);
             }
-            ui.add_space(4.0);
             design::scroll()
                 .id_salt("comic_search_results")
                 .show(ui, |ui| {
                     if books.is_empty() && self.search.is_empty() {
-                        self.catalog_empty(
+                        design::empty_state(
                             ui,
-                            l.text("寻找下一段故事", "Find your next story"),
-                            l.text(
-                                "输入漫画名称，搜索多个来源",
-                                "Search across comic sources by title",
-                            ),
+                            icons::MAGNIFYING_GLASS,
+                            if self.keyword.trim().is_empty() {
+                                l.text("输入漫画名称开始搜索", "Search comics by title")
+                            } else {
+                                l.text("未找到相关漫画", "No matching comics")
+                            },
                         );
                     }
                     self.book_grid(ui, &books, settings);
@@ -230,44 +171,24 @@ impl State {
                     };
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(title).size(20.0).strong());
-                        ui.label(
-                            RichText::new(format!(
-                                "{} {}",
-                                entries.len(),
-                                l.text("部作品", "comics")
-                            ))
-                            .small()
-                            .color(MUTED),
-                        );
+                        if !entries.is_empty() {
+                            ui.label(
+                                RichText::new(entries.len().to_string())
+                                    .small()
+                                    .color(MUTED),
+                            );
+                        }
                     });
                     ui.add_space(12.0);
                     if entries.is_empty() {
-                        let title = if self.tab == Tab::Updates {
-                            l.text("暂无新章节", "You're up to date")
+                        let empty_title = if self.tab == Tab::Updates {
+                            l.text("暂无新章节", "No new chapters")
                         } else if self.tab == Tab::History {
-                            l.text("还没有阅读记录", "No reading history yet")
+                            l.text("暂无阅读记录", "No reading history")
                         } else {
-                            l.text("书架还是空的", "Your library is empty")
+                            l.text("暂无收藏漫画", "No favorite comics")
                         };
-                        self.catalog_empty(
-                            ui,
-                            title,
-                            l.text(
-                                "搜索并收藏喜欢的漫画，在这里继续阅读",
-                                "Search and favorite comics to continue reading here",
-                            ),
-                        );
-                        if design::control(
-                            ui,
-                            l.text("搜索漫画", "Search comics"),
-                            Some(draw_search),
-                            design::Control::Primary,
-                            0.0,
-                        )
-                        .clicked()
-                        {
-                            self.tab = Tab::Search;
-                        }
+                        design::empty_state(ui, icons::BOOK_OPEN, empty_title);
                     }
                     if self.tab == Tab::Updates {
                         for entry in &entries {
@@ -291,15 +212,6 @@ impl State {
     fn search_controls(&mut self, ui: &mut Ui, settings: &crate::settings::Settings) {
         let l = settings.language;
         let width = ui.available_width();
-        let button_width = design::control_width(
-            ui,
-            if !self.search.is_empty() {
-                l.text("取消", "Cancel")
-            } else {
-                l.text("搜索", "Search")
-            },
-            false,
-        );
         let mut sites = self.sites.clone();
         for group in &self.groups {
             if !sites.iter().any(|site| site.id == group.site.id) {
@@ -310,107 +222,47 @@ impl State {
         let selected = sites
             .iter()
             .find(|site| site.id == self.site_filter)
-            .map(|s| s.name.as_str())
-            .unwrap_or(l.text("全部来源", "All sources"));
-        // Leave room for the two-pixel inset around the embedded selector.
-        let source_width = (design::combo_width(ui, selected) + 8.0).clamp(88.0, 156.0);
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| l.text("全部来源", "All sources").to_owned());
+        let source_width = (design::combo_width(ui, &selected) + 12.0).clamp(104.0, 168.0);
         let mut submit = false;
         ui.horizontal(|ui| {
-            let field_width = (width - button_width - 12.0).max(160.0);
-            let (field, hover) =
-                ui.allocate_exact_size(vec2(field_width, design::CONTROL_HEIGHT), Sense::hover());
-            ui.painter().rect_filled(field, 8, design::FIELD);
-            let menu_style = ui.style().clone();
-            let mut source_ui = workspace::child(
+            ui.spacing_mut().item_spacing.x = 8.0;
+            design::dropdown_ui(ui, "comic_source", source_width, &selected, |ui| {
+                design::menu_value(
+                    ui,
+                    &mut self.site_filter,
+                    String::new(),
+                    l.text("全部来源", "All sources"),
+                );
+                for site in &sites {
+                    design::menu_value(ui, &mut self.site_filter, site.id.clone(), &site.name);
+                }
+            });
+            let field_width = (width - source_width - design::CONTROL_HEIGHT - 16.0).max(120.0);
+            let input = design::search_field(
                 ui,
-                "comic-source-prefix",
-                Rect::from_min_size(
-                    field.min + vec2(2.0, 2.0),
-                    vec2(source_width - 4.0, design::CONTROL_HEIGHT - 4.0),
-                ),
-            );
-            source_ui.spacing_mut().interact_size.y = design::CONTROL_HEIGHT - 4.0;
-            source_ui.spacing_mut().button_padding.y = 6.0;
-            let widgets = &mut source_ui.visuals_mut().widgets;
-            for visuals in [
-                &mut widgets.inactive,
-                &mut widgets.hovered,
-                &mut widgets.active,
-                &mut widgets.open,
-            ] {
-                visuals.bg_stroke = Stroke::NONE;
-                visuals.weak_bg_fill = Color32::TRANSPARENT;
-            }
-            egui::ComboBox::from_id_salt("comic_source")
-                .width(source_width - 4.0)
-                .wrap_mode(egui::TextWrapMode::Truncate)
-                .selected_text(selected)
-                .show_ui(&mut source_ui, |ui| {
-                    ui.set_style(menu_style.clone());
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    design::selectable_value(
-                        ui,
-                        &mut self.site_filter,
-                        String::new(),
-                        l.text("全部来源", "All sources"),
-                    );
-                    for site in &sites {
-                        design::selectable_value(
-                            ui,
-                            &mut self.site_filter,
-                            site.id.clone(),
-                            &site.name,
-                        );
-                    }
-                });
-            let divider = field.min.x + source_width;
-            ui.painter().line_segment(
-                [
-                    pos2(divider, field.min.y + 8.0),
-                    pos2(divider, field.max.y - 8.0),
-                ],
-                Stroke::new(1.0, design::BORDER),
-            );
-            let mut input_ui = workspace::child(
-                ui,
-                "comic-search-text",
-                Rect::from_min_max(pos2(divider, field.min.y), field.max),
-            );
-            let input = design::search_input(
-                &mut input_ui,
                 &mut self.keyword,
-                field_width - source_width,
+                field_width,
                 l.text("搜索漫画名称", "Search comics"),
             );
-            let border = if input.has_focus() {
-                ACCENT
-            } else if hover.hovered() {
-                MUTED
-            } else {
-                design::BORDER
-            };
-            ui.painter()
-                .rect_stroke(field, 8, Stroke::new(1.0, border), egui::StrokeKind::Inside);
             submit = input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             if !self.search.is_empty() {
-                if design::control(
+                if design::icon_button(
                     ui,
-                    l.text("取消", "Cancel"),
-                    None,
-                    design::Control::Outline,
-                    button_width,
+                    icons::X,
+                    l.text("取消搜索", "Cancel search"),
+                    false,
                 )
                 .clicked()
                 {
                     self.search.clear();
                 }
             } else {
-                submit |= design::control(
+                submit |= design::primary_icon_button(
                     ui,
+                    icons::MAGNIFYING_GLASS,
                     l.text("搜索", "Search"),
-                    None,
-                    design::Control::Primary,
-                    button_width,
                 )
                 .clicked();
             }
@@ -418,17 +270,7 @@ impl State {
         if submit && !self.keyword.trim().is_empty() {
             self.search_for(self.keyword.clone());
         }
-        ui.add_space(4.0);
-    }
-
-    fn catalog_empty(&self, ui: &mut Ui, title: &str, subtitle: &str) {
-        ui.add_space(32.0);
-        let (icon, _) = ui.allocate_exact_size(vec2(30.0, 34.0), Sense::hover());
-        reader::reader_book(ui.painter(), icon.shrink(3.0), ACCENT);
-        ui.add_space(10.0);
-        ui.label(RichText::new(title).size(21.0).strong());
-        ui.label(RichText::new(subtitle).color(MUTED));
-        ui.add_space(16.0);
+        ui.add_space(6.0);
     }
 
     pub(super) fn book_grid(
@@ -614,24 +456,8 @@ impl State {
                     ui.small(&shown.status);
                 }
                 ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     if let Some(entry) = &entry {
-                        if design::control(
-                            ui,
-                            if entry.favorite {
-                                l.text("已收藏", "Favorited")
-                            } else {
-                                l.text("收藏", "Favorite")
-                            },
-                            Some(|p, r, c| design::heart(p, r, c, false)),
-                            design::Control::Outline,
-                            0.0,
-                        )
-                        .clicked()
-                        {
-                            let mut entry = entry.clone();
-                            entry.set_favorite(!entry.favorite);
-                            self.save(entry);
-                        }
                         ui.add_enabled_ui(!entry.chapters.is_empty(), |ui| {
                             if design::control(
                                 ui,
@@ -649,13 +475,35 @@ impl State {
                                 self.resume(entry.clone(), settings);
                             }
                         });
+                        let fav_tip = if entry.favorite {
+                            l.text("取消收藏", "Remove favorite")
+                        } else {
+                            l.text("收藏", "Favorite")
+                        };
+                        let fav_filled = entry.favorite;
+                        if design::icon_button_sized(
+                            ui,
+                            design::CONTROL_HEIGHT,
+                            1.0,
+                            fav_filled,
+                            fav_tip,
+                            |p, r, c| design::heart(p, r, c, fav_filled),
+                        )
+                        .clicked()
+                        {
+                            let mut entry = entry.clone();
+                            entry.set_favorite(!entry.favorite);
+                            self.save(entry);
+                        }
                     }
                 });
-                egui::CollapsingHeader::new(l.text("简介", "Description"))
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.label(&shown.description);
-                    });
+                if !shown.description.trim().is_empty() {
+                    egui::CollapsingHeader::new(l.text("简介", "Description"))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.label(&shown.description);
+                        });
+                }
             });
         });
         if self.detail_job.is_some() {
@@ -665,18 +513,33 @@ impl State {
             });
         }
         let Some(entry) = self.selected_entry() else {
-            if self.detail_job.is_none() && ui.button(l.text("重试", "Retry")).clicked() {
+            if self.detail_job.is_none()
+                && design::control(
+                    ui,
+                    l.text("重试", "Retry"),
+                    Some(icons::refresh),
+                    design::Control::Outline,
+                    0.0,
+                )
+                .clicked()
+            {
                 self.open_book(book);
             }
             return;
         };
+        ui.add_space(4.0);
         ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!(
-                "{} {}",
-                entry.chapters.len(),
-                l.text("个章节", "chapters")
-            ));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(
+                RichText::new(format!(
+                    "{} {}",
+                    entry.chapters.len(),
+                    l.text("话", "chapters")
+                ))
+                .color(MUTED),
+            );
             if entry
                 .chapters
                 .iter()
@@ -687,28 +550,56 @@ impl State {
                     Some(domain::ChapterKind::Volume) => l.text("单行本", "Volumes"),
                     None => l.text("全部", "All"),
                 };
-                egui::ComboBox::from_id_salt("comic-chapter-kind")
-                    .width(design::combo_width(ui, label))
-                    .selected_text(label)
-                    .show_ui(ui, |ui| {
-                        for (kind, name) in [
-                            (
-                                Some(domain::ChapterKind::Chapter),
-                                l.text("单话", "Chapters"),
-                            ),
-                            (
-                                Some(domain::ChapterKind::Volume),
-                                l.text("单行本", "Volumes"),
-                            ),
-                            (None, l.text("全部", "All")),
-                        ] {
-                            design::selectable_value(ui, &mut self.chapter_filter, kind, name);
-                        }
-                    });
+                let drop_w = (design::combo_width(ui, label) + 12.0).max(96.0);
+                design::dropdown_ui(ui, "comic-chapter-kind", drop_w, label, |ui| {
+                    for (kind, name) in [
+                        (
+                            Some(domain::ChapterKind::Chapter),
+                            l.text("单话", "Chapters"),
+                        ),
+                        (
+                            Some(domain::ChapterKind::Volume),
+                            l.text("单行本", "Volumes"),
+                        ),
+                        (None, l.text("全部", "All")),
+                    ] {
+                        design::menu_value(ui, &mut self.chapter_filter, kind, name);
+                    }
+                });
             }
-            ui.checkbox(&mut self.reverse, l.text("倒序", "Descending"));
-            ui.checkbox(&mut self.unread_only, l.text("只看未读", "Unread only"));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                if design::icon_button(
+                    ui,
+                    icons::FUNNEL,
+                    l.text("只看未读", "Unread only"),
+                    self.unread_only,
+                )
+                .clicked()
+                {
+                    self.unread_only = !self.unread_only;
+                }
+                if design::icon_button(
+                    ui,
+                    if self.reverse {
+                        icons::SORT_DESCENDING
+                    } else {
+                        icons::SORT_ASCENDING
+                    },
+                    if self.reverse {
+                        l.text("当前倒序（点击切为正序）", "Descending (click for ascending)")
+                    } else {
+                        l.text("当前正序（点击切为倒序）", "Ascending (click for descending)")
+                    },
+                    self.reverse,
+                )
+                .clicked()
+                {
+                    self.reverse = !self.reverse;
+                }
+            });
         });
+        ui.add_space(6.0);
         let mut chapters: Vec<_> = entry
             .chapters
             .iter()
@@ -738,9 +629,10 @@ impl State {
                 if list.is_empty() {
                     continue;
                 }
+                ui.add_space(4.0);
                 ui.label(
                     RichText::new(match section {
-                        1 => l.text("番外 / 附录", "Extras / appendices"),
+                        1 => l.text("番外 / 附录", "Extras"),
                         2 => l.text("单行本", "Volumes"),
                         _ => l.text("正文", "Chapters"),
                     })
@@ -748,51 +640,33 @@ impl State {
                     .color(MUTED),
                 );
                 let columns = (ui.available_width() / 170.0).floor().max(1.0) as usize;
-                let width = (ui.available_width() - 12.0 * (columns - 1) as f32) / columns as f32;
+                let width = (ui.available_width() - 10.0 * (columns - 1) as f32) / columns as f32;
                 for row in list.chunks(columns) {
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
                         for (index, chapter) in row {
-                            let prefix = if entry.new_unread.contains(chapter.key()) {
-                                "● "
-                            } else if entry.read.contains(chapter.key()) {
-                                "✓ "
-                            } else {
-                                ""
-                            };
-                            let current = entry
+                            let is_current = entry
                                 .progress
                                 .as_ref()
                                 .is_some_and(|p| p.chapter == chapter.key());
-                            let response = ui
-                                .add_sized(
-                                    vec2(width, 46.0),
-                                    egui::Button::new(
-                                        RichText::new(format!("{prefix}{}", chapter.name)).color(
-                                            if current {
-                                                ACCENT
-                                            } else if entry.read.contains(chapter.key()) {
-                                                MUTED
-                                            } else {
-                                                design::TEXT
-                                            },
-                                        ),
-                                    )
-                                    .truncate()
-                                    .selected(current)
-                                    .stroke(Stroke::new(
-                                        1.0,
-                                        if current { ACCENT } else { design::LINE },
-                                    )),
-                                )
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text(&chapter.name);
+                            let is_new = entry.new_unread.contains(chapter.key());
+                            let is_read = entry.read.contains(chapter.key());
+                            let response = chapter_card(
+                                ui,
+                                width,
+                                &chapter.name,
+                                is_current,
+                                is_new,
+                                is_read,
+                            );
                             if response.clicked() {
                                 read = Some(*index);
                             }
                             response.context_menu(|ui| {
-                                if ui.button(l.text("标记已读", "Mark read")).clicked() {
+                                if design::menu_item(ui, false, l.text("标记已读", "Mark read"))
+                                    .clicked()
+                                {
                                     mark = Some(chapter.key().to_owned());
-                                    ui.close();
                                 }
                             });
                         }
@@ -810,6 +684,86 @@ impl State {
         }
     }
 }
+fn chapter_card(
+    ui: &mut Ui,
+    width: f32,
+    name: &str,
+    current: bool,
+    new_unread: bool,
+    read: bool,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 42.0), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), current, name)
+    });
+    let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
+    let fill = if current {
+        design::SELECTED
+    } else if hovered {
+        design::HOVER
+    } else {
+        SURFACE
+    };
+    let stroke_color = if current {
+        ACCENT
+    } else if hovered {
+        design::BORDER
+    } else {
+        design::LINE
+    };
+    ui.painter().rect_filled(rect, 8, fill);
+    ui.painter()
+        .rect_stroke(rect, 8, Stroke::new(1.0, stroke_color), egui::StrokeKind::Inside);
+    let has_indicator = current || new_unread || read;
+    if current {
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(rect.min.x + 17.0, rect.center().y), vec2(14.0, 14.0)),
+            ACCENT,
+            icons::BOOK_OPEN,
+        );
+    } else if new_unread {
+        ui.painter()
+            .circle_filled(pos2(rect.min.x + 17.0, rect.center().y), 3.5, ACCENT);
+    } else if read {
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(rect.min.x + 17.0, rect.center().y), vec2(14.0, 14.0)),
+            MUTED,
+            icons::CHECK,
+        );
+    }
+    let text_x = if has_indicator {
+        rect.min.x + 30.0
+    } else {
+        rect.min.x + 12.0
+    };
+    let text_color = if current {
+        ACCENT
+    } else if read {
+        MUTED
+    } else {
+        design::TEXT
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(name.into(), egui::FontId::proportional(13.5), text_color);
+    let truncated = galley.size().x > (rect.max.x - 10.0 - text_x).max(0.0);
+    let clip = Rect::from_min_max(pos2(text_x, rect.min.y), pos2(rect.max.x - 10.0, rect.max.y))
+        .intersect(ui.clip_rect());
+    ui.painter().with_clip_rect(clip).galley(
+        pos2(text_x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        text_color,
+    );
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if truncated {
+        response.on_hover_text(name)
+    } else {
+        response
+    }
+}
+
 fn is_special(name: &str) -> bool {
     [
         "番外", "附录", "附錄", "特典", "特别", "特別", "extra", "omake",

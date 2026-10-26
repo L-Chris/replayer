@@ -16,16 +16,21 @@ impl App {
                 PrefTab::Providers | PrefTab::Cloud | PrefTab::About
             ) {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let response =
-                        design::control(ui, "", Some(more_icon), design::Control::Quiet, 34.0)
-                            .on_hover_text(language.text("更多", "More"));
-                    egui::Popup::menu(&response).show(|ui| {
-                        if ui
-                            .button(language.text("恢复默认", "Restore defaults"))
-                            .clicked()
+                    let response = design::icon_button(
+                        ui,
+                        icons::DOTS_THREE,
+                        language.text("更多", "More"),
+                        false,
+                    );
+                    egui::Popup::menu(&response).gap(4.0).width(148.0).show(|ui| {
+                        if design::menu_item(
+                            ui,
+                            false,
+                            language.text("恢复默认", "Restore defaults"),
+                        )
+                        .clicked()
                         {
                             self.reset_preferences(language);
-                            ui.close();
                         }
                     });
                 });
@@ -33,31 +38,37 @@ impl App {
         });
         ui.add_space(16.0);
         let rect = ui.available_rect_before_wrap();
-        let nav_width = if rect.width() > 680.0 { 155.0 } else { 110.0 };
+        let nav_width = if rect.width() > 680.0 { 168.0 } else { 126.0 };
         let mut nav = workspace::child(
             ui,
             "settings-navigation",
             Rect::from_min_size(rect.min, vec2(nav_width, rect.height())),
         );
-        nav.spacing_mut().item_spacing.y = 10.0;
-        for (tab, zh, en) in [
-            (PrefTab::General, "通用", "General"),
-            (PrefTab::Providers, "AI 提供商", "AI providers"),
-            (PrefTab::Subtitles, "AI 字幕", "AI subtitles"),
-            (PrefTab::MusicSources, "音乐相关", "Music"),
-            (PrefTab::Comics, "漫画相关", "Comics"),
-            (PrefTab::Cloud, "云同步", "Cloud sync"),
-            (PrefTab::About, "关于", "About"),
+        nav.spacing_mut().item_spacing.y = 4.0;
+        for (tab, zh, en, glyph) in [
+            (PrefTab::General, "通用", "General", icons::SLIDERS_HORIZONTAL),
+            (PrefTab::Providers, "AI 提供商", "AI providers", icons::SPARKLE),
+            (PrefTab::Subtitles, "AI 字幕", "AI subtitles", icons::SUBTITLES),
+            (PrefTab::MusicSources, "音乐相关", "Music", icons::MUSIC_NOTES),
+            (PrefTab::Comics, "漫画相关", "Comics", icons::BOOK_OPEN),
+            (PrefTab::Cloud, "云同步", "Cloud sync", icons::CLOUD_ARROW_UP),
+            (PrefTab::About, "关于", "About", icons::INFO),
         ] {
-            design::selectable_value(
+            if design::nav_item(
                 &mut nav,
-                &mut self.preferences_tab,
-                tab,
                 language.text(zh, en),
-            );
+                Some(glyph),
+                self.preferences_tab == tab,
+                false,
+            )
+            .clicked()
+                && self.preferences_tab != tab
+            {
+                self.preferences_tab = tab;
+            }
         }
         let body = Rect::from_min_max(
-            pos2(rect.min.x + nav_width + 22.0, rect.min.y),
+            pos2(rect.min.x + nav_width + 24.0, rect.min.y),
             pos2(
                 rect.max.x,
                 rect.max.y - if dirty_before { 52.0 } else { 0.0 },
@@ -70,10 +81,12 @@ impl App {
             .show(&mut content, |ui| {
                 egui::Frame::new()
                     .fill(SURFACE)
-                    .corner_radius(10)
-                    .inner_margin(20)
+                    .stroke(Stroke::new(1.0, design::LINE))
+                    .corner_radius(12)
+                    .inner_margin(24)
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing.y = 14.0;
                         match self.preferences_tab {
                             PrefTab::General => self.preferences_general(ui),
                             PrefTab::Providers => self.preferences_providers(ui),
@@ -94,12 +107,24 @@ impl App {
             let mut footer = workspace::child(
                 ui,
                 "settings-footer",
-                Rect::from_min_max(pos2(body.min.x, rect.max.y - 42.0), rect.max),
+                Rect::from_min_max(pos2(body.min.x, rect.max.y - 44.0), rect.max),
             );
             footer.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if workspace::primary(ui, language.text("保存", "Save")).clicked() {
                     self.save_preferences(language);
                     attempted_save = true;
+                    ui.ctx().request_repaint();
+                }
+                if design::control(
+                    ui,
+                    language.text("放弃更改", "Discard"),
+                    None,
+                    design::Control::Outline,
+                    0.0,
+                )
+                .clicked()
+                {
+                    self.preferences_draft = self.settings.clone();
                     ui.ctx().request_repaint();
                 }
             });
@@ -193,24 +218,22 @@ impl App {
     }
     fn preferences_general(&mut self, ui: &mut Ui) {
         let language = self.settings.language;
-        ui.add_space(6.0);
         form_row(
             ui,
             language.text("界面语言", "Interface language"),
             language,
             |ui| {
-                design::selectable_value(
-                    ui,
-                    &mut self.preferences_draft.language,
-                    Language::Chinese,
-                    "简体中文",
-                );
-                design::selectable_value(
-                    ui,
-                    &mut self.preferences_draft.language,
-                    Language::English,
-                    "English",
-                );
+                let mut idx = match self.preferences_draft.language {
+                    Language::Chinese => 0,
+                    Language::English => 1,
+                };
+                if design::segmented(ui, &mut idx, &["简体中文", "English"]) {
+                    self.preferences_draft.language = if idx == 0 {
+                        Language::Chinese
+                    } else {
+                        Language::English
+                    };
+                }
             },
         );
     }
@@ -219,11 +242,7 @@ impl App {
         let l = self.settings.language;
         let settings = &mut self.preferences_draft.llm;
         form_row(ui, l.text("字幕模型", "Subtitle model"), l, |ui| {
-            providers::model_selector(ui, &mut settings.selected, &self.preferences_draft.ai, l)
-                .on_hover_text(l.text(
-                    "请选择支持音频输入的模型",
-                    "Choose a model that accepts audio input",
-                ));
+            providers::model_selector(ui, &mut settings.selected, &self.preferences_draft.ai, l);
         });
         let mut bilingual = settings.bilingual.unwrap_or(false);
         form_row(ui, l.text("双语字幕", "Bilingual subtitles"), l, |ui| {
@@ -238,76 +257,81 @@ impl App {
             }
         });
         form_row(ui, l.text("音频分段", "Chunk duration"), l, |ui| {
-            ui.add(
-                design::text_edit(&mut settings.chunk_seconds)
-                    .desired_width(80.0)
-                    .hint_text("120"),
-            )
-            .on_hover_text(l.text("5–120 秒", "5–120 seconds"));
-            ui.label(l.text("秒", "seconds"));
+            design::unit_field(
+                ui,
+                &mut settings.chunk_seconds,
+                128.0,
+                "120",
+                l.text("秒", "s"),
+            );
         });
         form_row(ui, l.text("并发请求", "Parallel requests"), l, |ui| {
-            ui.add(
-                egui::DragValue::new(&mut self.preferences_draft.subtitle_concurrency)
-                    .range(1..=6)
-                    .speed(1.0),
+            design::stepper_usize(
+                ui,
+                &mut self.preferences_draft.subtitle_concurrency,
+                1..=6,
             );
         });
         form_row(ui, l.text("思考等级", "Reasoning effort"), l, |ui| {
-            egui::ComboBox::from_id_salt("reasoning_effort")
-                .width(ui.available_width())
-                .selected_text(
-                    if settings.reasoning_effort.is_empty()
-                        || settings.reasoning_effort == "default"
-                    {
-                        l.text("默认（不传参数）", "Default (omit parameter)")
-                    } else {
-                        &settings.reasoning_effort
-                    },
-                )
-                .show_ui(ui, |ui| {
+            let selected_label = if settings.reasoning_effort.is_empty()
+                || settings.reasoning_effort == "default"
+            {
+                l.text("默认", "Default").to_owned()
+            } else {
+                settings.reasoning_effort.clone()
+            };
+            design::dropdown_ui(
+                ui,
+                "reasoning_effort",
+                ui.available_width(),
+                &selected_label,
+                |ui| {
                     for effort in [
                         "default", "none", "minimal", "low", "medium", "high", "xhigh", "max",
                     ] {
-                        design::selectable_value(
+                        design::menu_value(
                             ui,
                             &mut settings.reasoning_effort,
                             effort.into(),
                             if effort == "default" {
-                                l.text("默认（不传参数）", "Default (omit parameter)")
+                                l.text("默认", "Default")
                             } else {
                                 effort
                             },
                         );
                     }
-                });
+                },
+            );
         });
         form_row(ui, l.text("音频格式", "Audio format"), l, |ui| {
-            egui::ComboBox::from_id_salt("audio_format")
-                .width(ui.available_width())
-                .selected_text(settings.audio_format.to_uppercase())
-                .show_ui(ui, |ui| {
+            let selected_label = settings.audio_format.to_uppercase();
+            design::dropdown_ui(
+                ui,
+                "audio_format",
+                ui.available_width(),
+                &selected_label,
+                |ui| {
                     for format in ["mp3", "wav"] {
-                        design::selectable_value(
-                            ui,
-                            &mut settings.audio_format,
-                            format.into(),
-                            format.to_uppercase(),
-                        );
+                        let upper = format.to_uppercase();
+                        design::menu_value(ui, &mut settings.audio_format, format.into(), &upper);
                     }
-                });
+                },
+            );
         });
         form_row(ui, l.text("音频编码", "Audio encoding"), l, |ui| {
-            egui::ComboBox::from_id_salt("audio_encoding")
-                .width(ui.available_width())
-                .selected_text(if settings.audio_encoding == "auto" {
-                    l.text("自动", "Automatic")
-                } else {
-                    &settings.audio_encoding
-                })
-                .show_ui(ui, |ui| {
+            let selected_label = if settings.audio_encoding == "auto" {
+                l.text("自动", "Automatic").to_owned()
+            } else {
+                settings.audio_encoding.clone()
+            };
+            design::dropdown_ui(
+                ui,
+                "audio_encoding",
+                ui.available_width(),
+                &selected_label,
+                |ui| {
                     for encoding in ["auto", "data_url", "base64"] {
-                        design::selectable_value(
+                        design::menu_value(
                             ui,
                             &mut settings.audio_encoding,
                             encoding.into(),
@@ -318,7 +342,8 @@ impl App {
                             },
                         );
                     }
-                });
+                },
+            );
         });
     }
 }
@@ -344,7 +369,7 @@ pub(super) fn form_row<R>(
                 ui.add(egui::Label::new(RichText::new(label).color(MUTED)).wrap());
             },
         );
-        let width = ui.available_width().min(440.0);
+        let width = ui.available_width().min(360.0);
         ui.allocate_ui_with_layout(
             vec2(width, design::CONTROL_HEIGHT),
             Layout::left_to_right(Align::Center),
@@ -362,7 +387,4 @@ pub(super) fn form_row<R>(
 struct Feedback {
     message: String,
     until: Instant,
-}
-fn more_icon(p: &Painter, r: Rect, c: Color32) {
-    icons::paint(p, r, c, icons::DOTS_THREE);
 }

@@ -9,8 +9,11 @@ pub const LINE: Color32 = Color32::from_rgb(42, 48, 50);
 pub const BORDER: Color32 = Color32::from_rgb(62, 71, 74);
 pub const SELECTED: Color32 = Color32::from_rgb(37, 55, 50);
 pub const FIELD: Color32 = Color32::from_rgb(30, 35, 39);
+pub const FIELD_HOVER: Color32 = Color32::from_rgb(33, 39, 43);
+pub const FIELD_FOCUS: Color32 = Color32::from_rgb(35, 43, 47);
 pub const HOVER: Color32 = Color32::from_rgb(32, 43, 40);
-pub const CONTROL_HEIGHT: f32 = 34.0;
+pub const CONTROL_HEIGHT: f32 = 36.0;
+pub const NAV_ITEM_HEIGHT: f32 = 38.0;
 pub const CARD_PADDING: f32 = 8.0;
 
 pub fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Response {
@@ -51,6 +54,7 @@ pub fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::Respons
 
 /// Keep the frame in every state: egui's frameless inactive selectable loses
 /// its stroke margins, making the label and its neighbours move on hover.
+#[cfg(test)]
 pub fn selectable_value<'a, T: PartialEq>(
     ui: &mut egui::Ui,
     current: &mut T,
@@ -114,14 +118,571 @@ pub fn scroll() -> egui::ScrollArea {
         .auto_shrink([false, false])
 }
 
+#[cfg(test)]
 pub fn text_edit(value: &mut String) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(value)
         .font(FontId::proportional(14.0))
-        .margin(egui::Margin::symmetric(12, 7))
+        .margin(egui::Margin::symmetric(12, 8))
         .min_size(vec2(40.0, CONTROL_HEIGHT))
         .vertical_align(egui::Align::Center)
         .desired_width(f32::INFINITY)
         .background_color(FIELD)
+}
+
+fn paint_field_box(painter: &egui::Painter, slot: egui::layers::ShapeIdx, rect: egui::Rect, hovered: bool, focused: bool) {
+    let fill = if focused {
+        FIELD_FOCUS
+    } else if hovered {
+        FIELD_HOVER
+    } else {
+        FIELD
+    };
+    let stroke = if focused {
+        Stroke::new(1.5, ACCENT)
+    } else if hovered {
+        Stroke::new(1.0, BORDER)
+    } else {
+        Stroke::new(1.0, LINE)
+    };
+    painter.set(
+        slot,
+        egui::Shape::Vec(vec![
+            egui::epaint::RectShape::filled(rect, 8, fill).into(),
+            egui::epaint::RectShape::stroke(rect, 8, stroke, egui::StrokeKind::Inside).into(),
+        ]),
+    );
+}
+
+pub fn input_field(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    width: f32,
+    hint: &str,
+) -> egui::Response {
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let has_text = !value.is_empty();
+    let margin = egui::Margin {
+        left: 12,
+        right: if has_text { 32 } else { 12 },
+        top: 8,
+        bottom: 8,
+    };
+    let mut response = ui.add(
+        egui::TextEdit::singleline(value)
+            .font(FontId::proportional(14.0))
+            .frame(egui::Frame::new().inner_margin(margin))
+            .margin(margin)
+            .min_size(vec2(width.max(40.0), CONTROL_HEIGHT))
+            .desired_width(width)
+            .vertical_align(egui::Align::Center)
+            .hint_text(hint),
+    );
+    let focused = response.has_focus();
+    let mut hovered = response.hovered();
+    if has_text && (focused || hovered || ui.rect_contains_pointer(response.rect)) {
+        let clear_rect = egui::Rect::from_center_size(
+            egui::pos2(response.rect.max.x - 16.0, response.rect.center().y),
+            vec2(24.0, 24.0),
+        );
+        let clear = ui
+            .interact(clear_rect, response.id.with("clear"), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        hovered |= clear.hovered();
+        super::icons::paint(
+            ui.painter(),
+            clear_rect.shrink(6.0),
+            if clear.hovered() { TEXT } else { MUTED },
+            super::icons::X,
+        );
+        if clear.clicked() {
+            value.clear();
+            response.mark_changed();
+            response.request_focus();
+        }
+    }
+    paint_field_box(ui.painter(), slot, response.rect, hovered && ui.is_enabled(), focused);
+    response
+}
+
+pub fn unit_field(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    width: f32,
+    hint: &str,
+    unit: &str,
+) -> egui::Response {
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let unit_galley =
+        ui.painter()
+            .layout_no_wrap(unit.into(), FontId::proportional(12.5), MUTED);
+    let right_pad = (unit_galley.size().x + 20.0).ceil() as i8;
+    let margin = egui::Margin {
+        left: 12,
+        right: right_pad,
+        top: 8,
+        bottom: 8,
+    };
+    let response = ui.add(
+        egui::TextEdit::singleline(value)
+            .font(FontId::proportional(14.0))
+            .frame(egui::Frame::new().inner_margin(margin))
+            .margin(margin)
+            .min_size(vec2(width.max(60.0), CONTROL_HEIGHT))
+            .desired_width(width)
+            .vertical_align(egui::Align::Center)
+            .hint_text(hint),
+    );
+    paint_field_box(
+        ui.painter(),
+        slot,
+        response.rect,
+        response.hovered() && ui.is_enabled(),
+        response.has_focus(),
+    );
+    ui.painter().galley(
+        egui::pos2(
+            response.rect.max.x - 12.0 - unit_galley.size().x,
+            response.rect.center().y - unit_galley.size().y * 0.5,
+        ),
+        unit_galley,
+        MUTED,
+    );
+    response
+}
+
+pub fn multiline_field(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    width: f32,
+    rows: usize,
+    hint: &str,
+) -> egui::Response {
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let margin = egui::Margin::symmetric(12, 10);
+    let response = ui.add(
+        egui::TextEdit::multiline(value)
+            .font(FontId::proportional(14.0))
+            .frame(egui::Frame::new().inner_margin(margin))
+            .margin(margin)
+            .desired_rows(rows)
+            .desired_width(width)
+            .hint_text(hint),
+    );
+    paint_field_box(
+        ui.painter(),
+        slot,
+        response.rect,
+        response.hovered() && ui.is_enabled(),
+        response.has_focus(),
+    );
+    response
+}
+
+pub fn secret_field(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    width: f32,
+    hint: &str,
+) -> egui::Response {
+    let reveal_id = ui.make_persistent_id(id_salt).with("secret-reveal");
+    let mut revealed = ui
+        .ctx()
+        .data_mut(|d| d.get_temp::<bool>(reveal_id).unwrap_or(false));
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let has_text = !value.is_empty();
+    let margin = egui::Margin {
+        left: 12,
+        right: if has_text { 62 } else { 36 },
+        top: 8,
+        bottom: 8,
+    };
+    let mut response = ui.push_id(reveal_id.with("input"), |ui| {
+        ui.add(
+            egui::TextEdit::singleline(value)
+                .font(FontId::proportional(14.0))
+                .password(!revealed)
+                .frame(egui::Frame::new().inner_margin(margin))
+                .margin(margin)
+                .min_size(vec2(width.max(80.0), CONTROL_HEIGHT))
+                .desired_width(width)
+                .vertical_align(egui::Align::Center)
+                .hint_text(hint),
+        )
+    }).inner;
+    let mut hovered = response.hovered();
+    let eye_rect = egui::Rect::from_center_size(
+        egui::pos2(response.rect.max.x - 18.0, response.rect.center().y),
+        vec2(26.0, 26.0),
+    );
+    let eye = ui
+        .interact(eye_rect, reveal_id.with("eye"), egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    hovered |= eye.hovered();
+    super::icons::paint(
+        ui.painter(),
+        eye_rect.shrink(5.5),
+        if eye.hovered() || revealed { TEXT } else { MUTED },
+        if revealed {
+            super::icons::EYE_SLASH
+        } else {
+            super::icons::EYE
+        },
+    );
+    if eye.clicked() {
+        revealed = !revealed;
+        ui.ctx().data_mut(|d| d.insert_temp(reveal_id, revealed));
+    }
+    if has_text {
+        let clear_rect = egui::Rect::from_center_size(
+            egui::pos2(response.rect.max.x - 44.0, response.rect.center().y),
+            vec2(24.0, 24.0),
+        );
+        let clear = ui
+            .interact(clear_rect, reveal_id.with("clear"), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        hovered |= clear.hovered();
+        super::icons::paint(
+            ui.painter(),
+            clear_rect.shrink(6.0),
+            if clear.hovered() { TEXT } else { MUTED },
+            super::icons::X,
+        );
+        if clear.clicked() {
+            value.clear();
+            response.mark_changed();
+            response.request_focus();
+        }
+    }
+    paint_field_box(
+        ui.painter(),
+        slot,
+        response.rect,
+        hovered && ui.is_enabled(),
+        response.has_focus(),
+    );
+    response
+}
+
+pub fn stepper_usize(
+    ui: &mut egui::Ui,
+    value: &mut usize,
+    range: std::ops::RangeInclusive<usize>,
+) -> egui::Response {
+    let min = *range.start();
+    let max = *range.end();
+    *value = (*value).clamp(min, max);
+    let (rect, mut response) =
+        ui.allocate_exact_size(vec2(116.0, CONTROL_HEIGHT), egui::Sense::hover());
+    let btn_w = 34.0;
+    let dec_rect = egui::Rect::from_min_size(rect.min, vec2(btn_w, CONTROL_HEIGHT));
+    let inc_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.max.x - btn_w, rect.min.y),
+        vec2(btn_w, CONTROL_HEIGHT),
+    );
+    let can_dec = ui.is_enabled() && *value > min;
+    let can_inc = ui.is_enabled() && *value < max;
+    let dec = ui.interact(dec_rect, response.id.with("dec"), egui::Sense::click());
+    let inc = ui.interact(inc_rect, response.id.with("inc"), egui::Sense::click());
+    if can_dec {
+        dec.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    if can_inc {
+        inc.clone().on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    let hovered = (dec.hovered() && can_dec) || (inc.hovered() && can_inc);
+    ui.painter().rect_filled(rect, 8, FIELD);
+    if dec.hovered() && can_dec {
+        ui.painter().rect_filled(dec_rect.shrink(1.0), 7, SELECTED);
+    }
+    if inc.hovered() && can_inc {
+        ui.painter().rect_filled(inc_rect.shrink(1.0), 7, SELECTED);
+    }
+    ui.painter().rect_stroke(
+        rect,
+        8,
+        Stroke::new(1.0, if hovered { BORDER } else { LINE }),
+        egui::StrokeKind::Inside,
+    );
+    for x in [dec_rect.max.x, inc_rect.min.x] {
+        ui.painter().line_segment(
+            [egui::pos2(x, rect.min.y + 6.0), egui::pos2(x, rect.max.y - 6.0)],
+            Stroke::new(1.0, LINE),
+        );
+    }
+    super::icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(dec_rect.center(), vec2(14.0, 14.0)),
+        if !can_dec {
+            MUTED.gamma_multiply(0.4)
+        } else if dec.hovered() {
+            TEXT
+        } else {
+            MUTED
+        },
+        super::icons::MINUS,
+    );
+    super::icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(inc_rect.center(), vec2(14.0, 14.0)),
+        if !can_inc {
+            MUTED.gamma_multiply(0.4)
+        } else if inc.hovered() {
+            TEXT
+        } else {
+            MUTED
+        },
+        super::icons::PLUS,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        value.to_string(),
+        FontId::proportional(14.0),
+        TEXT,
+    );
+    if can_dec && dec.clicked() {
+        *value -= 1;
+        response.mark_changed();
+    } else if can_inc && inc.clicked() {
+        *value += 1;
+        response.mark_changed();
+    }
+    response
+}
+
+pub fn dropdown_ui(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    width: f32,
+    selected_text: &str,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    let response = ui
+        .push_id(id_salt, |ui| {
+            let (rect, response) =
+                ui.allocate_exact_size(vec2(width, CONTROL_HEIGHT), egui::Sense::click());
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::ComboBox,
+                    ui.is_enabled(),
+                    selected_text,
+                )
+            });
+            let popup = egui::Popup::menu(&response)
+                .gap(4.0)
+                .width(width.max(148.0));
+            let is_open = popup.is_open();
+            let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
+            let fill = if is_open {
+                FIELD_FOCUS
+            } else if hovered {
+                FIELD_HOVER
+            } else {
+                FIELD
+            };
+            let stroke = if is_open {
+                Stroke::new(1.5, ACCENT)
+            } else if hovered {
+                Stroke::new(1.0, BORDER)
+            } else {
+                Stroke::new(1.0, LINE)
+            };
+            ui.painter().rect_filled(rect, 8, fill);
+            ui.painter()
+                .rect_stroke(rect, 8, stroke, egui::StrokeKind::Inside);
+            let text_clip = egui::Rect::from_min_max(
+                egui::pos2(rect.min.x + 12.0, rect.min.y),
+                egui::pos2((rect.max.x - 32.0).max(rect.min.x + 12.0), rect.max.y),
+            )
+            .intersect(ui.clip_rect());
+            let galley = ui.painter().layout_no_wrap(
+                selected_text.into(),
+                FontId::proportional(14.0),
+                if ui.is_enabled() { TEXT } else { MUTED },
+            );
+            ui.painter().with_clip_rect(text_clip).galley(
+                egui::pos2(
+                    rect.min.x + 12.0,
+                    rect.center().y - galley.size().y * 0.5,
+                ),
+                galley,
+                TEXT,
+            );
+            super::icons::paint(
+                ui.painter(),
+                egui::Rect::from_center_size(
+                    egui::pos2(rect.max.x - 16.0, rect.center().y),
+                    vec2(14.0, 14.0),
+                ),
+                if is_open { ACCENT } else { MUTED },
+                if is_open {
+                    super::icons::CARET_UP
+                } else {
+                    super::icons::CARET_DOWN
+                },
+            );
+            popup.show(|ui| {
+                ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
+                add_contents(ui);
+            });
+            response.on_hover_cursor(egui::CursorIcon::PointingHand)
+        })
+        .inner;
+    response
+}
+
+pub fn menu_item(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
+    let width = ui.available_width().max(120.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            label,
+        )
+    });
+    if selected || response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            6,
+            if selected { SELECTED } else { HOVER },
+        );
+    }
+    let text_color = if selected { ACCENT } else { TEXT };
+    let text_clip = egui::Rect::from_min_max(
+        egui::pos2(rect.min.x + 10.0, rect.min.y),
+        egui::pos2(rect.max.x - 28.0, rect.max.y),
+    )
+    .intersect(ui.clip_rect());
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.into(), FontId::proportional(13.5), text_color);
+    ui.painter().with_clip_rect(text_clip).galley(
+        egui::pos2(
+            rect.min.x + 10.0,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        text_color,
+    );
+    if selected {
+        super::icons::paint(
+            ui.painter(),
+            egui::Rect::from_center_size(
+                egui::pos2(rect.max.x - 14.0, rect.center().y),
+                vec2(14.0, 14.0),
+            ),
+            ACCENT,
+            super::icons::CHECK,
+        );
+    }
+    if response.clicked() {
+        ui.close();
+    }
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+pub fn menu_value<T: PartialEq>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    value: T,
+    label: &str,
+) -> egui::Response {
+    let selected = *current == value;
+    let mut response = menu_item(ui, selected, label);
+    if response.clicked() && !selected {
+        *current = value;
+        response.mark_changed();
+    }
+    response
+}
+
+pub fn nav_item(
+    ui: &mut egui::Ui,
+    label: &str,
+    glyph: Option<&str>,
+    selected: bool,
+    narrow: bool,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), NAV_ITEM_HEIGHT), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label)
+    });
+    let hovered = response.hovered() && ui.is_enabled();
+    if selected || hovered {
+        ui.painter()
+            .rect_filled(rect, 8, if selected { SELECTED } else { HOVER });
+    }
+    if selected {
+        ui.painter().rect_filled(
+            egui::Rect::from_center_size(
+                egui::pos2(rect.min.x + 1.5, rect.center().y),
+                vec2(3.0, 20.0),
+            ),
+            2,
+            ACCENT,
+        );
+    }
+    let icon_color = if selected {
+        ACCENT
+    } else if hovered {
+        TEXT
+    } else {
+        MUTED
+    };
+    let text_color = if selected { ACCENT } else { TEXT };
+    if let Some(glyph) = glyph {
+        let icon_x = if narrow {
+            rect.center().x
+        } else {
+            rect.min.x + 20.0
+        };
+        super::icons::paint(
+            ui.painter(),
+            egui::Rect::from_center_size(egui::pos2(icon_x, rect.center().y), vec2(18.0, 18.0)),
+            icon_color,
+            glyph,
+        );
+    }
+    if !narrow {
+        let text_x = if glyph.is_some() {
+            rect.min.x + 42.0
+        } else {
+            rect.min.x + 14.0
+        };
+        ui.painter().text(
+            egui::pos2(text_x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            FontId::proportional(14.0),
+            text_color,
+        );
+    }
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if narrow && !label.is_empty() {
+        response.on_hover_text(label)
+    } else {
+        response
+    }
+}
+
+pub fn empty_state(ui: &mut egui::Ui, glyph: &str, title: &str) {
+    ui.vertical_centered(|ui| {
+        ui.add_space(28.0);
+        let (icon_rect, _) = ui.allocate_exact_size(vec2(34.0, 34.0), egui::Sense::hover());
+        super::icons::paint(
+            ui.painter(),
+            icon_rect,
+            MUTED.gamma_multiply(0.65),
+            glyph,
+        );
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(title).size(14.0).color(MUTED));
+        ui.add_space(16.0);
+    });
 }
 
 pub fn search_field(
@@ -133,16 +694,6 @@ pub fn search_field(
     search_field_content(ui, value, width, hint, true)
 }
 
-/// Text and clear button inside a search field that supplies its own frame.
-pub fn search_input(
-    ui: &mut egui::Ui,
-    value: &mut String,
-    width: f32,
-    hint: &str,
-) -> egui::Response {
-    search_field_content(ui, value, width, hint, false)
-}
-
 fn search_field_content(
     ui: &mut egui::Ui,
     value: &mut String,
@@ -150,22 +701,23 @@ fn search_field_content(
     hint: &str,
     decorated: bool,
 ) -> egui::Response {
+    let slot = decorated.then(|| ui.painter().add(egui::Shape::Noop));
     let margin = egui::Margin {
         left: if decorated { 36 } else { 12 },
         right: 34,
-        top: 7,
-        bottom: 7,
+        top: 8,
+        bottom: 8,
     };
-    let input = text_edit(value)
+    let input = egui::TextEdit::singleline(value)
+        .font(FontId::proportional(14.0))
+        .frame(egui::Frame::new().inner_margin(margin))
+        .margin(margin)
+        .min_size(vec2(40.0, CONTROL_HEIGHT))
+        .vertical_align(egui::Align::Center)
         .hint_text(hint)
-        .desired_width(width)
-        .margin(margin);
-    let input = if decorated {
-        input
-    } else {
-        input.frame(egui::Frame::new().inner_margin(margin))
-    };
+        .desired_width(width);
     let mut response = ui.add(input);
+    let mut hovered = response.hovered();
     if decorated {
         super::draw_search(
             ui.painter(),
@@ -173,7 +725,7 @@ fn search_field_content(
                 egui::pos2(response.rect.min.x + 18.0, response.rect.center().y),
                 vec2(15.0, 15.0),
             ),
-            MUTED,
+            if response.has_focus() { ACCENT } else { MUTED },
         );
     }
     if !value.is_empty() {
@@ -184,6 +736,7 @@ fn search_field_content(
         let clear = ui
             .interact(rect, response.id.with("clear"), egui::Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
+        hovered |= clear.hovered();
         super::draw_close(
             ui.painter(),
             rect.shrink(7.0),
@@ -194,6 +747,15 @@ fn search_field_content(
             response.mark_changed();
             response.request_focus();
         }
+    }
+    if let Some(slot) = slot {
+        paint_field_box(
+            ui.painter(),
+            slot,
+            response.rect,
+            hovered && ui.is_enabled(),
+            response.has_focus(),
+        );
     }
     response
 }
@@ -369,22 +931,25 @@ pub fn apply(ctx: &egui::Context) {
         &mut style.visuals.widgets.open,
     ] {
         widgets.corner_radius = CornerRadius::same(8);
-        widgets.bg_stroke = Stroke::new(1.0, BORDER);
+        widgets.bg_stroke = Stroke::new(1.0, LINE);
         // Frames must stay inside their allocated bounds, including in the first
         // row of a clipped child or scroll viewport. Keep every state identical.
         widgets.expansion = 0.0;
     }
+    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, BORDER);
+    style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
+    style.visuals.widgets.open.bg_stroke = Stroke::new(1.0, ACCENT);
     style.visuals.widgets.inactive.weak_bg_fill = FIELD;
-    style.visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(37, 44, 45);
+    style.visuals.widgets.hovered.weak_bg_fill = FIELD_HOVER;
     style.visuals.widgets.active.weak_bg_fill = SELECTED;
     style.visuals.widgets.open.weak_bg_fill = SELECTED;
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(58, 69, 66);
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(37, 44, 45);
+    style.visuals.widgets.inactive.bg_fill = FIELD;
+    style.visuals.widgets.hovered.bg_fill = FIELD_HOVER;
     style.visuals.widgets.active.bg_fill = SELECTED;
     style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, LINE);
     style.spacing.item_spacing = vec2(12.0, 10.0);
     style.spacing.button_padding = vec2(14.0, 8.0);
-    style.spacing.interact_size = vec2(34.0, 34.0);
+    style.spacing.interact_size = vec2(CONTROL_HEIGHT, CONTROL_HEIGHT);
     // Let dropdown captions determine their width instead of the default 200pt.
     style.spacing.combo_width = 0.0;
     style.spacing.slider_rail_height = 4.0;
@@ -423,17 +988,112 @@ pub enum Control {
 
 /// Navigation back actions use the same icon-only target in every workspace.
 pub fn back_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
-    let response = control(
-        ui,
-        "",
-        Some(super::draw_back),
-        Control::Quiet,
-        CONTROL_HEIGHT,
-    );
+    icon_button(ui, super::icons::ARROW_LEFT, tooltip, false)
+}
+
+pub fn icon_button(
+    ui: &mut egui::Ui,
+    glyph: &str,
+    tooltip: &str,
+    active: bool,
+) -> egui::Response {
+    icon_button_sized(ui, CONTROL_HEIGHT, 1.0, active, tooltip, |p, r, c| {
+        super::icons::paint(p, r, c, glyph);
+    })
+}
+
+pub fn compact_icon_button(
+    ui: &mut egui::Ui,
+    glyph: &str,
+    tooltip: &str,
+    active: bool,
+) -> egui::Response {
+    icon_button_sized(ui, 30.0, 1.0, active, tooltip, |p, r, c| {
+        super::icons::paint(p, r, c, glyph);
+    })
+}
+
+pub fn primary_icon_button(ui: &mut egui::Ui, glyph: &str, tooltip: &str) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::Vec2::splat(CONTROL_HEIGHT), egui::Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip)
     });
-    response.on_hover_text(tooltip)
+    let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
+    let fill = if !ui.is_enabled() {
+        ACCENT.gamma_multiply(0.45)
+    } else if hovered {
+        ACCENT.gamma_multiply(1.08)
+    } else {
+        ACCENT
+    };
+    ui.painter().rect_filled(rect, 8, fill);
+    super::icons::paint(
+        ui.painter(),
+        egui::Rect::from_center_size(rect.center(), vec2(17.0, 17.0)),
+        BACKGROUND,
+        glyph,
+    );
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if tooltip.is_empty() {
+        response
+    } else {
+        response.on_hover_text(tooltip)
+    }
+}
+
+pub fn icon_button_sized(
+    ui: &mut egui::Ui,
+    size: f32,
+    alpha: f32,
+    active: bool,
+    tooltip: &str,
+    draw: impl FnOnce(&egui::Painter, egui::Rect, Color32),
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, tooltip)
+    });
+    let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
+    let radius = if size >= 34.0 { 8 } else { 6 };
+    if active {
+        ui.painter()
+            .rect_filled(rect, radius, SELECTED.gamma_multiply(alpha));
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            Stroke::new(1.0, ACCENT.gamma_multiply(0.55 * alpha)),
+            egui::StrokeKind::Inside,
+        );
+    } else if hovered {
+        let hover_fill = if alpha < 0.99 {
+            Color32::from_white_alpha((38.0 * alpha) as u8)
+        } else {
+            HOVER
+        };
+        ui.painter().rect_filled(rect, radius, hover_fill);
+    }
+    let color = if !ui.is_enabled() {
+        MUTED.gamma_multiply(0.45 * alpha)
+    } else if active {
+        ACCENT.gamma_multiply(alpha)
+    } else if hovered {
+        TEXT.gamma_multiply(alpha)
+    } else {
+        Color32::from_rgb(204, 211, 211).gamma_multiply(alpha)
+    };
+    let icon_side = (size * 0.5).clamp(14.0, 18.0);
+    draw(
+        ui.painter(),
+        egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(icon_side)),
+        color,
+    );
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if tooltip.is_empty() {
+        response
+    } else {
+        response.on_hover_text(tooltip)
+    }
 }
 
 /// Toolbar controls share a fixed hit height and paint entirely inside it.
@@ -451,18 +1111,21 @@ pub fn control(
     } else {
         control_width(ui, label, icon.is_some())
     };
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 34.0), egui::Sense::click());
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(width, CONTROL_HEIGHT), egui::Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
     });
-    let hovered = response.hovered() || response.has_focus();
+    let hovered = (response.hovered() || response.has_focus()) && ui.is_enabled();
     let fill = if hovered { SELECTED } else { SURFACE };
     match kind {
         Control::Primary => {
             ui.painter().rect_filled(
                 rect,
                 8,
-                if hovered {
+                if !ui.is_enabled() {
+                    ACCENT.gamma_multiply(0.45)
+                } else if hovered {
                     ACCENT.gamma_multiply(1.08)
                 } else {
                     ACCENT
@@ -474,17 +1137,19 @@ pub fn control(
             ui.painter().rect_stroke(
                 rect,
                 8,
-                Stroke::new(1.0, if hovered { ACCENT } else { BORDER }),
+                Stroke::new(1.0, if hovered { ACCENT } else { LINE }),
                 egui::StrokeKind::Inside,
             );
         }
         Control::Quiet if hovered => {
-            ui.painter().rect_filled(rect, 7, SURFACE);
+            ui.painter().rect_filled(rect, 8, HOVER);
         }
         Control::Quiet => {}
     }
     let color = if matches!(kind, Control::Primary) {
         BACKGROUND
+    } else if !ui.is_enabled() {
+        MUTED.gamma_multiply(0.5)
     } else if hovered {
         TEXT
     } else {
@@ -523,15 +1188,15 @@ pub fn control(
 pub fn segmented(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bool {
     let total = segmented_width(ui, labels);
     let width = (total - 4.0) / labels.len().max(1) as f32;
-    let (rect, _) = ui.allocate_exact_size(vec2(total, 34.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 17, SURFACE);
+    let (rect, _) = ui.allocate_exact_size(vec2(total, CONTROL_HEIGHT), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 8, FIELD);
     ui.painter()
-        .rect_stroke(rect, 17, Stroke::new(1.0, BORDER), egui::StrokeKind::Inside);
+        .rect_stroke(rect, 8, Stroke::new(1.0, LINE), egui::StrokeKind::Inside);
     let mut changed = false;
     for (index, label) in labels.iter().enumerate() {
         let segment = egui::Rect::from_min_size(
             rect.min + vec2(2.0 + index as f32 * width, 2.0),
-            vec2(width, 30.0),
+            vec2(width, CONTROL_HEIGHT - 4.0),
         );
         let response = ui
             .interact(
@@ -551,8 +1216,8 @@ pub fn segmented(ui: &mut egui::Ui, selected: &mut usize, labels: &[&str]) -> bo
         if index == *selected || response.hovered() {
             ui.painter().rect_filled(
                 segment,
-                15,
-                if index == *selected { ACCENT } else { SELECTED },
+                6,
+                if index == *selected { ACCENT } else { HOVER },
             );
         }
         ui.painter().text(

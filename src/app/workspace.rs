@@ -28,15 +28,6 @@ pub(super) struct State {
     pub resume: Option<(String, f64)>,
 }
 
-#[derive(Clone, Copy)]
-enum Glyph {
-    Home,
-    Music,
-    Video,
-    Book,
-    Settings,
-}
-
 impl App {
     pub(super) fn navigate(&mut self, page: Page) {
         if page == Page::Home && self.workspace.page != Page::Home {
@@ -181,12 +172,16 @@ impl App {
             self.music_view(root, screen, content, &mut act);
         } else {
             let settings_page = self.workspace.page == Page::Settings;
-            if !settings_page {
+            let inline_search = (self.workspace.page == Page::Music
+                && self.workspace.music_tab == 1)
+                || (self.workspace.page == Page::Comic && self.comic.search_tab_open());
+            let show_header_search = !settings_page && !inline_search;
+            if show_header_search {
                 let mut top = child(
                     root,
                     "workspace-header",
                     Rect::from_min_size(
-                        content.min + vec2(28.0, 12.0),
+                        content.min + vec2(28.0, 13.0),
                         vec2(
                             (content
                                 .max
@@ -199,8 +194,6 @@ impl App {
                         ),
                     ),
                 );
-                // TextEdit paints its frame and hover stroke outside its allocation.
-                // Keep that decoration inside the caption's clip, including its top.
                 top.set_clip_rect(Rect::from_min_max(
                     content.min + vec2(24.0, 4.0),
                     pos2(
@@ -209,7 +202,7 @@ impl App {
                     ),
                 ));
                 top.horizontal(|ui| {
-                    let width = ui.available_width().clamp(100.0, 530.0);
+                    let width = ui.available_width().clamp(100.0, 460.0);
                     let input = design::search_field(
                         ui,
                         &mut self.workspace.query,
@@ -232,7 +225,7 @@ impl App {
                 );
             }
             let body = Rect::from_min_max(
-                content.min + vec2(28.0, if settings_page { 52.0 } else { 84.0 }),
+                content.min + vec2(28.0, if show_header_search { 84.0 } else { 52.0 }),
                 content.max - vec2(28.0, 14.0),
             );
             let mut ui = child(root, "workspace-content", body);
@@ -242,10 +235,10 @@ impl App {
                     if !self.comic.detail_open() {
                         ui.label(
                             RichText::new(language.text("漫画", "Comics"))
-                                .size(29.0)
+                                .size(28.0)
                                 .strong(),
                         );
-                        ui.add_space(4.0);
+                        ui.add_space(6.0);
                     }
                     self.comic
                         .ui(&mut ui, &mut self.settings, &mut self.settings_open);
@@ -255,24 +248,42 @@ impl App {
                 _ => {}
             }
             if matches!(self.workspace.page, Page::Home | Page::Music | Page::Video) {
-                let narrow = body.width() < 550.0;
-                let width = if narrow { 40.0 } else { 134.0 };
+                let video_page = self.workspace.page == Page::Video;
+                let width = if video_page {
+                    design::CONTROL_HEIGHT * 2.0 + 8.0
+                } else {
+                    design::CONTROL_HEIGHT
+                };
                 let mut actions = child(
                     root,
                     "page-open-action",
-                    Rect::from_min_size(pos2(body.max.x - width, body.min.y), vec2(width, 38.0)),
+                    Rect::from_min_size(
+                        pos2(body.max.x - width, body.min.y),
+                        vec2(width, design::CONTROL_HEIGHT),
+                    ),
                 );
                 actions.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let response = if narrow {
-                        icon_button(ui, 32.0, 1.0, draw_folder)
-                    } else {
-                        primary(ui, language.text("＋ 打开文件", "+ Open files"))
-                    };
-                    if response
-                        .on_hover_text(language.text("打开文件", "Open files"))
-                        .clicked()
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if design::icon_button(
+                        ui,
+                        icons::FOLDER_OPEN,
+                        language.text("打开文件", "Open files"),
+                        false,
+                    )
+                    .clicked()
                     {
                         act = Act::Open;
+                    }
+                    if video_page
+                        && design::icon_button(
+                            ui,
+                            icons::MAGNET,
+                            language.text("打开磁链", "Open magnet"),
+                            self.magnet_open,
+                        )
+                        .clicked()
+                    {
+                        self.magnet_open = true;
                     }
                 });
             }
@@ -303,27 +314,50 @@ impl App {
         }
         if let Some(error) = self.error.clone() {
             let r = Rect::from_min_size(
-                pos2(content.min.x + 20.0, content.max.y - 74.0),
-                vec2((content.width() - 40.0).max(160.0), 60.0),
+                pos2(content.min.x + 20.0, content.max.y - 68.0),
+                vec2((content.width() - 40.0).max(160.0), 52.0),
             );
             root.painter()
-                .rect_filled(r, 8, Color32::from_rgb(54, 35, 35));
-            let mut ui = child(root, "workspace-error", r.shrink(10.0));
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(language.error(&error)).color(Color32::LIGHT_RED));
-                if ui.small_button(language.text("关闭", "Dismiss")).clicked() {
-                    self.error = None;
-                }
-                if self
-                    .source
-                    .as_deref()
-                    .is_some_and(crate::media_source::is_qq)
-                    && ui
-                        .small_button(language.text("导入歌曲密钥", "Import song key"))
+                .rect_filled(r, 8, Color32::from_rgb(48, 28, 30));
+            root.painter().rect_stroke(
+                r,
+                8,
+                Stroke::new(1.0, Color32::from_rgb(104, 52, 56)),
+                egui::StrokeKind::Inside,
+            );
+            let mut ui = child(root, "workspace-error", r.shrink2(vec2(14.0, 8.0)));
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(language.error(&error)).color(Color32::LIGHT_RED))
+                        .truncate(),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if design::compact_icon_button(
+                        ui,
+                        icons::X,
+                        language.text("关闭", "Dismiss"),
+                        false,
+                    )
+                    .clicked()
+                    {
+                        self.error = None;
+                    }
+                    if self
+                        .source
+                        .as_deref()
+                        .is_some_and(crate::media_source::is_qq)
+                        && design::control(
+                            ui,
+                            language.text("导入歌曲密钥", "Import song key"),
+                            None,
+                            design::Control::Outline,
+                            0.0,
+                        )
                         .clicked()
-                {
-                    self.import_qq_key();
-                }
+                    {
+                        self.import_qq_key();
+                    }
+                });
             });
         }
         self.window_frame(root, !reader || self.comic.toolbar_visible());
@@ -359,16 +393,17 @@ impl App {
             }
         });
         ui.add_space(26.0);
+        ui.spacing_mut().item_spacing.y = 4.0;
         for (page, zh, en, glyph) in [
-            (Page::Home, "首页", "Home", Glyph::Home),
-            (Page::Music, "音乐", "Music", Glyph::Music),
-            (Page::Video, "视频", "Video", Glyph::Video),
-            (Page::Comic, "漫画", "Comics", Glyph::Book),
+            (Page::Home, "首页", "Home", icons::HOUSE),
+            (Page::Music, "音乐", "Music", icons::MUSIC_NOTES),
+            (Page::Video, "视频", "Video", icons::FILM_SLATE),
+            (Page::Comic, "漫画", "Comics", icons::BOOK_OPEN),
         ] {
-            if nav_item(
+            if design::nav_item(
                 &mut ui,
                 l.text(zh, en),
-                glyph,
+                Some(glyph),
                 self.workspace.page == page,
                 narrow,
             )
@@ -378,14 +413,14 @@ impl App {
             }
         }
         let settings = Rect::from_min_size(
-            pos2(rect.min.x + 12.0, rect.max.y - 58.0),
-            vec2(rect.width() - 24.0, 42.0),
+            pos2(rect.min.x + 12.0, rect.max.y - 54.0),
+            vec2(rect.width() - 24.0, design::NAV_ITEM_HEIGHT),
         );
         let mut bottom = child(root, "nav-settings", settings);
-        if nav_item(
+        if design::nav_item(
             &mut bottom,
             l.text("设置", "Settings"),
-            Glyph::Settings,
+            Some(icons::GEAR_SIX),
             self.workspace.page == Page::Settings,
             narrow,
         )
@@ -410,50 +445,9 @@ pub(super) fn primary(ui: &mut Ui, label: &str) -> Response {
     design::control(ui, label, None, design::Control::Primary, 0.0)
 }
 fn page_heading(ui: &mut Ui, title: &str, subtitle: Option<&str>) {
-    ui.label(RichText::new(title).size(29.0).strong());
+    ui.label(RichText::new(title).size(28.0).strong());
     if let Some(text) = subtitle {
         ui.label(RichText::new(text).color(MUTED));
     }
-    ui.add_space(16.0);
-}
-fn nav_item(ui: &mut Ui, label: &str, icon: Glyph, selected: bool, narrow: bool) -> Response {
-    let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), 43.0), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-    if selected || response.hovered() {
-        ui.painter()
-            .rect_filled(r, 7, if selected { SELECTED } else { SURFACE });
-    }
-    if selected {
-        ui.painter()
-            .rect_filled(Rect::from_min_size(r.min, vec2(2.0, r.height())), 1, ACCENT);
-    }
-    let color = if selected { ACCENT } else { TEXT };
-    glyph(
-        ui.painter(),
-        Rect::from_center_size(pos2(r.min.x + 24.0, r.center().y), vec2(20.0, 20.0)),
-        color,
-        icon,
-    );
-    if !narrow {
-        ui.painter().text(
-            pos2(r.min.x + 52.0, r.center().y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(15.0),
-            color,
-        );
-    }
-    response
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(label)
-}
-fn glyph(p: &Painter, r: Rect, c: Color32, g: Glyph) {
-    let icon = match g {
-        Glyph::Home => icons::HOUSE,
-        Glyph::Music => icons::MUSIC_NOTES,
-        Glyph::Video => icons::FILM_SLATE,
-        Glyph::Book => icons::BOOK_OPEN,
-        Glyph::Settings => icons::GEAR_SIX,
-    };
-    icons::paint(p, r, c, icon);
+    ui.add_space(12.0);
 }

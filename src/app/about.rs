@@ -4,29 +4,41 @@ use crate::updater::{self, Status};
 impl App {
     pub(super) fn about(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         let language = self.settings.language;
-        ui.add_space(12.0);
-        ui.heading("replayer");
-        ui.label(format!(
-            "{} {}",
-            language.text("版本", "Version"),
-            env!("CARGO_PKG_VERSION")
-        ));
-        ui.hyperlink_to(language.text("项目主页", "Project"), updater::REPOSITORY);
-        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let (logo, _) = ui.allocate_exact_size(Vec2::splat(32.0), Sense::hover());
+            branding::paint(ui.painter(), logo);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.label(RichText::new("replayer").size(22.0).strong());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).color(MUTED),
+                    );
+                    ui.hyperlink_to(language.text("项目主页", "Project"), updater::REPOSITORY);
+                });
+            });
+        });
+        ui.add_space(4.0);
         ui.separator();
-        ui.checkbox(
-            &mut self.preferences_draft.auto_check_updates,
-            language.text("启动时自动检查更新", "Check for updates on startup"),
+        preferences::form_row(
+            ui,
+            language.text("自动检查更新", "Auto-check updates"),
+            language,
+            |ui| {
+                design::toggle(
+                    ui,
+                    &mut self.preferences_draft.auto_check_updates,
+                    language.text("启动时自动检查更新", "Check for updates on startup"),
+                );
+            },
         );
         let status = match &self.updater.status {
-            Status::Idle => language
-                .text("尚未检查更新", "Updates have not been checked")
-                .to_owned(),
+            Status::Idle => String::new(),
             Status::Checking => language
                 .text("正在检查更新…", "Checking for updates…")
                 .to_owned(),
             Status::Current => language
-                .text("暂无更新版本", "No newer release is available")
+                .text("已是最新版本", "Up to date")
                 .to_owned(),
             Status::Available => language
                 .text("发现新版本", "A new version is available")
@@ -47,39 +59,63 @@ impl App {
                 format!("{}: {error}", language.text("更新未完成", "Update failed"))
             }
         };
-        if !matches!(self.updater.status, Status::Idle) {
-            ui.label(status);
+        if !status.is_empty() {
+            preferences::form_row(ui, "", language, |ui| {
+                ui.label(RichText::new(status).color(MUTED));
+            });
         }
         if let Status::Downloading { received, total } = &self.updater.status {
-            ui.add(
-                egui::ProgressBar::new(*received as f32 / (*total).max(1) as f32).show_percentage(),
-            );
+            preferences::form_row(ui, "", language, |ui| {
+                ui.add(
+                    egui::ProgressBar::new(*received as f32 / (*total).max(1) as f32)
+                        .show_percentage(),
+                );
+            });
         }
-        ui.horizontal(|ui| {
+        preferences::form_row(ui, "", language, |ui| {
+            let busy = self.updater.busy();
             if ui
-                .add_enabled(
-                    !self.updater.busy(),
-                    egui::Button::new(language.text("检查更新", "Check for updates")),
-                )
+                .add_enabled_ui(!busy, |ui| {
+                    design::control(
+                        ui,
+                        language.text("检查更新", "Check updates"),
+                        Some(icons::refresh),
+                        design::Control::Outline,
+                        0.0,
+                    )
+                })
+                .inner
                 .clicked()
             {
                 self.updater.check();
             }
-            if self.updater.update.is_some() && !self.updater.busy() {
+            if self.updater.update.is_some() && !busy {
                 if self.updater.can_install() {
-                    if ui
-                        .button(language.text("安装并重启", "Install and restart"))
-                        .clicked()
+                    if workspace::primary(
+                        ui,
+                        language.text("安装并重启", "Install and restart"),
+                    )
+                    .clicked()
                         && self.updater.install().is_ok()
                     {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                } else if ui
-                    .button(language.text("下载更新", "Download update"))
+                } else if workspace::primary(ui, language.text("下载更新", "Download update"))
                     .clicked()
                 {
                     self.updater.download();
                 }
+            }
+            if self.updater.update.is_some()
+                && design::icon_button(
+                    ui,
+                    icons::INFO,
+                    language.text("查看更新说明", "View release notes"),
+                    false,
+                )
+                .clicked()
+            {
+                self.updater.dialog_visible = true;
             }
         });
         if !self.subtitles.is_empty() && matches!(self.updater.status, Status::Ready) {
@@ -89,12 +125,6 @@ impl App {
             ));
         }
         if let Some(update) = &self.updater.update {
-            if ui
-                .button(language.text("查看更新", "View update"))
-                .clicked()
-            {
-                self.updater.dialog_visible = true;
-            }
             ui.label(RichText::new(format!("v{}", update.version)).strong());
             design::scroll().max_height(180.0).show(ui, |ui| {
                 let notes = updater::localized_notes(&update.notes, language == Language::Chinese);
@@ -124,6 +154,7 @@ impl App {
             .frame(
                 egui::Frame::new()
                     .fill(SURFACE)
+                    .stroke(Stroke::new(1.0, design::LINE))
                     .corner_radius(12)
                     .inner_margin(22),
             )
@@ -131,15 +162,21 @@ impl App {
                 ui.set_width(480.0_f32.min((ctx.content_rect().width() - 64.0).max(240.0)));
                 ui.heading(l.text("发现新版本", "Update available"));
                 ui.add_space(8.0);
-                ui.label(
-                    RichText::new(format!(
-                        "v{}  →  v{}",
-                        env!("CARGO_PKG_VERSION"),
-                        update.version
-                    ))
-                    .color(ACCENT)
-                    .strong(),
-                );
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.label(
+                        RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                            .color(MUTED)
+                            .strong(),
+                    );
+                    let (arrow_rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                    icons::paint(ui.painter(), arrow_rect, ACCENT, icons::ARROW_RIGHT);
+                    ui.label(
+                        RichText::new(format!("v{}", update.version))
+                            .color(ACCENT)
+                            .strong(),
+                    );
+                });
                 ui.add_space(12.0);
                 design::scroll()
                     .id_salt("update-notes")
@@ -195,7 +232,14 @@ impl App {
                             download = !ready;
                         }
                     }
-                    dismiss = ui.button(l.text("稍后", "Later")).clicked();
+                    dismiss = design::control(
+                        ui,
+                        l.text("稍后", "Later"),
+                        None,
+                        design::Control::Outline,
+                        0.0,
+                    )
+                    .clicked();
                 });
             });
         if dismiss || modal.should_close() {

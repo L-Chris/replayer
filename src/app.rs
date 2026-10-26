@@ -979,25 +979,30 @@ impl eframe::App for App {
                 root,
                 "video-title",
                 Rect::from_min_max(
-                    screen.min + vec2(74.0, 16.0),
-                    pos2(header_content.max.x - 144.0, screen.min.y + 44.0),
+                    screen.min + vec2(68.0, 16.0),
+                    pos2(header_content.max.x - 52.0, screen.min.y + 44.0),
                 ),
             );
             title.add(egui::Label::new(RichText::new(&self.title).size(18.0).strong()).truncate());
             let mut open = workspace::child(
                 root,
                 "video-open",
-                Rect::from_min_max(
-                    pos2(header_content.max.x - 132.0, screen.min.y + 10.0),
-                    header_content.max,
+                Rect::from_min_size(
+                    pos2(header_content.max.x - design::CONTROL_HEIGHT, screen.min.y + 12.0),
+                    Vec2::splat(design::CONTROL_HEIGHT),
                 ),
             );
-            open.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if workspace::primary(ui, language.text("＋ 打开文件", "+ Open files")).clicked()
-                {
-                    act = Act::Open;
-                }
-            });
+            open.multiply_opacity(a);
+            if design::icon_button(
+                &mut open,
+                icons::FOLDER_OPEN,
+                language.text("打开文件", "Open files"),
+                false,
+            )
+            .clicked()
+            {
+                act = Act::Open;
+            }
         }
 
         if a > 0.02 && (self.player.is_some() || self.loading) && !music {
@@ -1533,18 +1538,7 @@ fn icon_button(
     alpha: f32,
     draw: impl FnOnce(&Painter, Rect, Color32),
 ) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(6),
-            Color32::from_white_alpha((38.0 * alpha) as u8),
-        );
-    }
-    let base = if resp.hovered() { 255.0 } else { 225.0 };
-    let c = Color32::from_white_alpha((base * alpha) as u8);
-    draw(ui.painter(), rect.shrink(size * 0.18), c);
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    design::icon_button_sized(ui, size, alpha, false, "", draw)
 }
 
 fn draw_play(p: &Painter, r: Rect, c: Color32) {
@@ -1641,10 +1635,6 @@ fn play_circle_button(ui: &mut Ui, size: f32, playing: bool) -> Response {
         draw_play(ui.painter(), icon, BACKGROUND);
     }
     resp
-}
-
-fn draw_back(p: &Painter, r: Rect, c: Color32) {
-    icons::paint(p, r, c, icons::ARROW_LEFT);
 }
 
 fn draw_shuffle(p: &Painter, r: Rect, c: Color32) {
@@ -1860,26 +1850,63 @@ fn draw_volume(p: &Painter, r: Rect, c: Color32, muted: bool, level: f32) {
 }
 
 fn setup_fonts(ctx: &egui::Context) {
-    const CANDIDATES: [&str; 4] = [
+    static CJK_FONT: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
+    static SYMBOL_FONT: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
+
+    const CJK_CANDIDATES: &[&str] = &[
         "C:\\Windows\\Fonts\\msyh.ttc",
         "C:\\Windows\\Fonts\\msyh.ttf",
         "C:\\Windows\\Fonts\\simhei.ttf",
         "C:\\Windows\\Fonts\\simsun.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
     ];
-    let Some(bytes) = CANDIDATES.iter().find_map(|p| std::fs::read(p).ok()) else {
-        return;
-    };
-    ctx.add_font(egui::epaint::text::FontInsert {
-        name: "cjk".into(),
-        data: egui::FontData::from_owned(bytes),
-        families: [egui::FontFamily::Proportional, egui::FontFamily::Monospace]
-            .into_iter()
-            .map(|family| egui::epaint::text::InsertFontFamily {
-                family,
-                priority: egui::epaint::text::FontPriority::Lowest,
-            })
-            .collect(),
+    const SYMBOL_CANDIDATES: &[&str] = &[
+        "C:\\Windows\\Fonts\\seguisym.ttf",
+        "/System/Library/Fonts/Apple Symbols.ttf",
+    ];
+
+    let cjk = *CJK_FONT.get_or_init(|| {
+        CJK_CANDIDATES
+            .iter()
+            .find_map(|p| std::fs::read(p).ok())
+            .map(|bytes| &*Box::leak(bytes.into_boxed_slice()))
     });
+    if let Some(bytes) = cjk {
+        ctx.add_font(egui::epaint::text::FontInsert {
+            name: "cjk".into(),
+            data: egui::FontData::from_static(bytes),
+            families: [egui::FontFamily::Proportional, egui::FontFamily::Monospace]
+                .into_iter()
+                .map(|family| egui::epaint::text::InsertFontFamily {
+                    family,
+                    priority: egui::epaint::text::FontPriority::Lowest,
+                })
+                .collect(),
+        });
+    }
+
+    let symbols = *SYMBOL_FONT.get_or_init(|| {
+        SYMBOL_CANDIDATES
+            .iter()
+            .find_map(|p| std::fs::read(p).ok())
+            .map(|bytes| &*Box::leak(bytes.into_boxed_slice()))
+    });
+    if let Some(bytes) = symbols {
+        ctx.add_font(egui::epaint::text::FontInsert {
+            name: "symbols".into(),
+            data: egui::FontData::from_static(bytes),
+            families: [egui::FontFamily::Proportional, egui::FontFamily::Monospace]
+                .into_iter()
+                .map(|family| egui::epaint::text::InsertFontFamily {
+                    family,
+                    priority: egui::epaint::text::FontPriority::Lowest,
+                })
+                .collect(),
+        });
+    }
 }
 
 fn fmt_time(secs: f64) -> String {

@@ -205,7 +205,7 @@ impl App {
         let fullscreen = fullscreen(&ctx);
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let reader = self.workspace.page == workspace::Page::Comic && self.comic.reading();
-        let caption_height = if reader { 36.0 } else { CAPTION_HEIGHT };
+        let caption_height = if reader { 48.0 } else { CAPTION_HEIGHT };
         if show_controls && !fullscreen {
             let mut draw_controls = |root: &mut Ui| {
                 let l = self.settings.language;
@@ -590,9 +590,9 @@ mod tests {
                             .show(&ctx, |ui| {
                                 ui.set_clip_rect(Rect::from_min_size(
                                     screen.min,
-                                    vec2(screen.width(), 36.0),
+                                    vec2(screen.width(), 48.0),
                                 ));
-                                ui.set_min_size(vec2(screen.width(), 36.0));
+                                ui.set_min_size(vec2(screen.width(), 48.0));
                                 caption_resize_edges(ui, screen);
                             });
                         egui::Area::new(Id::new("test-reader-window-controls"))
@@ -601,9 +601,9 @@ mod tests {
                             .show(&ctx, |ui| {
                                 ui.set_clip_rect(Rect::from_min_size(
                                     pos2(screen.max.x - CONTROLS_WIDTH, screen.min.y),
-                                    vec2(CONTROLS_WIDTH, 36.0),
+                                    vec2(CONTROLS_WIDTH, 48.0),
                                 ));
-                                ui.set_min_size(vec2(CONTROLS_WIDTH, 36.0));
+                                ui.set_min_size(vec2(CONTROLS_WIDTH, 48.0));
                                 caption_resize_edges(ui, screen);
                             });
                     }

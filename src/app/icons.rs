@@ -6,10 +6,13 @@ egui_phosphor::subset! {
     pub mod glyphs {
         use regular::{
             HOUSE, GEAR_SIX, BOOK_OPEN, MUSIC_NOTES, FILM_SLATE, HEART,
-            CLOCK_COUNTER_CLOCKWISE, DOWNLOAD_SIMPLE, ARROW_LEFT, PLUS, MINUS,
-            X, MAGNIFYING_GLASS, TRASH, FOLDER_OPEN, MAGNET, QUEUE, SUBTITLES,
-            REPEAT, REPEAT_ONCE, TRANSLATE, FILES, CARET_DOUBLE_UP,
-            INFO, CARET_DOWN, CARET_RIGHT, DOTS_THREE, ARROWS_CLOCKWISE,
+            CLOCK_COUNTER_CLOCKWISE, DOWNLOAD_SIMPLE, ARROW_LEFT, ARROW_RIGHT,
+            PLUS, MINUS, X, MAGNIFYING_GLASS, TRASH, FOLDER_OPEN, MAGNET, QUEUE,
+            SUBTITLES, REPEAT, REPEAT_ONCE, TRANSLATE, FILES, CARET_DOUBLE_UP,
+            INFO, CARET_DOWN, CARET_UP, CARET_LEFT, CARET_RIGHT, DOTS_THREE,
+            ARROWS_CLOCKWISE, CHECK, PLAY, PAUSE, STOP, EYE, EYE_SLASH,
+            SORT_ASCENDING, SORT_DESCENDING, FUNNEL, COPY, SLIDERS_HORIZONTAL,
+            SPARKLE, CLOUD_ARROW_UP, SIDEBAR_SIMPLE, IMAGES,
         };
     }
 }
@@ -65,6 +68,24 @@ mod tests {
                     DOWNLOAD_SIMPLE,
                     TRANSLATE,
                     FILES,
+                    CHECK,
+                    PLAY,
+                    PAUSE,
+                    STOP,
+                    EYE,
+                    EYE_SLASH,
+                    SORT_ASCENDING,
+                    SORT_DESCENDING,
+                    FUNNEL,
+                    COPY,
+                    CARET_LEFT,
+                    CARET_UP,
+                    ARROW_RIGHT,
+                    SLIDERS_HORIZONTAL,
+                    SPARKLE,
+                    CLOUD_ARROW_UP,
+                    SIDEBAR_SIMPLE,
+                    IMAGES,
                 ] {
                     let font = egui::FontId::new(20.0, family());
                     assert!(ui.fonts_mut(|fonts| fonts.has_glyphs(&font, glyph)));

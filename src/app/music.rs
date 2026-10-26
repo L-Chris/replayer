@@ -533,11 +533,12 @@ impl App {
             if let Some(art) = &self.artwork {
                 design::cover(root, art, cover, 10);
             } else {
-                painter.text(
-                    cover.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "♫",
-                    egui::FontId::proportional(size * 0.4),
+                draw_music(
+                    painter,
+                    Rect::from_center_size(
+                        cover.center(),
+                        Vec2::splat((size * 0.34).clamp(24.0, 96.0)),
+                    ),
                     ACCENT,
                 );
             }
@@ -628,16 +629,10 @@ impl App {
                 }
             } else if self.lyrics.lines.is_empty() {
                 let mut ui = workspace::child(root, "no-lyrics", rect.shrink(28.0));
-                ui.add_space(rect.height() * 0.32);
-                ui.label(
-                    RichText::new(
-                        language.text("静静聆听，此刻的声音", "Let the music fill the moment"),
-                    )
-                    .size(24.0)
-                    .color(design::TEXT),
-                );
-                ui.label(
-                    RichText::new(language.text("暂无歌词", "No lyrics available")).color(MUTED),
+                design::empty_state(
+                    &mut ui,
+                    icons::MUSIC_NOTES,
+                    language.text("暂无歌词", "No lyrics"),
                 );
             } else {
                 self.lyrics_panel(root, rect, position, act);

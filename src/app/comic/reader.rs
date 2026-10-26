@@ -1,6 +1,47 @@
 use super::*;
 mod controls;
 
+pub(super) const INIT_MIN_HEIGHT: f32 = 520.0;
+pub(super) const INIT_MAX_HEIGHT: f32 = 1200.0;
+pub(super) const INIT_MIN_WIDTH: f32 = 380.0;
+pub(super) const INIT_WEBTOON_MIN_WIDTH: f32 = 520.0;
+pub(super) const INIT_MAX_WIDTH: f32 = 960.0;
+
+pub(super) fn page_dimensions(
+    viewport_h: f32,
+    avail_w: f32,
+    img_size: (f32, f32),
+    compare: bool,
+    zoom: f32,
+) -> Vec2 {
+    let img_w = img_size.0.max(1.0);
+    let img_h = img_size.1.max(1.0);
+    let aspect = img_w / img_h;
+    let target_h = viewport_h.clamp(INIT_MIN_HEIGHT, INIT_MAX_HEIGHT);
+    let raw_w = target_h * aspect;
+    let max_single_w = if compare {
+        ((avail_w - 10.0) * 0.5).max(120.0)
+    } else {
+        avail_w.max(120.0)
+    };
+    let max_w = INIT_MAX_WIDTH.min(max_single_w);
+    let desired_min_w = if img_h / img_w > 2.2 {
+        INIT_WEBTOON_MIN_WIDTH
+    } else {
+        INIT_MIN_WIDTH
+    };
+    let min_w = desired_min_w.min(max_w);
+    let base_single_w = raw_w.clamp(min_w, max_w);
+    let single_w = base_single_w * zoom;
+    let page_h = single_w / aspect;
+    let total_w = if compare {
+        single_w * 2.0 + 10.0
+    } else {
+        single_w
+    };
+    vec2(total_w, page_h)
+}
+
 impl State {
     pub(super) fn reader_ui(
         &mut self,
@@ -16,9 +57,17 @@ impl State {
             self.view = View::Detail;
             return;
         };
+        let status = controls::Status {
+            message: &self.status,
+            total: self.translation_total,
+            done: self.translation_done,
+            failed: self.translation_failed,
+            working: self.translation.is_some() || !self.translations.is_empty(),
+        };
+        let has_status = status.has_activity(!reader.errors.is_empty());
         let screen = ui.available_rect_before_wrap();
         let pointer = ui.input(|i| i.pointer.hover_pos());
-        let bar = controls::layout(ui, screen, l);
+        let bar = controls::layout(ui, screen, l, has_status);
         let near_edge = pointer.is_some_and(|p| {
             screen.contains(p)
                 && (p.y < screen.min.y + controls::BAR_HEIGHT + 8.0
@@ -37,6 +86,7 @@ impl State {
                 back = true;
             }
         }
+        let mut key_scroll_y = 0.0_f32;
         if !ui.ctx().egui_wants_keyboard_input() && !*settings_open {
             let delta = if ui.input(|i| i.key_pressed(Key::ArrowRight)) {
                 1
@@ -44,11 +94,6 @@ impl State {
                 -1
             } else {
                 0
-            };
-            let delta = if reader.mode == ReadingMode::RightToLeft {
-                -delta
-            } else {
-                delta
             };
             if delta != 0 {
                 reader.current = (reader.current as i64 + delta)
@@ -59,6 +104,18 @@ impl State {
                 reader.dirty = true;
                 reader.toolbar_until = Instant::now() + Duration::from_secs(2);
             }
+            if ui.input(|i| i.key_pressed(Key::ArrowDown)) {
+                key_scroll_y -= 140.0;
+            }
+            if ui.input(|i| i.key_pressed(Key::ArrowUp)) {
+                key_scroll_y += 140.0;
+            }
+            if ui.input(|i| i.key_pressed(Key::PageDown) || i.key_pressed(Key::Space)) {
+                key_scroll_y -= screen.height() * 0.85;
+            }
+            if ui.input(|i| i.key_pressed(Key::PageUp)) {
+                key_scroll_y += screen.height() * 0.85;
+            }
         }
         let controls = Instant::now() < reader.toolbar_until;
         let header = Rect::from_min_size(screen.min, vec2(screen.width(), controls::BAR_HEIGHT));
@@ -68,182 +125,144 @@ impl State {
         } else {
             0.0
         };
-        let canvas_outer = Rect::from_min_max(
-            screen.min + vec2(20.0, 8.0),
+        let side_reserve = if reader.sidebar {
+            side_width + 32.0
+        } else {
+            0.0
+        };
+        let canvas = Rect::from_min_max(
+            screen.min,
             pos2(
-                screen.max.x - side_width - if reader.sidebar { 32.0 } else { 20.0 },
-                screen.max.y - 8.0,
+                (screen.max.x - side_reserve).max(screen.min.x + 120.0),
+                screen.max.y,
             ),
         );
-        let canvas = canvas_outer;
 
         let mut canvas_ui = workspace::child(ui, "comic_canvas", canvas);
         if reader.pages_job.is_some() {
-            canvas_ui.horizontal(|ui| {
+            let status_box = Rect::from_center_size(canvas.center(), vec2(240.0, 40.0));
+            let mut loading_ui = workspace::child(&mut canvas_ui, "comic_loading", status_box);
+            loading_ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.spinner();
                 ui.label(l.text("正在加载章节…", "Loading chapter…"));
             });
         }
         if let Some(error) = &reader.pages_error {
-            canvas_ui.colored_label(Color32::LIGHT_RED, error);
-            if canvas_ui
-                .button(l.text("重试章节", "Retry chapter"))
+            let err_box = Rect::from_center_size(canvas.center(), vec2(360.0, 96.0));
+            let mut err_ui = workspace::child(&mut canvas_ui, "comic_error", err_box);
+            err_ui.vertical_centered(|ui| {
+                ui.colored_label(Color32::LIGHT_RED, error);
+                ui.add_space(8.0);
+                if design::control(
+                    ui,
+                    l.text("重试章节", "Retry chapter"),
+                    Some(icons::refresh),
+                    design::Control::Outline,
+                    0.0,
+                )
                 .clicked()
-            {
-                retry = true;
-            }
+                {
+                    retry = true;
+                }
+            });
         }
         let count = reader.urls.len();
         let mut requested = vec![reader.current];
         if count > 0 {
-            if reader.mode == ReadingMode::Vertical {
-                let width = (canvas.width() - ui.spacing().scroll.allocated_width() - 4.0)
-                    .max(40.0)
-                    * reader.zoom;
-                let compare = reader.display == Display::Compare;
-                let page_width = if compare { (width - 10.0) / 2.0 } else { width };
-                let height_for = |index: usize| {
-                    let (w, h) = reader.sizes.get(&index).copied().unwrap_or((800.0, 1120.0));
-                    page_width * h / w
-                };
-                let offset = (0..reader.current)
-                    .map(|i| height_for(i) + 10.0)
-                    .sum::<f32>()
-                    + height_for(reader.current) * reader.fraction;
-                let mut scroll = egui::ScrollArea::both()
-                    .id_salt(("comic_vertical", reader.book.key(), reader.chapter.key()))
-                    .auto_shrink([false, false])
-                    .content_margin(0)
-                    .animated(false);
-                let restore = reader.restore;
-                if reader.restore {
-                    scroll = scroll
-                        .vertical_scroll_offset(offset)
-                        .horizontal_scroll_offset(
-                            ((width - canvas.width() + ui.spacing().scroll.allocated_width())
-                                * 0.5)
-                                .max(0.0),
-                        );
-                    reader.restore = false;
+            let viewport_h = canvas.height();
+            let avail_w =
+                (canvas.width() - ui.spacing().scroll.allocated_width() - 32.0).max(120.0);
+            let compare = reader.display == Display::Compare;
+            let zoom = reader.zoom;
+            let size_for = |index: usize| {
+                let raw = reader.sizes.get(&index).copied().unwrap_or((800.0, 1120.0));
+                page_dimensions(viewport_h, avail_w, raw, compare, zoom)
+            };
+            let content_width = (0..count)
+                .map(|i| size_for(i).x)
+                .fold(0.0_f32, f32::max);
+            let offset = (0..reader.current)
+                .map(|i| size_for(i).y + 10.0)
+                .sum::<f32>()
+                + size_for(reader.current).y * reader.fraction;
+            let mut scroll = egui::ScrollArea::both()
+                .id_salt(("comic_vertical", reader.book.key(), reader.chapter.key()))
+                .auto_shrink([false, false])
+                .content_margin(0)
+                .animated(false);
+            let restore = reader.restore;
+            if reader.restore {
+                scroll = scroll
+                    .vertical_scroll_offset(offset)
+                    .horizontal_scroll_offset(
+                        ((content_width - canvas.width() + ui.spacing().scroll.allocated_width())
+                            * 0.5)
+                            .max(0.0),
+                    );
+                reader.restore = false;
+            }
+            let output = scroll.show_viewport(&mut canvas_ui, |ui, view| {
+                center_scroll_content(ui, view, content_width, restore);
+                if key_scroll_y != 0.0 {
+                    ui.scroll_with_delta(vec2(0.0, key_scroll_y));
                 }
-                let output = scroll.show_viewport(&mut canvas_ui, |ui, view| {
-                    center_scroll_content(ui, view, width, restore);
-                    ui.spacing_mut().item_spacing.y = 10.0;
-                    let viewport = ui.clip_rect();
-                    let mut closest = (f32::MAX, reader.current, reader.fraction);
-                    for index in 0..count {
-                        let height = height_for(index);
-                        // Keep the entire viewport scrollable, including the
-                        // margins around a reduced-size page.
-                        let (row, _) = ui.allocate_exact_size(
-                            vec2(view.width().max(width), height),
-                            Sense::hover(),
-                        );
-                        let rect = Rect::from_center_size(row.center(), vec2(width, height));
-                        let response =
-                            ui.interact(rect, ui.id().with(("page", index)), Sense::click());
-                        if !viewport.intersects(rect) {
-                            continue;
-                        }
-                        requested.push(index);
-                        let top = (viewport.min.y - rect.min.y).max(0.0);
-                        let distance = (rect.min.y - viewport.min.y).abs();
-                        let distance = if rect.contains(pos2(rect.center().x, viewport.min.y + 2.0))
-                        {
-                            0.0
-                        } else {
-                            distance
-                        };
-                        if distance < closest.0 {
-                            closest = (distance, index, (top / height).clamp(0.0, 1.0));
-                        }
-                        paint_page(ui, rect, reader.assets.get(&index), reader.display, l);
-                        if let Some(error) = reader.errors.get(&index) {
-                            ui.painter().text(
-                                rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                error,
-                                egui::FontId::proportional(13.0),
-                                Color32::LIGHT_RED,
-                            );
-                        }
-                        if response.double_clicked() {
-                            reader.zoom = if reader.zoom > 1.1 { 1.0 } else { 1.5 };
-                            reader.restore = true;
-                        }
-                        if index == count - 1
-                            && rect.max.y <= viewport.max.y + 2.0
-                            && reader.assets.contains_key(&index)
-                        {
-                            reader.completed = true;
-                            reader.dirty = true;
-                        }
+                ui.spacing_mut().item_spacing.y = 10.0;
+                let viewport = ui.clip_rect();
+                let mut closest = (f32::MAX, reader.current, reader.fraction);
+                for index in 0..count {
+                    let page_size = size_for(index);
+                    // Keep the entire viewport scrollable, including the
+                    // margins around a centered page.
+                    let (row, _) = ui.allocate_exact_size(
+                        vec2(view.width().max(content_width), page_size.y),
+                        Sense::hover(),
+                    );
+                    let rect = Rect::from_center_size(row.center(), page_size);
+                    let response =
+                        ui.interact(rect, ui.id().with(("page", index)), Sense::click());
+                    if !viewport.intersects(rect) {
+                        continue;
                     }
-                    closest
-                });
-                let (_, index, fraction) = output.inner;
-                if reader.current != index || (reader.fraction - fraction).abs() > 0.005 {
-                    reader.current = index;
-                    reader.fraction = fraction;
-                    reader.dirty = true;
-                }
-            } else {
-                let current = reader.current;
-                let size = reader
-                    .sizes
-                    .get(&current)
-                    .copied()
-                    .unwrap_or((800.0, 1120.0));
-                let compare = reader.display == Display::Compare;
-                egui::ScrollArea::both()
-                    .id_salt(("comic_paged", reader.chapter.key(), current))
-                    .auto_shrink([false, false])
-                    .content_margin(0)
-                    .animated(false)
-                    .show_viewport(&mut canvas_ui, |ui, viewport| {
-                        let available = if compare {
-                            (viewport.width() - 18.0) / 2.0
-                        } else {
-                            viewport.width() - 8.0
-                        };
-                        let scale = (available / size.0).min((viewport.height() - 8.0) / size.1)
-                            * reader.zoom;
-                        let width = size.0 * scale;
-                        let height = size.1 * scale;
-                        let display_width = if compare { width * 2.0 + 10.0 } else { width };
-                        let (row, _) = ui.allocate_exact_size(
-                            vec2(
-                                viewport.width().max(display_width),
-                                viewport.height().max(height),
-                            ),
-                            Sense::hover(),
+                    requested.push(index);
+                    let top = (viewport.min.y - rect.min.y).max(0.0);
+                    let distance = (rect.min.y - viewport.min.y).abs();
+                    let distance = if rect.contains(pos2(rect.center().x, viewport.min.y + 2.0)) {
+                        0.0
+                    } else {
+                        distance
+                    };
+                    if distance < closest.0 {
+                        closest = (distance, index, (top / page_size.y).clamp(0.0, 1.0));
+                    }
+                    paint_page(ui, rect, reader.assets.get(&index), reader.display, l);
+                    if let Some(error) = reader.errors.get(&index) {
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            error,
+                            egui::FontId::proportional(13.0),
+                            Color32::LIGHT_RED,
                         );
-                        let rect =
-                            Rect::from_center_size(row.center(), vec2(display_width, height));
-                        let response = ui.interact(rect, ui.id().with("page"), Sense::click());
-                        center_scroll_content(ui, viewport, display_width, reader.restore);
-                        reader.restore = false;
-                        paint_page(ui, rect, reader.assets.get(&current), reader.display, l);
-                        if response.clicked() {
-                            let pointer = response.interact_pointer_pos().unwrap_or(rect.center());
-                            let next = pointer.x > rect.center().x;
-                            let next = if reader.mode == ReadingMode::RightToLeft {
-                                !next
-                            } else {
-                                next
-                            };
-                            reader.current = if next {
-                                (current + 1).min(count - 1)
-                            } else {
-                                current.saturating_sub(1)
-                            };
-                            reader.dirty = true;
-                        }
-                        if current == count - 1 && reader.assets.contains_key(&current) {
-                            reader.completed = true;
-                            reader.dirty = true;
-                        }
-                    });
+                    }
+                    if response.double_clicked() {
+                        reader.zoom = if reader.zoom > 1.1 { 1.0 } else { 1.5 };
+                        reader.restore = true;
+                    }
+                    if index == count - 1
+                        && rect.max.y <= viewport.max.y + 2.0
+                        && reader.assets.contains_key(&index)
+                    {
+                        reader.completed = true;
+                        reader.dirty = true;
+                    }
+                }
+                closest
+            });
+            let (_, index, fraction) = output.inner;
+            if reader.current != index || (reader.fraction - fraction).abs() > 0.005 {
+                reader.current = index;
+                reader.fraction = fraction;
+                reader.dirty = true;
             }
         }
         if controls {
@@ -254,21 +273,24 @@ impl State {
                     [header.left_bottom(), header.right_bottom()],
                     Stroke::new(1.0, design::LINE),
                 );
+                let pad_y = (controls::BAR_HEIGHT - design::CONTROL_HEIGHT) * 0.5;
                 let caption = Rect::from_min_max(
-                    screen.min + vec2(14.0, 1.0),
+                    pos2(screen.min.x + 16.0, header.min.y + pad_y),
                     pos2(
-                        screen.max.x - window::controls_width(ui.ctx()) - 12.0,
-                        header.max.y - 1.0,
+                        screen.max.x - window::controls_width(ui.ctx()) - 16.0,
+                        header.max.y - pad_y,
                     ),
                 );
                 let mut caption_ui = workspace::child(ui, "reader-caption", caption);
-                caption_ui.horizontal(|ui| {
+                caption_ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     if design::back_button(ui, l.text("返回目录", "Back to chapters")).clicked()
                     {
                         back = true;
                     }
                     ui.add(egui::Label::new(RichText::new(&reader.book.title).strong()).truncate());
-                    ui.label(RichText::new("›").color(MUTED));
+                    let (sep_rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                    icons::paint(ui.painter(), sep_rect, MUTED, icons::CARET_RIGHT);
                     ui.add(
                         egui::Label::new(RichText::new(&reader.chapter.name).color(MUTED))
                             .truncate(),
@@ -294,13 +316,17 @@ impl State {
             sidebar.horizontal(|ui| {
                 ui.label(
                     RichText::new(l.text("章节目录", "Chapters"))
-                        .size(19.0)
+                        .size(17.0)
                         .strong(),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if icon_button(ui, 24.0, 1.0, reader_chapters)
-                        .on_hover_text(l.text("收起章节栏", "Collapse chapters"))
-                        .clicked()
+                    if design::compact_icon_button(
+                        ui,
+                        icons::SIDEBAR_SIMPLE,
+                        l.text("收起章节栏", "Collapse chapters"),
+                        false,
+                    )
+                    .clicked()
                     {
                         reader.sidebar = false;
                     }
@@ -417,25 +443,17 @@ impl State {
                 chapter_neighbors(&entry.chapters, reader.index)
             });
         let overlay_rect = if controls { bar.footer } else { bar.status };
-        let status = controls::Status {
-            message: &self.status,
-            total: self.translation_total,
-            done: self.translation_done,
-            failed: self.translation_failed,
-            working: self.translation.is_some() || !self.translations.is_empty(),
+        let actions = if controls || has_status {
+            overlay(
+                ui,
+                "reader-footer",
+                overlay_rect,
+                egui::Order::Foreground,
+                |ui| controls::show(ui, reader, &bar, neighbors, l, controls, status),
+            )
+        } else {
+            controls::Actions::default()
         };
-        let actions =
-            if controls || status.working || !status.message.is_empty() || status.failed > 0 {
-                overlay(
-                    ui,
-                    "reader-footer",
-                    overlay_rect,
-                    egui::Order::Foreground,
-                    |ui| controls::show(ui, reader, &bar, neighbors, l, controls, status),
-                )
-            } else {
-                controls::Actions::default()
-            };
         chapter_action = actions.chapter.or(chapter_action);
         let translate = actions.translate;
         retry |= actions.retry;
@@ -507,7 +525,7 @@ impl State {
         if let Some(all) = translate {
             self.queue_translation(all, settings);
         }
-        ui.allocate_space(vec2(ui.available_width(), (screen.height() - 8.0).max(0.0)));
+        ui.allocate_space(vec2(ui.available_width(), screen.height().max(0.0)));
     }
 }
 // Separate layers keep page clicks and wheel events out of visible toolbars.
@@ -551,13 +569,6 @@ fn center_scroll_content(ui: &Ui, viewport: Rect, width: f32, reset: bool) {
     }
 }
 
-fn mode_name(mode: ReadingMode, l: Language) -> &'static str {
-    match mode {
-        ReadingMode::Vertical => l.text("条漫滚动", "Vertical scroll"),
-        ReadingMode::LeftToRight => l.text("从左向右", "Left to right"),
-        ReadingMode::RightToLeft => l.text("从右向左", "Right to left"),
-    }
-}
 fn paint_page(ui: &Ui, rect: Rect, asset: Option<&Asset>, display: Display, l: Language) {
     ui.painter().rect_filled(rect, 0, BACKGROUND);
     let Some(asset) = asset else {
@@ -565,7 +576,7 @@ fn paint_page(ui: &Ui, rect: Rect, asset: Option<&Asset>, display: Display, l: L
             rect.center(),
             egui::Align2::CENTER_CENTER,
             l.text("正在加载图片…", "Loading image…"),
-            egui::FontId::proportional(15.0),
+            egui::FontId::proportional(14.0),
             MUTED,
         );
         return;
@@ -595,20 +606,10 @@ fn paint_page(ui: &Ui, rect: Rect, asset: Option<&Asset>, display: Display, l: L
 fn paint_translation_pending(ui: &Ui, rect: Rect, l: Language) {
     ui.painter().rect_filled(rect, 6, SURFACE);
     ui.painter().text(
-        rect.center() - vec2(0.0, 15.0),
+        rect.center(),
         egui::Align2::CENTER_CENTER,
-        l.text("本页尚未翻译", "This page has not been translated"),
-        egui::FontId::proportional(18.0),
-        design::TEXT,
-    );
-    ui.painter().text(
-        rect.center() + vec2(0.0, 17.0),
-        egui::Align2::CENTER_CENTER,
-        l.text(
-            "使用底部翻译工具生成本页译图",
-            "Use Translate page to generate an edited image",
-        ),
-        egui::FontId::proportional(12.0),
+        l.text("本页尚未翻译", "Not translated yet"),
+        egui::FontId::proportional(16.0),
         MUTED,
     );
 }
@@ -616,24 +617,6 @@ fn reader_slot(ui: &mut Ui, id: &str, rect: Rect) -> Ui {
     workspace::child(ui, id, rect)
 }
 
-fn reader_plus(p: &Painter, r: Rect, c: Color32) {
-    icons::paint(p, r, c, icons::PLUS);
-}
-fn reader_minus(p: &Painter, r: Rect, c: Color32) {
-    icons::paint(p, r, c, icons::MINUS);
-}
-fn reader_chapters(p: &Painter, r: Rect, c: Color32) {
-    icons::paint(p, r, c, icons::CARET_DOUBLE_UP);
-}
 pub(super) fn reader_book(p: &Painter, r: Rect, c: Color32) {
     icons::paint(p, r, c, icons::BOOK_OPEN);
-}
-fn reader_document(p: &Painter, r: Rect, c: Color32) {
-    icons::paint(p, r, c, icons::TRANSLATE);
-}
-fn reader_translate(p: &Painter, r: Rect, c: Color32) {
-    reader_document(p, r, c);
-}
-fn reader_translate_chapter(p: &Painter, r: Rect, c: Color32) {
-    icons::paint(p, r, c, icons::FILES);
 }

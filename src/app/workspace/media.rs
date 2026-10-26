@@ -202,24 +202,26 @@ impl App {
                         }
                         response.context_menu(|ui| {
                             if record.played > 0
-                                && ui
-                                    .button(
-                                        self.settings
-                                            .language
-                                            .text("删除播放记录", "Remove playback history"),
-                                    )
-                                    .clicked()
+                                && design::menu_item(
+                                    ui,
+                                    false,
+                                    self.settings
+                                        .language
+                                        .text("删除播放记录", "Remove playback history"),
+                                )
+                                .clicked()
                             {
                                 remove = Some(record.path.clone());
                                 ui.close();
                             }
-                            if ui
-                                .button(
-                                    self.settings
-                                        .language
-                                        .text("收藏 / 取消收藏", "Toggle favorite"),
-                                )
-                                .clicked()
+                            if design::menu_item(
+                                ui,
+                                false,
+                                self.settings
+                                    .language
+                                    .text("收藏 / 取消收藏", "Toggle favorite"),
+                            )
+                            .clicked()
                             {
                                 favorite = Some(record.clone());
                                 ui.close();
@@ -254,28 +256,16 @@ impl App {
         };
         page_heading(ui, title, None);
         if page == Page::Music {
-            ui.horizontal(|ui| {
-                for (i, zh, en) in [
-                    (0, "收藏音乐", "Favorite music"),
-                    (1, "在线搜索", "Online search"),
-                ] {
-                    design::selectable_value(ui, &mut self.workspace.music_tab, i, l.text(zh, en));
-                }
-            });
+            let labels = [
+                l.text("收藏音乐", "Favorites"),
+                l.text("在线搜索", "Search"),
+            ];
+            design::tabs(ui, &mut self.workspace.music_tab, &labels);
             ui.add_space(12.0);
             if self.workspace.music_tab == 1 {
                 self.online_music_contents(ui);
                 return;
             }
-        }
-        if page == Page::Video {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(l.text("已收藏的视频", "Favorite videos")).color(MUTED));
-                if ui.button(l.text("打开磁链", "Open magnet")).clicked() {
-                    self.magnet_open = true;
-                }
-            });
-            ui.add_space(12.0);
         }
         let mut records = self.records();
         let query = self.workspace.query.to_lowercase();
@@ -292,19 +282,11 @@ impl App {
                         .contains(&query))
         });
         library::sort_favorites(&mut records);
-        ui.label(
-            RichText::new(format!(
-                "{} {}",
-                records.len(),
-                l.text("个媒体文件", "media files")
-            ))
-            .small()
-            .color(MUTED),
-        );
-        ui.add_space(12.0);
         design::scroll().auto_shrink([false, false]).show(ui, |ui| {
             if page == Page::Video {
-                self.media_cards(ui, &records);
+                if !records.is_empty() {
+                    self.media_cards(ui, &records);
+                }
             } else {
                 if page == Page::Music && records.iter().any(|r| r.played > 0) {
                     ui.label(
@@ -327,81 +309,71 @@ impl App {
                 if !records.is_empty() {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(if page == Page::Music {
-                                l.text("收藏歌曲", "Favorite tracks")
-                            } else {
-                                l.text("全部歌曲", "All tracks")
-                            })
-                            .size(20.0)
-                            .strong(),
+                            RichText::new(l.text("收藏歌曲", "Favorite tracks"))
+                                .size(20.0)
+                                .strong(),
                         );
-                        if primary(ui, l.text("播放全部", "Play all")).clicked() {
+                        ui.label(RichText::new(format!("{}", records.len())).color(MUTED));
+                        ui.add_space(4.0);
+                        if design::primary_icon_button(
+                            ui,
+                            icons::PLAY,
+                            l.text("播放全部", "Play all"),
+                        )
+                        .clicked()
+                        {
                             self.play_records(&records);
                         }
                     });
-                    ui.add_space(12.0);
-                }
-                let (header, _) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-                for (x, text) in [
-                    (13.0, "#"),
-                    (94.0, l.text("标题 / 艺术家", "Title / artist")),
-                ] {
-                    ui.painter().text(
-                        pos2(header.min.x + x, header.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        text,
-                        egui::FontId::proportional(12.0),
-                        MUTED,
-                    );
-                }
-                if header.width() > 530.0 {
-                    ui.painter().text(
-                        pos2(
-                            header.min.x + header.width() * 0.5 + 12.0,
-                            header.center().y,
-                        ),
-                        egui::Align2::LEFT_CENTER,
-                        l.text("专辑", "Album"),
-                        egui::FontId::proportional(12.0),
-                        MUTED,
-                    );
-                }
-                for (index, record) in records.iter().enumerate() {
-                    self.track_row(ui, record, index);
+                    ui.add_space(10.0);
+                    let (header, _) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+                    for (x, text) in [
+                        (13.0, "#"),
+                        (94.0, l.text("标题 / 艺术家", "Title / artist")),
+                    ] {
+                        ui.painter().text(
+                            pos2(header.min.x + x, header.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            text,
+                            egui::FontId::proportional(12.0),
+                            MUTED,
+                        );
+                    }
+                    if header.width() > 530.0 {
+                        ui.painter().text(
+                            pos2(
+                                header.min.x + header.width() * 0.5 + 12.0,
+                                header.center().y,
+                            ),
+                            egui::Align2::LEFT_CENTER,
+                            l.text("专辑", "Album"),
+                            egui::FontId::proportional(12.0),
+                            MUTED,
+                        );
+                    }
+                    for (index, record) in records.iter().enumerate() {
+                        self.track_row(ui, record, index);
+                    }
                 }
             }
             if records.is_empty() {
-                ui.add_space(44.0);
-                let favorites_page = matches!(page, Page::Music | Page::Video);
-                let (title, hint) = if favorites_page && !query.is_empty() {
-                    (
-                        l.text("没有找到匹配的收藏", "No matching favorites"),
-                        l.text("试试其他关键词", "Try another search"),
-                    )
-                } else if favorites_page {
-                    (
-                        if page == Page::Music {
-                            l.text("还没有收藏音乐", "No favorite music yet")
-                        } else {
-                            l.text("还没有收藏视频", "No favorite videos yet")
-                        },
-                        l.text(
-                            "播放时点击爱心，收藏喜欢的内容",
-                            "Use the heart while playing to add favorites",
-                        ),
-                    )
+                let message = if !query.is_empty() {
+                    l.text("没有找到匹配的收藏", "No matching favorites")
+                } else if page == Page::Music {
+                    l.text("暂无收藏音乐", "No favorite music")
                 } else {
-                    (
-                        l.text("这里还没有内容", "Nothing here yet"),
-                        l.text(
-                            "打开文件后自动加入资料库，也可以直接拖入窗口",
-                            "Open files to add them to your library, or drag them into this window",
-                        ),
-                    )
+                    l.text("暂无收藏视频", "No favorite videos")
                 };
-                ui.label(RichText::new(title).size(22.0).strong());
-                ui.label(RichText::new(hint).color(MUTED));
+                design::empty_state(
+                    ui,
+                    if page == Page::Music {
+                        icons::MUSIC_NOTES
+                    } else {
+                        icons::FILM_SLATE
+                    },
+                    message,
+                );
             }
         });
     }
@@ -481,21 +453,20 @@ impl App {
             self.play_record(record.clone(), false);
         }
         response.context_menu(|ui| {
-            if ui
-                .button(self.settings.language.text("播放", "Play"))
-                .clicked()
+            if design::menu_item(ui, false, self.settings.language.text("播放", "Play")).clicked()
             {
                 self.play_record(record.clone(), false);
                 ui.close();
             }
             if record.played > 0
-                && ui
-                    .button(
-                        self.settings
-                            .language
-                            .text("删除播放记录", "Remove playback history"),
-                    )
-                    .clicked()
+                && design::menu_item(
+                    ui,
+                    false,
+                    self.settings
+                        .language
+                        .text("删除播放记录", "Remove playback history"),
+                )
+                .clicked()
             {
                 self.remove_history(&record.path);
                 ui.close();

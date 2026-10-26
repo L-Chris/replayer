@@ -3,19 +3,19 @@ use super::*;
 impl App {
     pub(super) fn home_page(&mut self, ui: &mut Ui) {
         let l = self.settings.language;
-        page_heading(
-            ui,
-            l.text("为你续上精彩", "Pick up where you left off"),
-            Some(l.text(
-                "从上次停下的地方，继续。",
-                "Your music, films and stories, together.",
-            )),
-        );
+        let query = self.workspace.query.trim().to_lowercase();
+        page_heading(ui, l.text("为你续上精彩", "Pick up where you left off"), None);
         design::scroll().auto_shrink([false, false]).show(ui, |ui| {
             let records: Vec<_> = self
                 .records()
                 .into_iter()
-                .filter(|r| r.played > 0)
+                .filter(|r| {
+                    r.played > 0
+                        && (query.is_empty()
+                            || format!("{} {} {}", r.title, r.artist, r.album)
+                                .to_lowercase()
+                                .contains(&query))
+                })
                 .collect();
             let video = records.iter().find(|r| !r.music).cloned();
             let music = records.iter().find(|r| r.music).cloned();
@@ -40,20 +40,20 @@ impl App {
                 });
             }
             ui.add_space(22.0);
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(l.text("最近打开", "Recently opened"))
-                        .size(21.0)
+                        .size(20.0)
                         .strong(),
                 );
-                for (i, zh, en) in [
-                    (0, "全部", "All"),
-                    (1, "音乐", "Music"),
-                    (2, "视频", "Video"),
-                    (3, "漫画", "Comics"),
-                ] {
-                    design::selectable_value(ui, &mut self.workspace.filter, i, l.text(zh, en));
-                }
+                ui.add_space(6.0);
+                let labels = [
+                    l.text("全部", "All"),
+                    l.text("音乐", "Music"),
+                    l.text("视频", "Video"),
+                    l.text("漫画", "Comics"),
+                ];
+                design::segmented(ui, &mut self.workspace.filter, &labels);
             });
             ui.add_space(12.0);
             if self.workspace.filter != 3 {
@@ -68,7 +68,10 @@ impl App {
             }
             if self.workspace.filter == 0 || self.workspace.filter == 3 {
                 ui.add_space(18.0);
-                if self.comic.home_preview(ui, &self.settings) {
+                if self
+                    .comic
+                    .home_preview_filtered(ui, &self.settings, &query)
+                {
                     self.navigate(Page::Comic);
                 }
             }
@@ -126,9 +129,12 @@ impl App {
                 );
             }
             response.context_menu(|ui| {
-                if ui
-                    .button(l.text("删除播放记录", "Remove playback history"))
-                    .clicked()
+                if design::menu_item(
+                    ui,
+                    false,
+                    l.text("删除播放记录", "Remove playback history"),
+                )
+                .clicked()
                 {
                     self.remove_history(&record.path);
                     ui.close();
@@ -146,20 +152,13 @@ impl App {
                 ("empty-continue", rect.min.x.to_bits()),
                 rect.shrink(22.0),
             );
-            let (icon, _) = text.allocate_exact_size(vec2(30.0, 30.0), Sense::hover());
+            let (icon, _) = text.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
             draw_folder(text.painter(), icon, ACCENT);
-            text.add_space(14.0);
+            text.add_space(12.0);
             text.label(
-                RichText::new(l.text("留一点时间给喜欢的内容", "Make room for what you love"))
-                    .size(20.0)
+                RichText::new(l.text("打开或拖入本地媒体", "Open or drop local media"))
+                    .size(18.0)
                     .strong(),
-            );
-            text.label(
-                RichText::new(l.text(
-                    "打开本地媒体，或拖入文件开始播放",
-                    "Open a local file or drop it here to begin",
-                ))
-                .color(MUTED),
             );
             if response.clicked() && !self.dialog_open {
                 self.open_dialog();

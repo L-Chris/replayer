@@ -23,42 +23,45 @@ impl App {
                 &mut settings.image_selected,
                 &self.preferences_draft.ai,
                 l,
-            )
-            .on_hover_text(l.text(
-                "请选择支持编辑并返回图片的模型",
-                "Choose a model that edits and returns images",
-            ));
+            );
         });
         form_row(ui, l.text("翻译语言", "Translation language"), l, |ui| {
-            egui::ComboBox::from_id_salt("comic_target")
-                .width(ui.available_width())
-                .selected_text(match settings.target.as_str() {
-                    "zh-CN" => "简体中文",
-                    "en-US" => "English",
-                    _ => l.text("跟随界面语言", "Follow interface"),
-                })
-                .show_ui(ui, |ui| {
-                    design::selectable_value(
+            let selected_label = match settings.target.as_str() {
+                "zh-CN" => "简体中文",
+                "en-US" => "English",
+                _ => l.text("跟随界面语言", "Follow interface"),
+            };
+            design::dropdown_ui(
+                ui,
+                "comic_target",
+                ui.available_width(),
+                selected_label,
+                |ui| {
+                    design::menu_value(
                         ui,
                         &mut settings.target,
                         "auto".into(),
                         l.text("跟随界面语言", "Follow interface"),
                     );
-                    design::selectable_value(ui, &mut settings.target, "zh-CN".into(), "简体中文");
-                    design::selectable_value(ui, &mut settings.target, "en-US".into(), "English");
-                });
+                    design::menu_value(ui, &mut settings.target, "zh-CN".into(), "简体中文");
+                    design::menu_value(ui, &mut settings.target, "en-US".into(), "English");
+                },
+            );
         });
         form_row(ui, l.text("图像质量", "Image quality"), l, |ui| {
-            egui::ComboBox::from_id_salt("comic_quality")
-                .width(ui.available_width())
-                .selected_text(if settings.image_quality.is_empty() {
-                    l.text("默认", "Default")
-                } else {
-                    &settings.image_quality
-                })
-                .show_ui(ui, |ui| {
+            let selected_label = if settings.image_quality.is_empty() {
+                l.text("默认", "Default").to_owned()
+            } else {
+                settings.image_quality.clone()
+            };
+            design::dropdown_ui(
+                ui,
+                "comic_quality",
+                ui.available_width(),
+                &selected_label,
+                |ui| {
                     for quality in ["", "low", "medium", "high"] {
-                        design::selectable_value(
+                        design::menu_value(
                             ui,
                             &mut settings.image_quality,
                             quality.into(),
@@ -69,10 +72,21 @@ impl App {
                             },
                         );
                     }
-                });
+                },
+            );
         });
-        ui.add_space(8.0);
-        if form_row(ui, "", l, |ui| ui.button(l.text("清理缓存", "Clear cache"))).clicked() {
+        ui.add_space(4.0);
+        if form_row(ui, "", l, |ui| {
+            design::control(
+                ui,
+                l.text("清理缓存", "Clear cache"),
+                Some(super::super::draw_trash),
+                design::Control::Outline,
+                0.0,
+            )
+        })
+        .clicked()
+        {
             let directory = domain::root().join("cache");
             match std::fs::remove_dir_all(&directory) {
                 Ok(()) => {

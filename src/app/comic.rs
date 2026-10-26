@@ -331,9 +331,7 @@ impl State {
                     picture.cover(ui, cover, 8);
                 }
                 ui.vertical(|ui| {
-                    ui.set_max_width(
-                        (width - cover_width - if width > 500.0 { 230.0 } else { 60.0 }).max(60.0),
-                    );
+                    ui.set_max_width((width - cover_width - 60.0).max(60.0));
                     ui.add(
                         egui::Label::new(RichText::new(&entry.book.title).size(20.0).strong())
                             .truncate(),
@@ -351,44 +349,23 @@ impl State {
                     }
                 });
             });
-            let mut resume_clicked = false;
-            if width > 500.0 {
-                let mut action = workspace::child(
-                    ui,
-                    "comic-resume-action",
-                    Rect::from_center_size(
-                        pos2(rect.max.x - 94.0, rect.center().y),
-                        vec2(152.0, 34.0),
-                    ),
-                );
-                resume_clicked = design::control(
-                    &mut action,
-                    l.text("继续阅读", "Continue reading"),
-                    Some(reader::reader_book),
-                    design::Control::Primary,
-                    152.0,
-                )
-                .clicked();
-            }
-            if response.clicked() || resume_clicked {
+            if response.clicked() {
                 self.resume(entry, settings);
                 return true;
             }
         } else {
             inner.label(
-                RichText::new(l.text("故事，随时翻开", "A new story awaits"))
-                    .size(22.0)
+                RichText::new(l.text("暂无阅读记录", "No reading history"))
+                    .size(20.0)
                     .strong(),
             );
-            inner.label(
-                RichText::new(l.text(
-                    "发现漫画，收藏下一段旅程",
-                    "Discover comics and save your next adventure",
-                ))
-                .color(MUTED),
-            );
-            inner.add_space(16.0);
-            inner.label(RichText::new(l.text("浏览漫画 →", "Explore comics →")).color(ACCENT));
+            inner.add_space(14.0);
+            inner.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(RichText::new(l.text("浏览漫画", "Explore comics")).color(ACCENT));
+                let (arrow, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                icons::paint(ui.painter(), arrow, ACCENT, icons::ARROW_RIGHT);
+            });
             if response.clicked() {
                 self.search_for(String::new());
                 return true;
@@ -406,6 +383,9 @@ impl State {
     }
     pub(super) fn detail_open(&self) -> bool {
         self.view == View::Detail
+    }
+    pub(super) fn search_tab_open(&self) -> bool {
+        self.view == View::Catalog && self.tab == Tab::Search
     }
     pub(super) fn search_for(&mut self, keyword: String) {
         self.flush();
@@ -438,15 +418,30 @@ impl State {
                 .collect();
         }
     }
+    #[cfg(test)]
     pub(super) fn home_preview(
         &mut self,
         ui: &mut Ui,
         settings: &crate::settings::Settings,
     ) -> bool {
+        self.home_preview_filtered(ui, settings, "")
+    }
+    pub(super) fn home_preview_filtered(
+        &mut self,
+        ui: &mut Ui,
+        settings: &crate::settings::Settings,
+        query: &str,
+    ) -> bool {
+        let q = query.trim().to_lowercase();
         let entries: Vec<_> = self
             .entries()
             .iter()
-            .filter(|e| e.favorite)
+            .filter(|e| {
+                e.favorite
+                    && (q.is_empty()
+                        || e.book.title.to_lowercase().contains(&q)
+                        || e.book.author.to_lowercase().contains(&q))
+            })
             .cloned()
             .collect();
         self.preview_entries(ui, settings, entries, false)
@@ -1214,38 +1209,56 @@ impl State {
         });
         if !self.status.is_empty() {
             ui.separator();
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 ui.colored_label(Color32::LIGHT_RED, &self.status);
-                if ui
-                    .small_button(settings.language.text("关闭提示", "Dismiss"))
-                    .clicked()
+                if design::compact_icon_button(
+                    ui,
+                    icons::X,
+                    settings.language.text("关闭提示", "Dismiss"),
+                    false,
+                )
+                .clicked()
                 {
                     self.status.clear();
                 }
             });
         }
         if self.translation_total > 0 {
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 ui.label(format!(
-                    "{} {}/{} · {} {}",
+                    "{} {}/{}",
                     settings.language.text("图片翻译", "Image translation"),
                     self.translation_done,
                     self.translation_total,
-                    self.translation_failed,
-                    settings.language.text("页失败", "failed pages")
                 ));
+                if self.translation_failed > 0 {
+                    ui.colored_label(
+                        Color32::LIGHT_RED,
+                        format!(
+                            "{} {}",
+                            self.translation_failed,
+                            settings.language.text("页失败", "failed")
+                        ),
+                    );
+                }
                 if let Some(active) = &self.translation {
                     ui.spinner();
-                    ui.label(format!(
-                        "{} {}",
-                        active.job.bytes.load(std::sync::atomic::Ordering::Relaxed),
-                        settings.language.text("块完成", "segments done")
-                    ));
+                    let segs = active.job.bytes.load(std::sync::atomic::Ordering::Relaxed);
+                    if segs > 0 {
+                        ui.small(format!(
+                            "{segs} {}",
+                            settings.language.text("块完成", "segments")
+                        ));
+                    }
                 }
                 if (self.translation.is_some() || !self.translations.is_empty())
-                    && ui
-                        .button(settings.language.text("取消翻译", "Cancel translation"))
-                        .clicked()
+                    && design::compact_icon_button(
+                        ui,
+                        icons::X,
+                        settings.language.text("取消翻译", "Cancel translation"),
+                        false,
+                    )
+                    .clicked()
                 {
                     self.translation = None;
                     self.translations.clear();

@@ -234,7 +234,6 @@ impl App {
         act: &mut Act,
     ) {
         let l = self.settings.language;
-        let wide = screen.width() >= 1100.0;
         let bar = Rect::from_min_max(pos2(screen.min.x, screen.max.y - BAR_BOTTOM), screen.max);
         let cy = bar.min.y + 40.0;
         root.painter()
@@ -308,63 +307,9 @@ impl App {
         let mut settings = control_slot(root, "video-settings", pos2(x - 13.0, cy), 26.0);
         self.settings_button(&mut settings, alpha);
         x -= 36.0;
-        if wide {
-            let chip = Rect::from_center_size(pos2(x - 56.0, cy), vec2(112.0, 36.0));
-            root.painter()
-                .rect_filled(chip, 18, BACKGROUND.gamma_multiply(alpha));
-            root.painter().rect_stroke(
-                chip,
-                18,
-                Stroke::new(1.0, LINE.gamma_multiply(alpha)),
-                egui::StrokeKind::Inside,
-            );
-            let active = self.subtitle_job.is_some();
-            let label = if active {
-                l.text("● AI 字幕 · 生成中", "● AI · generating")
-            } else if self.subtitles.is_empty() {
-                l.text("AI 字幕", "AI subtitles")
-            } else {
-                l.text("● AI 字幕 · 就绪", "● AI · ready")
-            };
-            root.painter().text(
-                chip.center(),
-                egui::Align2::CENTER_CENTER,
-                label,
-                egui::FontId::proportional(11.0),
-                if active { ACCENT } else { MUTED }.gamma_multiply(alpha),
-            );
-            x -= 122.0;
-        }
-        let caption_width = if wide {
-            root.painter()
-                .layout_no_wrap(
-                    l.text("字幕", "Subtitles").into(),
-                    egui::FontId::proportional(12.0),
-                    design::TEXT,
-                )
-                .size()
-                .x
-                + 32.0
-        } else {
-            26.0
-        };
-        let mut captions = child(
-            root,
-            "video-subtitles",
-            Rect::from_min_size(
-                pos2(x - caption_width, cy - 13.0),
-                vec2(caption_width, 26.0),
-            ),
-        );
-        captions.spacing_mut().interact_size.y = 26.0;
-        captions.spacing_mut().item_spacing.x = 6.0;
-        captions.horizontal(|ui| {
-            self.subtitle_menu(ui, alpha, act);
-            if wide {
-                ui.label(RichText::new(l.text("字幕", "Subtitles")).size(12.0));
-            }
-        });
-        x -= caption_width + 10.0;
+        let mut captions = control_slot(root, "video-subtitles", pos2(x - 14.0, cy), 28.0);
+        self.subtitle_menu(&mut captions, alpha, act);
+        x -= 38.0;
         self.volume_control(root, screen, pos2(x - 14.0, cy), alpha, act);
         x -= 38.0;
         let seek_rect = Rect::from_min_max(

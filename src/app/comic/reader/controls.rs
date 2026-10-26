@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) const BAR_HEIGHT: f32 = 36.0;
+pub(super) const BAR_HEIGHT: f32 = 48.0;
 
 pub(super) struct BarLayout {
     pub footer: Rect,
@@ -10,48 +10,46 @@ pub(super) struct BarLayout {
     chapters: Rect,
     pub status: Rect,
     compact: bool,
-    mode_width: f32,
-    display_width: f32,
+    has_status: bool,
 }
 
-pub(super) fn layout(ui: &Ui, screen: Rect, l: Language) -> BarLayout {
-    let mode_width = [
-        ReadingMode::Vertical,
-        ReadingMode::LeftToRight,
-        ReadingMode::RightToLeft,
-    ]
-    .map(|mode| design::control_width(ui, mode_name(mode, l), true) + 24.0)
-    .into_iter()
-    .fold(0.0_f32, f32::max);
-    let display_width = [Display::Original, Display::Translated, Display::Compare]
-        .map(|display| design::control_width(ui, display_name(display, l), false) + 24.0)
-        .into_iter()
-        .fold(0.0_f32, f32::max);
-    let options_width = mode_width
-        + display_width
-        + design::control_width(ui, l.text("翻译本页", "Translate page"), true)
-        + design::control_width(ui, l.text("翻译本章", "Translate chapter"), true)
-        + 24.0;
-    arrange(screen, options_width, mode_width, display_width)
+pub(super) fn layout(ui: &Ui, screen: Rect, l: Language, has_status: bool) -> BarLayout {
+    let labels = [
+        display_name(Display::Original, l),
+        display_name(Display::Translated, l),
+        display_name(Display::Compare, l),
+    ];
+    let display_width = design::segmented_width(ui, &labels);
+    let options_width = display_width + 8.0 + design::CONTROL_HEIGHT + 6.0 + design::CONTROL_HEIGHT;
+    arrange(screen, options_width, has_status)
 }
 
-fn arrange(screen: Rect, options_width: f32, mode_width: f32, display_width: f32) -> BarLayout {
-    let compact = screen.width() < options_width + 336.0 + 220.0 + 64.0;
+fn arrange(screen: Rect, options_width: f32, has_status: bool) -> BarLayout {
+    let h = design::CONTROL_HEIGHT;
     let footer = Rect::from_min_max(pos2(screen.min.x, screen.max.y - BAR_HEIGHT), screen.max);
     let cy = footer.center().y;
-    let status = Rect::from_center_size(pos2(footer.max.x - 33.0, cy), vec2(34.0, 34.0));
-    let chapters = status.translate(vec2(-42.0, 0.0));
-    let zoom = Rect::from_min_size(pos2(chapters.min.x - 144.0, cy - 17.0), vec2(132.0, 34.0));
+    let right_slot = Rect::from_center_size(pos2(footer.max.x - 16.0 - h * 0.5, cy), vec2(h, h));
+    let status = right_slot;
+    let chapters = if has_status {
+        right_slot.translate(vec2(-(h + 8.0), 0.0))
+    } else {
+        right_slot
+    };
+    let zoom_width = h * 2.0 + 56.0 + 8.0;
+    let zoom = Rect::from_min_size(
+        pos2(chapters.min.x - 8.0 - zoom_width, cy - h * 0.5),
+        vec2(zoom_width, h),
+    );
+    let available = zoom.min.x - 16.0 - (footer.min.x + 16.0);
+    let compact = available < options_width + 16.0 + 336.0;
     let options = Rect::from_min_size(
-        pos2(footer.min.x + 16.0, cy - 17.0),
-        vec2(if compact { 34.0 } else { options_width }, 34.0),
+        pos2(footer.min.x + 16.0, cy - h * 0.5),
+        vec2(if compact { h } else { options_width }, h),
     );
     let start = options.max.x + 16.0;
     let end = zoom.min.x - 16.0;
-    let pager = Rect::from_center_size(
-        pos2((start + end) * 0.5, cy),
-        vec2(if compact { 276.0 } else { 336.0 }, 34.0),
-    );
+    let pager_width = (if compact { 276.0_f32 } else { 336.0_f32 }).min((end - start).max(160.0));
+    let pager = Rect::from_center_size(pos2((start + end) * 0.5, cy), vec2(pager_width, h));
     BarLayout {
         footer,
         options,
@@ -60,8 +58,7 @@ fn arrange(screen: Rect, options_width: f32, mode_width: f32, display_width: f32
         chapters,
         status,
         compact,
-        mode_width,
-        display_width,
+        has_status,
     }
 }
 
@@ -71,6 +68,16 @@ pub(super) struct Status<'a> {
     pub done: usize,
     pub failed: usize,
     pub working: bool,
+}
+
+impl Status<'_> {
+    pub(super) fn has_activity(&self, has_page_errors: bool) -> bool {
+        self.working
+            || self.total > 0
+            || self.failed > 0
+            || !self.message.is_empty()
+            || has_page_errors
+    }
 }
 
 #[derive(Default)]
@@ -99,39 +106,17 @@ pub(super) fn show(
         );
         let mut options = reader_slot(ui, "reader-options", bar.options);
         if bar.compact {
-            let response = design::control(
+            let response = design::icon_button(
                 &mut options,
-                "",
-                Some(reader_book),
-                design::Control::Quiet,
-                34.0,
-            )
-            .on_hover_text(l.text("阅读与翻译设置", "Reading and translation"));
+                icons::TRANSLATE,
+                l.text("显示与翻译", "Display & translation"),
+                reader.display != Display::Original,
+            );
             egui::Popup::menu(&response).show(|ui| {
-                ui.label(l.text("阅读方式", "Reading mode"));
-                for mode in [
-                    ReadingMode::Vertical,
-                    ReadingMode::LeftToRight,
-                    ReadingMode::RightToLeft,
-                ] {
-                    if design::selectable_value(ui, &mut reader.mode, mode, mode_name(mode, l))
-                        .changed()
-                    {
-                        reader.restore = true;
-                        reader.dirty = true;
-                        ui.close();
-                    }
-                }
-                ui.separator();
-                ui.label(l.text("显示模式", "Display mode"));
+                ui.set_min_width(168.0);
                 for display in [Display::Original, Display::Translated, Display::Compare] {
-                    if design::selectable_value(
-                        ui,
-                        &mut reader.display,
-                        display,
-                        display_name(display, l),
-                    )
-                    .changed()
+                    if design::menu_value(ui, &mut reader.display, display, display_name(display, l))
+                        .changed()
                     {
                         reader.restore = true;
                         ui.close();
@@ -143,7 +128,7 @@ pub(super) fn show(
                         (false, l.text("翻译本页", "Translate page")),
                         (true, l.text("翻译本章", "Translate chapter")),
                     ] {
-                        if ui.button(label).clicked() {
+                        if design::menu_item(ui, false, label).clicked() {
                             actions.translate = Some(all);
                             ui.close();
                         }
@@ -153,62 +138,33 @@ pub(super) fn show(
         } else {
             options.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                let mode = dropdown(
-                    ui,
-                    mode_name(reader.mode, l),
-                    Some(reader_book),
-                    bar.mode_width,
-                );
-                egui::Popup::menu(&mode).show(|ui| {
-                    for mode in [
-                        ReadingMode::Vertical,
-                        ReadingMode::LeftToRight,
-                        ReadingMode::RightToLeft,
-                    ] {
-                        if design::selectable_value(ui, &mut reader.mode, mode, mode_name(mode, l))
-                            .changed()
-                        {
-                            reader.restore = true;
-                            reader.dirty = true;
-                            ui.close();
-                        }
-                    }
-                });
-                let display =
-                    dropdown(ui, display_name(reader.display, l), None, bar.display_width);
-                egui::Popup::menu(&display).show(|ui| {
-                    for display in [Display::Original, Display::Translated, Display::Compare] {
-                        if design::selectable_value(
-                            ui,
-                            &mut reader.display,
-                            display,
-                            display_name(display, l),
-                        )
-                        .changed()
-                        {
-                            reader.restore = true;
-                            ui.close();
-                        }
-                    }
-                });
+                let displays = [Display::Original, Display::Translated, Display::Compare];
+                let labels = displays.map(|d| display_name(d, l));
+                let mut selected = displays
+                    .iter()
+                    .position(|d| *d == reader.display)
+                    .unwrap_or(0);
+                if design::segmented(ui, &mut selected, &labels) {
+                    reader.display = displays[selected];
+                    reader.restore = true;
+                }
                 ui.add_enabled_ui(!reader.urls.is_empty(), |ui| {
-                    if design::control(
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if design::icon_button(
                         ui,
+                        icons::TRANSLATE,
                         l.text("翻译本页", "Translate page"),
-                        Some(reader_translate),
-                        design::Control::Outline,
-                        0.0,
+                        false,
                     )
                     .clicked()
                     {
                         actions.translate = Some(false);
                     }
-                    if design::control(
+                    if design::icon_button(
                         ui,
+                        icons::IMAGES,
                         l.text("翻译本章", "Translate chapter"),
-                        Some(reader_translate_chapter),
-                        design::Control::Outline,
-                        0.0,
+                        false,
                     )
                     .clicked()
                     {
@@ -221,10 +177,7 @@ pub(super) fn show(
         let old_zoom = reader.zoom;
         zoom.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if design::control(ui, "", Some(reader_minus), design::Control::Quiet, 34.0)
-                .on_hover_text(l.text("缩小", "Zoom out"))
-                .clicked()
-            {
+            if design::icon_button(ui, icons::MINUS, l.text("缩小", "Zoom out"), false).clicked() {
                 reader.zoom = (reader.zoom - 0.1).max(0.5);
             }
             if design::control(
@@ -239,10 +192,7 @@ pub(super) fn show(
             {
                 reader.zoom = 1.0;
             }
-            if design::control(ui, "", Some(reader_plus), design::Control::Quiet, 34.0)
-                .on_hover_text(l.text("放大", "Zoom in"))
-                .clicked()
-            {
+            if design::icon_button(ui, icons::PLUS, l.text("放大", "Zoom in"), false).clicked() {
                 reader.zoom = (reader.zoom + 0.1).min(2.0);
             }
         });
@@ -251,14 +201,12 @@ pub(super) fn show(
             reader.dirty = true;
         }
         let mut chapters = reader_slot(ui, "reader-chapters-toggle", bar.chapters);
-        if design::control(
+        if design::icon_button(
             &mut chapters,
-            "",
-            Some(reader_chapters),
-            design::Control::Quiet,
-            34.0,
+            icons::SIDEBAR_SIMPLE,
+            l.text("章节目录", "Chapters"),
+            reader.sidebar,
         )
-        .on_hover_text(l.text("展开 / 收起章节栏", "Toggle chapters"))
         .clicked()
         {
             reader.sidebar = !reader.sidebar;
@@ -266,20 +214,16 @@ pub(super) fn show(
         }
         pager(ui, reader, bar.pager, neighbors, l, &mut actions);
     }
-    if visible || status.working || !status.message.is_empty() || status.failed > 0 {
+    if bar.has_status {
         let mut status_ui = reader_slot(ui, "reader-status", bar.status);
-        let response = design::control(
-            &mut status_ui,
-            "",
-            Some(info_icon),
-            design::Control::Quiet,
-            34.0,
-        );
-        if status.working || status.failed > 0 || !status.message.is_empty() {
+        let response = design::icon_button(&mut status_ui, icons::INFO, "", status.working);
+        let has_error =
+            status.failed > 0 || !status.message.is_empty() || !reader.errors.is_empty();
+        if status.working || has_error {
             ui.painter().circle_filled(
                 response.rect.right_top() + vec2(-6.0, 6.0),
                 3.0,
-                if status.failed > 0 || !status.message.is_empty() {
+                if has_error {
                     Color32::LIGHT_RED
                 } else {
                     ACCENT
@@ -287,24 +231,29 @@ pub(super) fn show(
             );
         }
         let response = response.on_hover_ui(|ui| {
-            ui.set_max_width(320.0);
-            status_text(ui, &status, l);
+            ui.set_max_width(280.0);
+            status_text(ui, &status, !reader.errors.is_empty(), l);
         });
         egui::Popup::menu(&response).show(|ui| {
-            ui.set_max_width(320.0);
-            status_text(ui, &status, l);
+            ui.set_min_width(180.0);
+            ui.set_max_width(280.0);
+            status_text(ui, &status, !reader.errors.is_empty(), l);
+            if status.working || !reader.errors.is_empty() {
+                ui.separator();
+            }
             if status.working
-                && ui
-                    .button(l.text("取消翻译", "Cancel translation"))
-                    .clicked()
+                && design::menu_item(ui, false, l.text("取消翻译", "Cancel translation")).clicked()
             {
                 actions.cancel = true;
                 ui.close();
             }
             if !reader.errors.is_empty()
-                && ui
-                    .button(l.text("重新加载本章图片", "Reload chapter images"))
-                    .clicked()
+                && design::menu_item(
+                    ui,
+                    false,
+                    l.text("重新加载本章图片", "Reload chapter images"),
+                )
+                .clicked()
             {
                 actions.retry = true;
                 ui.close();
@@ -322,16 +271,23 @@ fn pager(
     l: Language,
     actions: &mut Actions,
 ) {
+    let h = design::CONTROL_HEIGHT;
     let cy = rect.center().y;
     let mut previous = reader_slot(
         ui,
         "reader-previous",
-        Rect::from_min_size(rect.min, vec2(34.0, 34.0)),
+        Rect::from_min_size(rect.min, vec2(h, h)),
     );
     previous.add_enabled_ui(neighbors[0].is_some(), |ui| {
-        if design::control(ui, "", Some(draw_prev), design::Control::Quiet, 34.0)
-            .on_hover_text(l.text("上一章", "Previous chapter"))
-            .clicked()
+        if design::icon_button_sized(
+            ui,
+            h,
+            1.0,
+            false,
+            l.text("上一章", "Previous chapter"),
+            draw_prev,
+        )
+        .clicked()
         {
             actions.chapter = neighbors[0];
         }
@@ -339,19 +295,25 @@ fn pager(
     let mut next = reader_slot(
         ui,
         "reader-next",
-        Rect::from_min_size(pos2(rect.max.x - 34.0, rect.min.y), vec2(34.0, 34.0)),
+        Rect::from_min_size(pos2(rect.max.x - h, rect.min.y), vec2(h, h)),
     );
     next.add_enabled_ui(neighbors[1].is_some(), |ui| {
-        if design::control(ui, "", Some(draw_next), design::Control::Quiet, 34.0)
-            .on_hover_text(l.text("下一章", "Next chapter"))
-            .clicked()
+        if design::icon_button_sized(
+            ui,
+            h,
+            1.0,
+            false,
+            l.text("下一章", "Next chapter"),
+            draw_next,
+        )
+        .clicked()
         {
             actions.chapter = neighbors[1];
         }
     });
     let count = reader.urls.len();
     ui.painter().text(
-        pos2(rect.max.x - 74.0, cy),
+        pos2(rect.max.x - 75.0, cy),
         egui::Align2::CENTER_CENTER,
         format!(
             "{} / {}",
@@ -362,7 +324,7 @@ fn pager(
         MUTED,
     );
     let track_rect = Rect::from_min_max(
-        pos2(rect.min.x + 42.0, cy - 14.0),
+        pos2(rect.min.x + 44.0, cy - 14.0),
         pos2(rect.max.x - 114.0, cy + 14.0),
     );
     let mut track_ui = reader_slot(ui, "reader-page-track", track_rect);
@@ -393,16 +355,6 @@ fn pager(
     }
 }
 
-fn dropdown(ui: &mut Ui, label: &str, icon: Option<design::Icon>, width: f32) -> egui::Response {
-    let response = design::control(ui, label, icon, design::Control::Outline, width);
-    let arrow = Rect::from_center_size(
-        pos2(response.rect.max.x - 16.0, response.rect.center().y),
-        vec2(16.0, 16.0),
-    );
-    icons::paint(ui.painter(), arrow, MUTED, icons::CARET_DOWN);
-    response
-}
-
 fn display_name(display: Display, l: Language) -> &'static str {
     match display {
         Display::Original => l.text("原文", "Original"),
@@ -411,7 +363,7 @@ fn display_name(display: Display, l: Language) -> &'static str {
     }
 }
 
-fn status_text(ui: &mut Ui, status: &Status<'_>, l: Language) {
+fn status_text(ui: &mut Ui, status: &Status<'_>, has_page_errors: bool, l: Language) {
     if !status.message.is_empty() {
         ui.label(status.message);
     }
@@ -427,46 +379,47 @@ fn status_text(ui: &mut Ui, status: &Status<'_>, l: Language) {
             status.total
         ));
         if status.failed > 0 {
-            ui.label(format!(
-                "{} {}",
-                status.failed,
-                l.text("页失败", "pages failed")
-            ));
+            ui.colored_label(
+                Color32::LIGHT_RED,
+                format!("{} {}", status.failed, l.text("页失败", "pages failed")),
+            );
         }
-    } else if status.message.is_empty() {
-        ui.label(l.text(
-            "当前页优先 · 译图自动保存",
-            "Current page first · Translations are saved automatically",
-        ));
+    } else if has_page_errors && status.message.is_empty() {
+        ui.colored_label(
+            Color32::LIGHT_RED,
+            l.text("部分图片加载失败", "Some images failed to load"),
+        );
     }
-    ui.small(l.text("全屏 / 退出全屏：F11", "Toggle fullscreen: F11"));
-}
-
-fn info_icon(p: &Painter, r: Rect, c: Color32) {
-    icons::paint(p, r, c, icons::INFO);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn controls_do_not_overlap_at_supported_window_sizes_and_offsets() {
-        for width in [760.0, 960.0, 1100.0, 1280.0, 1920.0] {
-            for options_width in [460.0, 620.0] {
-                let screen = Rect::from_min_size(pos2(70.0, 35.0), vec2(width, 540.0));
-                let bar = arrange(screen, options_width, 160.0, 110.0);
-                assert_eq!(bar.footer.height(), 36.0);
-                let controls = [bar.options, bar.pager, bar.zoom, bar.chapters, bar.status];
-                for (index, rect) in controls.iter().enumerate() {
-                    assert!(bar.footer.contains_rect(*rect));
-                    for other in &controls[index + 1..] {
-                        assert!(!rect.intersects(*other));
+    fn controls_do_not_overlap_or_touch_borders_at_supported_window_sizes() {
+        for width in [628.0, 760.0, 960.0, 1100.0, 1280.0, 1920.0] {
+            for options_width in [288.0, 340.0] {
+                for has_status in [false, true] {
+                    let screen = Rect::from_min_size(pos2(70.0, 35.0), vec2(width, 540.0));
+                    let bar = arrange(screen, options_width, has_status);
+                    assert_eq!(bar.footer.height(), 48.0);
+                    let mut controls = vec![bar.options, bar.pager, bar.zoom, bar.chapters];
+                    if has_status {
+                        controls.push(bar.status);
+                    }
+                    for (index, rect) in controls.iter().enumerate() {
+                        assert!(bar.footer.contains_rect(*rect));
+                        assert!(
+                            rect.min.y >= bar.footer.min.y + 5.0
+                                && rect.max.y <= bar.footer.max.y - 5.0,
+                            "control {index} too close to footer border: {rect:?} in {:?}",
+                            bar.footer
+                        );
+                        for other in &controls[index + 1..] {
+                            assert!(!rect.intersects(*other));
+                        }
                     }
                 }
-                assert_eq!(
-                    bar.pager.width() - 156.0,
-                    if bar.compact { 120.0 } else { 180.0 }
-                );
             }
         }
     }

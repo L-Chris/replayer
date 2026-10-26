@@ -394,7 +394,7 @@ fn reader_fixture(ctx: &egui::Context) -> State {
         urls: vec!["https://example.invalid/page".into(); 31],
         current: 7,
         fraction: 0.0,
-        mode: ReadingMode::RightToLeft,
+        mode: ReadingMode::Vertical,
         zoom: 1.0,
         display: Display::Original,
         sidebar: false,
@@ -585,9 +585,9 @@ fn reader_toolbar_visibility_does_not_resize_or_move_the_page() {
             0.0,
         ));
         assert!(!hidden.is_empty());
-        // The canvas extends behind both bars, retaining only an 8pt edge inset.
-        assert_eq!(hidden[0].1.min.y, 8.0);
-        assert!(hidden[0].1.max.y > 764.0);
+        // The canvas covers the full reading window height behind both overlay bars.
+        assert_eq!(hidden[0].1.min.y, 0.0);
+        assert_eq!(hidden[0].1.max.y, 800.0);
         for _ in 0..30 {
             reader_frame(&ctx, &mut state, &mut time, pos2(500.0, 20.0), 0.0);
         }
@@ -605,71 +605,73 @@ fn reader_toolbar_visibility_does_not_resize_or_move_the_page() {
 
 #[test]
 fn reader_pages_and_comparison_pairs_are_centered_in_the_scroll_viewport() {
-    for mode in [ReadingMode::Vertical, ReadingMode::LeftToRight] {
-        for display in [Display::Original, Display::Translated, Display::Compare] {
-            for zoom in [0.6, 1.0, 1.5] {
-                let ctx = egui::Context::default();
-                design::apply(&ctx);
-                let mut state = reader_fixture(&ctx);
-                let reader = state.reader.as_mut().unwrap();
-                reader.mode = mode;
-                reader.display = display;
-                reader.zoom = zoom;
-                let asset = reader.assets.get_mut(&7).unwrap();
-                asset.translated = Some(Picture {
-                    height: asset.original.height,
-                    tiles: asset.original.tiles.clone(),
-                });
-                let texture = asset.original.tiles[0].id();
-                let mut time = 0.0;
-                for _ in 0..30 {
-                    reader_frame(&ctx, &mut state, &mut time, pos2(500.0, 300.0), 0.0);
-                }
-                let output = reader_frame(&ctx, &mut state, &mut time, pos2(500.0, 300.0), 0.0);
-                let mut bounds = Rect::NOTHING;
-                let mut viewport = Rect::NOTHING;
-                for shape in output.shapes {
-                    if let egui::Shape::Mesh(mesh) = shape.shape
-                        && mesh.texture_id == texture
-                    {
-                        for vertex in &mesh.vertices {
-                            bounds.extend_with(vertex.pos);
-                        }
-                        viewport = shape.clip_rect;
+    for display in [Display::Original, Display::Translated, Display::Compare] {
+        for zoom in [0.6, 1.0, 1.5] {
+            let ctx = egui::Context::default();
+            design::apply(&ctx);
+            let mut state = reader_fixture(&ctx);
+            let reader = state.reader.as_mut().unwrap();
+            reader.display = display;
+            reader.zoom = zoom;
+            let asset = reader.assets.get_mut(&7).unwrap();
+            asset.translated = Some(Picture {
+                height: asset.original.height,
+                tiles: asset.original.tiles.clone(),
+            });
+            let texture = asset.original.tiles[0].id();
+            let mut time = 0.0;
+            for _ in 0..30 {
+                reader_frame(&ctx, &mut state, &mut time, pos2(500.0, 300.0), 0.0);
+            }
+            let output = reader_frame(&ctx, &mut state, &mut time, pos2(500.0, 300.0), 0.0);
+            let mut bounds = Rect::NOTHING;
+            let mut viewport = Rect::NOTHING;
+            for shape in output.shapes {
+                if let egui::Shape::Mesh(mesh) = shape.shape
+                    && mesh.texture_id == texture
+                {
+                    for vertex in &mesh.vertices {
+                        bounds.extend_with(vertex.pos);
                     }
+                    viewport = shape.clip_rect;
                 }
-                assert!(bounds.is_positive(), "reader fixture page was not visible");
+            }
+            assert!(bounds.is_positive(), "reader fixture page was not visible");
+            assert!(
+                (bounds.center().x - viewport.center().x).abs() <= 2.0,
+                "page is off center: zoom={zoom}, compare={}, page={bounds:?}, viewport={viewport:?}",
+                display == Display::Compare
+            );
+            if display == Display::Original && (zoom - 1.0).abs() < 0.001 {
                 assert!(
-                    (bounds.center().x - viewport.center().x).abs() <= 2.0,
-                    "page is off center: zoom={zoom}, vertical={}, compare={}, page={bounds:?}, viewport={viewport:?}",
-                    mode == ReadingMode::Vertical,
-                    display == Display::Compare
+                    (bounds.height() - viewport.height()).abs() <= 1.0,
+                    "default page height did not match viewport height: page={bounds:?}, viewport={viewport:?}"
                 );
-                if mode == ReadingMode::LeftToRight && display == Display::Original && zoom > 1.0 {
-                    reader_frame(&ctx, &mut state, &mut time, pos2(500.0, 300.0), -240.0);
-                    for _ in 0..30 {
-                        reader_frame(&ctx, &mut state, &mut time, pos2(500.0, 300.0), 0.0);
-                    }
-                    let output = reader_frame(&ctx, &mut state, &mut time, pos2(500.0, 300.0), 0.0);
-                    let top = output
-                        .shapes
-                        .iter()
-                        .filter_map(|shape| match &shape.shape {
-                            egui::Shape::Mesh(mesh) if mesh.texture_id == texture => {
-                                Some(mesh.calc_bounds().min.y)
-                            }
-                            _ => None,
-                        })
-                        .fold(f32::INFINITY, f32::min);
-                    assert!(
-                        top < bounds.min.y - 20.0,
-                        "zoomed paged image did not scroll vertically"
-                    );
-                    assert_eq!(state.reader.as_ref().unwrap().current, 7);
-                }
             }
         }
     }
+}
+
+#[test]
+fn comic_reading_mode_legacy_aliases_and_viewport_clamps_work() {
+    for legacy in ["\"Vertical\"", "\"LeftToRight\"", "\"RightToLeft\""] {
+        let parsed: ReadingMode = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed, ReadingMode::Vertical);
+    }
+    let normal = reader::page_dimensions(800.0, 1200.0, (850.0, 1200.0), false, 1.0);
+    assert!((normal.y - 800.0).abs() < 0.5);
+    assert!((normal.x - 800.0 * 850.0 / 1200.0).abs() < 0.5);
+
+    let tall_screen = reader::page_dimensions(1800.0, 2400.0, (850.0, 1200.0), false, 1.0);
+    assert!((tall_screen.y - reader::INIT_MAX_HEIGHT).abs() < 0.5);
+    assert!(tall_screen.x <= reader::INIT_MAX_WIDTH);
+
+    let small_screen = reader::page_dimensions(360.0, 900.0, (850.0, 1200.0), false, 1.0);
+    assert!(small_screen.y >= reader::INIT_MIN_HEIGHT);
+    assert!((small_screen.x - reader::INIT_MIN_WIDTH).abs() < 0.5);
+
+    let webtoon = reader::page_dimensions(800.0, 1200.0, (800.0, 4000.0), false, 1.0);
+    assert!((webtoon.x - reader::INIT_WEBTOON_MIN_WIDTH).abs() < 0.5);
 }
 
 struct Capture {
@@ -1072,6 +1074,72 @@ fn history_context_menu_and_undo_update_home_without_changing_the_queue() {
     assert!(settings_text(&output, "History fixture").is_none());
     drop(app);
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[ignore = "Requires a GPU; compares sidebar logo sampling at common display scales"]
+fn branding_scaling_visuals() {
+    let directory = PathBuf::from("target/ui-review");
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut capture = Capture::new();
+    let ctx = egui::Context::default();
+    let image = image::load_from_memory(include_bytes!(
+        "../../../assets/branding/replayer-mark-256.png"
+    ))
+    .unwrap()
+    .into_rgba8();
+    // Reproduce the previous direct 256px -> 26pt GPU minification for comparison.
+    let original = ctx.load_texture(
+        "brand-before",
+        egui::ColorImage::from_rgba_unmultiplied([256, 256], image.as_raw()),
+        egui::TextureOptions::LINEAR,
+    );
+    for percent in [100, 125, 150, 200, 250] {
+        let scale = percent as f32 / 100.0;
+        ctx.set_pixels_per_point(scale);
+        capture.save(
+            &ctx,
+            [(320.0 * scale) as u32, (156.0 * scale) as u32],
+            &directory.join(format!("branding-{percent}.png")),
+            |ui| {
+                let painter = ui.painter();
+                painter.rect_filled(
+                    Rect::from_min_size(pos2(0.0, 82.0), vec2(320.0, 74.0)),
+                    0,
+                    Color32::from_gray(240),
+                );
+                for (x, title) in [(12.3, "Before"), (172.3, "After")] {
+                    painter.text(
+                        pos2(x, 12.0),
+                        egui::Align2::LEFT_TOP,
+                        title,
+                        egui::FontId::proportional(12.0),
+                        Color32::WHITE,
+                    );
+                    for (y, color) in [(36.2, Color32::WHITE), (99.2, Color32::BLACK)] {
+                        let rect = Rect::from_min_size(pos2(x, y), Vec2::splat(26.0));
+                        if title == "Before" {
+                            painter.image(
+                                original.id(),
+                                rect,
+                                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        } else {
+                            super::super::branding::paint(painter, rect);
+                        }
+                        painter.text(
+                            pos2(x + 36.0, y + 13.0),
+                            egui::Align2::LEFT_CENTER,
+                            "replayer",
+                            egui::FontId::proportional(20.0),
+                            color,
+                        );
+                    }
+                }
+            },
+        );
+    }
 }
 
 #[test]
@@ -1585,6 +1653,10 @@ fn comic_catalog_visuals() {
             Some(pos2(70.0, 180.0)),
             |ui| state.catalog(ui, &settings),
         );
+        let mut detail_entry = state.entries()[0].clone();
+        detail_entry.read.insert("chapter-0".into());
+        detail_entry.read.insert("chapter-5".into());
+        state.library.as_mut().unwrap().save(detail_entry).unwrap();
         state.selected = Some(state.entries()[0].book.clone());
         capture.save(
             &ctx,
@@ -1711,20 +1783,19 @@ fn comic_catalog_visuals() {
     let mut password = "example-key".to_owned();
     capture.save(&ctx, [628, 320], &directory.join("controls.png"), |ui| {
         ui.horizontal(|ui| {
-            design::search_field(ui, &mut value, 420.0, "搜索媒体、音乐或漫画");
-            design::control(ui, "搜索", None, design::Control::Primary, 76.0);
+            design::search_field(ui, &mut value, 460.0, "搜索媒体、音乐或漫画");
+            design::primary_icon_button(ui, icons::MAGNIFYING_GLASS, "搜索");
         });
         ui.label("服务地址");
-        ui.add(design::text_edit(&mut value).hint_text("https://api.example.com/v1"));
+        design::input_field(ui, &mut value, 360.0, "https://api.example.com/v1");
         ui.label("API Key");
-        ui.add(design::text_edit(&mut password).password(true));
+        design::secret_field(ui, "fixture-secret", &mut password, 360.0, "sk-…");
         ui.horizontal(|ui| {
             ui.label("翻译语言");
-            egui::ComboBox::from_id_salt("fixture-language")
-                .selected_text("跟随界面语言")
-                .show_ui(ui, |ui| {
-                    ui.label("简体中文");
-                });
+            design::dropdown_ui(ui, "fixture-language", 220.0, "跟随界面语言", |ui| {
+                design::menu_item(ui, true, "跟随界面语言");
+                design::menu_item(ui, false, "简体中文");
+            });
         });
         let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 50.0), Sense::hover());
         design::favorite_at(
