@@ -14,7 +14,7 @@ pub struct WebDav {
 impl WebDav {
     pub fn new(settings: &Settings) -> Result<Self> {
         settings.validate()?;
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         Ok(Self {
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(10))

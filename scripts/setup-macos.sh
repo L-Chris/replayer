@@ -3,6 +3,7 @@
 set -euo pipefail
 [[ $(uname -s) == Darwin ]] || { echo 'This script requires macOS.' >&2; exit 1; }
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source "$root/scripts/ffmpeg-playback-options.sh"
 case $(uname -m) in
   arm64) arch=aarch64 ;;
   x86_64) arch=x86_64 ;;
@@ -23,7 +24,7 @@ clang_path=$(xcrun --find clang)
 clang_lib="$(dirname "$(dirname "$clang_path")")/lib"
 [[ -f $clang_lib/libclang.dylib ]] || { echo "Missing libclang in $clang_lib" >&2; exit 1; }
 mkdir -p "$prefix/share/replayer" "$sources" "$work"
-build_id=$( { shasum -a 256 "${BASH_SOURCE[0]}"; printf '%s\n' "$arch" "$minimum" "$prefix"; } | shasum -a 256 | cut -d ' ' -f 1)
+build_id=$( { shasum -a 256 "${BASH_SOURCE[0]}" "$root/scripts/ffmpeg-playback-options.sh" "$root/scripts/verify-ffmpeg-config.py"; printf '%s\n' "$arch" "$minimum" "$prefix"; } | shasum -a 256 | cut -d ' ' -f 1)
 
 download() {
   local filename=$1 expected=$2 url=$3
@@ -63,9 +64,11 @@ if [[ ! -f $prefix/share/replayer/build-id.txt ]] || [[ $(cat "$prefix/share/rep
       --disable-ffplay --disable-ffprobe --disable-indevs --enable-indev=lavfi --disable-outdevs \
       --enable-libmp3lame --enable-securetransport --enable-zlib --enable-bzlib --enable-iconv \
       --enable-videotoolbox --enable-audiotoolbox \
+      "${playback_options[@]}" \
       --extra-libs=-liconv \
       --extra-cflags="-I$prefix/include -mmacosx-version-min=$minimum" \
       --extra-ldflags="-L$prefix/lib -mmacosx-version-min=$minimum"
+    python3 "$root/scripts/verify-ffmpeg-config.py" config_components.h
     make -j "$jobs"
     make install
   )
@@ -88,6 +91,8 @@ flags = next(line.split('=', 1)[1] for line in Path(config).read_text().splitlin
 PY
   cp "$sources/ffmpeg-9.0.2.tar.xz" "$sources/lame-4.0.tar.gz" "$prefix/share/replayer/sources/"
   cp "$root/scripts/setup-macos.sh" "$prefix/share/replayer/sources/"
+  cp "$root/scripts/ffmpeg-playback-options.sh" "$prefix/share/replayer/sources/"
+  cp "$root/scripts/verify-ffmpeg-config.py" "$prefix/share/replayer/sources/"
   printf '%s\n' "$build_id" > "$prefix/share/replayer/build-id.txt"
 fi
 

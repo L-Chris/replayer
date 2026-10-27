@@ -374,12 +374,7 @@ async fn mp3_flac_and_tail_indexed_m4a_start_while_background_download_is_blocke
         ("m4a", "aac", "320k"),
     ] {
         let file = directory.join(format!("sample.{extension}"));
-        let ffmpeg =
-            PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join(if cfg!(windows) {
-                "bin/ffmpeg.exe"
-            } else {
-                "bin/ffmpeg"
-            });
+        let ffmpeg = crate::test_config::ffmpeg();
         let status = std::process::Command::new(ffmpeg)
             .args([
                 "-v",

@@ -54,7 +54,7 @@ pub struct Job {
 }
 impl Job {
     pub fn start(magnet: String, cache: PathBuf) -> Result<Self> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         ensure!(magnet.len() <= 32768, "Magnet link is too long");
         let parsed = librqbit::Magnet::parse(magnet.trim()).context("Invalid magnet link")?;
         let hash = parsed
@@ -663,7 +663,7 @@ mod tests {
     use super::*;
     #[test]
     fn loopback_magnet_resolves_multiple_files_and_streams_only_selected_video() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let root = std::env::temp_dir().join(format!("replayer-loopback-{}", uuid::Uuid::new_v4()));
         let seed = root.join("seed");
         let download = root.join("download");

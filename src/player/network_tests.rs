@@ -22,12 +22,7 @@ fn progressive_http_freezes_while_buffering_and_interrupts_old_seek() {
     let root = std::env::temp_dir().join(format!("replayer-network-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("sample.mp4");
-    let ffmpeg =
-        std::path::PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join(if cfg!(windows) {
-            "bin/ffmpeg.exe"
-        } else {
-            "bin/ffmpeg"
-        });
+    let ffmpeg = crate::test_config::ffmpeg();
     let status = std::process::Command::new(ffmpeg)
         .args([
             "-v",

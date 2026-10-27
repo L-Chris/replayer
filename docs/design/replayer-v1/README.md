@@ -1,56 +1,20 @@
-# Replayer UI 设计稿 · v1
+# Original UI design references
 
-这组图片用于界面重构的视觉参考，由内置 imagegen 工具生成。应用已按该视觉方向重构：首页为风格基准，音乐、视频、漫画和设置共享主题与控件。图片中的示例媒体、歌词、漫画与元数据仅用于版式演示，实际界面读取本地文件、真实搜索结果和阅读记录。
+These generated mockups are historical visual references, not screenshots or a current behavior specification. Example media, lyrics and books are illustrative. Follow the [user guide](../../guide.md) for current functionality.
 
-## 页面
+## Mockups
 
-| 图片 | 页面 |
+| Image | View |
 | --- | --- |
-| [00-home.png](00-home.png) | 首页 |
-| [01-music-library.png](01-music-library.png) | 音乐库与展开的右侧播放队列 |
-| [02-music-now-playing.png](02-music-now-playing.png) | 音乐播放与同步歌词 |
-| [03-video-now-playing.png](03-video-now-playing.png) | 视频播放与 AI 字幕 |
-| [04-comic-search.png](04-comic-search.png) | 漫画搜索与竖版封面书库 |
-| [05-comic-detail.png](05-comic-detail.png) | 漫画详情与章节目录 |
-| [06-comic-reader.png](06-comic-reader.png) | 漫画原文／译图对照与右侧章节栏 |
-| [07-settings.png](07-settings.png) | 设置 · AI 服务 |
+| [00-home.png](00-home.png) | Home |
+| [01-music-library.png](01-music-library.png) | Music library and queue |
+| [02-music-now-playing.png](02-music-now-playing.png) | Music playback and timed lyrics |
+| [03-video-now-playing.png](03-video-now-playing.png) | Video and AI subtitles |
+| [04-comic-search.png](04-comic-search.png) | Comic search and bookshelf |
+| [05-comic-detail.png](05-comic-detail.png) | Comic details and chapters |
+| [06-comic-reader.png](06-comic-reader.png) | Comic reader and translation comparison |
+| [07-settings.png](07-settings.png) | Settings and AI services |
 
-## 统一视觉方向
+The shared direction is a dark background, mint accents, cover-led browsing and immersive playback/reading. Exact controls and layouts have evolved; old pixel dimensions and implementation checklists are intentionally omitted.
 
-- 石墨黑背景、炭灰表面、暖白文字、薄荷绿强调色。
-- 浏览页面共享左侧导航与底部播放栏；播放队列可从右侧展开。
-- 音乐播放突出封面与歌词；视频播放突出画面与字幕；漫画阅读突出页面与翻页。
-- 视频与漫画阅读工具栏在靠近边缘时显示，离开后隐藏。设计图展示工具栏展开状态。
-- Windows 使用自绘标题栏，窗口按钮与应用顶部控制区整合，支持拖动、双击最大化、边缘缩放与还原。
-- 首页、音乐、视频和漫画共用无边框全屏：F11 切换，Esc 优先退出全屏且不同时返回上一页；隐藏窗口按钮、拖动区和缩放边缘，退出后恢复原窗口及最大化状态。视频播放中，工具栏隐藏且鼠标静止 2 秒后隐藏光标，移动、暂停或操作控件时恢复；工具栏仍按边缘呼出规则显示。切换为音乐不会强制退出全屏。
-- 漫画阅读采用独立的顶部控制区、右侧章节卡片和底部翻页／缩放栏。对照模式的原文与译图明确分栏，无译图时显示占位提示。
-- 漫画搜索使用竖版封面，媒体标题与作者等元数据优先于文件名。
-- 漫画书架、搜索、更新和历史共用下划线页签、封面网格和独立的收藏区域；宽窗口的来源统计放在页签右侧，窄窗口放在搜索行下方。
-- 可点击卡片悬停时只改变背景色并显示手形光标，不添加描边；封面和文字保留内边距。收藏按钮使用固定方形点击区域，爱心等比绘制，不占用标题或时长的排版空间。
-- 单行输入框、搜索框和常规按钮统一为 34 点高，输入框使用固定字体、内边距和底色；搜索框共用搜索与清空图标，设置中的密钥与模型输入框采用相同样式。
-- AI 提供商独立管理名称、兼容接口地址、密钥与可用模型，支持获取列表、搜索勾选和手动添加模型；字幕与图片翻译通过提供商分组的模型选择框配置，不显示重复连接表单。所有设置先编辑草稿，保存后生效；密钥使用 Windows 凭据管理器持久保存。
-- 设置分类为通用、AI 提供商、AI 字幕、音乐相关、漫画相关和关于。设置页隐藏全局搜索，正文只保留字段与必要操作；提供商单项展开，模型管理集中在弹出面板。恢复默认收进更多菜单，保存栏仅在有改动时出现；能力说明采用悬停提示。
-- 选项按钮在普通、悬停与选中状态保留相同边框空间，避免文字和相邻控件抖动；普通操作和来源下拉框按文字与图标计算紧凑宽度。
-- 返回入口统一使用 34 点方形点击区域和无文案的返回图标，目的地保留为悬停提示；音乐、视频和漫画页面共用同一控件。
-- 音乐与视频网格卡片统一使用方形封面区域和相同高度，图片等比裁切填充、不拉伸。视频缩略图在后台提取，跳过片头黑场；播放元数据不会覆盖已有缩略图或阻止后台提取。
-- 长列表即使没有溢出也保留滚动条留白，切换页签时内容宽度与网格列数保持稳定。窄窗口中的漫画详情使用整页滚动，避免简介与目录互相挤占。
-- 描边绘制在控件范围内，普通按钮、悬停与菜单打开状态不向外扩张；滚动条占用独立留白，滑块端点为圆形手柄预留空间。
-- 左侧主导航可见时始终显示品牌图标和 replayer 名称，包括漫画目录和作品详情；窄侧栏仅显示图标。无侧栏的播放、阅读等沉浸界面隐藏品牌区。
-- 品牌以设计图中的蓝绿与薄荷绿折叠播放标识为参考，通过 imagegen 生成实心版本；侧栏、窗口和 Windows 安装图标统一从 `assets/branding/replayer-logo.png` 派生，不使用普通播放按钮替代 Logo。
-- 漫画阅读顶部仅保留返回、作品名与章节名；头部和底栏均为 36 点高，悬停时覆盖阅读内容，显示或隐藏不改变图片尺寸和阅读位置。阅读区域上下保留 8 点边距，章节侧栏保持原有展开布局。阅读方式、显示模式下拉框和翻译操作集中到底栏，窄窗口收进阅读设置菜单，始终保持单行；底栏使用无边框翻章与缩放按钮、独立页码区域，以及固定 180px / 120px 的进度条。
-- 翻译进度收敛为右下角提示图标，悬停展示进度与详情，点击管理任务；阅读页不显示全屏按钮，统一使用 F11 切换全屏。
-- 阅读页上一章、下一章复用音乐播放栏的上一首、下一首图标，提示文字保留翻章含义。
-
-## 实现时校准
-
-图片是视觉参考，最终实现需要统一图标、控件尺寸、间距、对比度和响应式断点，并核对生成图片中的小字与图标。章节当前项使用阅读状态图标；翻译按钮使用图像／翻译图标。歌曲、书籍和背景图片在真实界面中使用实际媒体资源。
-
-完整生成提示词见 [PROMPTS.md](PROMPTS.md)。实际应用按窗口尺寸调整布局，视频与漫画阅读使用独立的沉浸布局。
-
-离线视觉检查（需要 GPU）使用真实控件代码和内存数据，不访问漫画源或图像翻译服务：
-
-```powershell
-cargo test --locked comic_catalog_visuals -- --ignored --nocapture
-```
-
-检查图片输出到 `target/ui-review/`，覆盖三个内容宽度的漫画页签、详情页、窄窗口阅读栏和通用输入控件。
+The original generation prompts are preserved in [PROMPTS.md](PROMPTS.md). Current visual checks use `cargo test --locked comic_catalog_visuals -- --ignored --nocapture` and write review images under `target/ui-review/`.

@@ -958,15 +958,17 @@ impl State {
             PageJob::new(Job::spawn(move |_| async move {
                 let original = images::fetch(directory.join("cache/pages"), key, url, 1800).await?;
                 let translated = if let Some(config) = configuration {
-                    images::load(
-                        directory.join("translations").join(format!(
-                            "{}.png",
-                            config.cache_key(&original.hash, &context)
-                        )),
-                        1800,
-                    )
-                    .await
-                    .ok()
+                    let mut translated = None;
+                    for path in domain::translation::cached_paths(
+                        &directory.join("translations"),
+                        &config.cache_key(&original.hash, &context),
+                    ) {
+                        if let Ok(image) = images::load(path, 1800).await {
+                            translated = Some(image);
+                            break;
+                        }
+                    }
+                    translated
                 } else {
                     None
                 };

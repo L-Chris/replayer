@@ -120,7 +120,8 @@ def verify_bundle(app, expected_arch, expected_version=None):
     icon = contents / 'Resources' / info['CFBundleIconFile']
     assert icon.read_bytes()[:4] == b'icns', 'Missing macOS application icon'
     assert {file.name for file in (contents / 'Resources/sources').iterdir()} == {
-        'ffmpeg-9.0.2.tar.xz', 'lame-4.0.tar.gz', 'setup-macos.sh', 'BUILD.txt'
+        'ffmpeg-9.0.2.tar.xz', 'lame-4.0.tar.gz', 'setup-macos.sh',
+        'ffmpeg-playback-options.sh', 'verify-ffmpeg-config.py', 'BUILD.txt'
     }, 'Package sources must contain only the public build recipe and matching source archives'
     executable = contents / 'MacOS' / 'replayer'
     framework_dir = contents / 'Frameworks'

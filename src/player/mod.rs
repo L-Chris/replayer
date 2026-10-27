@@ -321,13 +321,7 @@ mod tests {
             std::env::temp_dir().join(format!("replayer-video-device-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("sample.mp4");
-        let exe = std::path::PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join(
-            if cfg!(windows) {
-                "bin/ffmpeg.exe"
-            } else {
-                "bin/ffmpeg"
-            },
-        );
+        let exe = crate::test_config::ffmpeg();
         assert!(
             std::process::Command::new(exe)
                 .args([

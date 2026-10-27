@@ -1,14 +1,10 @@
 use super::*;
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, Instant},
 };
 fn ffmpeg(args: &[&str], output: &Path) {
-    let exe = PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join(if cfg!(windows) {
-        "bin/ffmpeg.exe"
-    } else {
-        "bin/ffmpeg"
-    });
+    let exe = crate::test_config::ffmpeg();
     assert!(
         std::process::Command::new(exe)
             .args(["-v", "error", "-y"])

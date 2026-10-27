@@ -179,6 +179,12 @@ fn image_edit_uses_multipart_returns_a_cached_image_and_never_retries_400() {
                         assert!(text.contains("Translate every readable"));
                         assert!(text.contains("English"));
                         assert!(!text.contains("reasoning_effort"));
+                        assert!(text.contains("name=\"output_format\"\r\n\r\njpeg\r\n"));
+                        assert!(text.contains("filename=\"page.jpg\""));
+                        assert!(
+                            text.to_ascii_lowercase()
+                                .contains("content-type: image/jpeg")
+                        );
                         Json(json!({"data":[{"b64_json":STANDARD.encode(png(96,160))}]}))
                     }
                 },
@@ -213,6 +219,11 @@ fn image_edit_uses_multipart_returns_a_cached_image_and_never_retries_400() {
         .await
         .unwrap();
         assert!(output.exists());
+        assert_eq!(output.extension().unwrap(), "jpg");
+        assert_eq!(
+            image::guess_format(&std::fs::read(&output).unwrap()).unwrap(),
+            image::ImageFormat::Jpeg
+        );
         assert_ne!(output, original);
         assert_eq!(std::fs::read(&original).unwrap(), original_bytes);
         assert_eq!(
@@ -278,6 +289,174 @@ fn image_edit_uses_multipart_returns_a_cached_image_and_never_retries_400() {
         assert_eq!(std::fs::read(&original).unwrap(), original_bytes);
         std::fs::remove_dir_all(directory).unwrap();
         task.abort();
+    });
+}
+
+#[test]
+fn image_edit_uploads_jpeg_and_normalizes_provider_results_to_jpeg() {
+    use axum::{Json, routing::post};
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    runtime().block_on(async {
+        let directory =
+            std::env::temp_dir().join(format!("replayer-edit-formats-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let original = directory.join("original.png");
+        let original_bytes = png(32, 64);
+        std::fs::write(&original, &original_bytes).unwrap();
+        let hash = digest(&original_bytes);
+        // Some compatible gateways ignore output_format. They must still yield
+        // a JPEG cache after canvas reconstruction, without a second API call.
+        for (name, format) in [
+            ("webp", image::ImageFormat::WebP),
+            ("jpeg", image::ImageFormat::Jpeg),
+            ("png", image::ImageFormat::Png),
+        ] {
+            let mut response = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::new_rgb8(32, 64)
+                .write_to(&mut response, format)
+                .unwrap();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let observed = calls.clone();
+            let app = axum::Router::new().route(
+                "/v1/images/edits",
+                post(move |body: axum::body::Bytes| {
+                    let bytes = response.get_ref().clone();
+                    let calls = observed.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        let text = String::from_utf8_lossy(&body);
+                        assert!(text.contains("name=\"output_format\"\r\n\r\njpeg\r\n"));
+                        assert!(
+                            text.to_ascii_lowercase()
+                                .contains("content-type: image/jpeg")
+                        );
+                        let marker = b"filename=\"page.jpg\"";
+                        let header = body
+                            .windows(marker.len())
+                            .position(|p| p == marker)
+                            .unwrap();
+                        let start = header
+                            + body[header..]
+                                .windows(4)
+                                .position(|p| p == b"\r\n\r\n")
+                                .unwrap()
+                            + 4;
+                        assert_eq!(
+                            &body[start..start + 3],
+                            &[0xff, 0xd8, 0xff],
+                            "Upload bytes must be real JPEG"
+                        );
+                        assert!(!text.contains("output_compression"));
+                        Json(serde_json::json!({"data":[{"b64_json":STANDARD.encode(bytes)}]}))
+                    }
+                }),
+            );
+            let (base, server) = serve(app).await;
+            let settings = Settings {
+                image_base_url: format!("{base}/v1"),
+                image_model: "image-editor".into(),
+                image_key: "mock-only".into(),
+                ..Default::default()
+            };
+            let config = || {
+                translation::Config::load(&settings, crate::settings::Language::English).unwrap()
+            };
+            let translated = translation::translate(
+                config(),
+                &original,
+                &hash,
+                "comic",
+                &directory.join(name),
+                Arc::new(AtomicU64::new(0)),
+            )
+            .await
+            .unwrap();
+            assert_eq!(translated.extension().unwrap(), "jpg");
+            let bytes = std::fs::read(&translated).unwrap();
+            assert_eq!(
+                image::guess_format(&bytes).unwrap(),
+                image::ImageFormat::Jpeg
+            );
+            let image = cache::read_image(&bytes).unwrap();
+            assert_eq!((image.width(), image.height()), (32, 64));
+            assert_eq!(
+                translation::translate(
+                    config(),
+                    &original,
+                    &hash,
+                    "comic",
+                    &directory.join(name),
+                    Arc::new(AtomicU64::new(0))
+                )
+                .await
+                .unwrap(),
+                translated
+            );
+            assert_eq!(calls.load(Ordering::Relaxed), 1);
+            server.abort();
+        }
+        assert_eq!(std::fs::read(&original).unwrap(), original_bytes);
+        std::fs::remove_dir_all(directory).unwrap();
+    });
+}
+
+#[test]
+fn image_negotiation_preserves_original_bytes_and_explicit_provider_headers() {
+    use axum::routing::get;
+    runtime().block_on(async {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(32, 64)
+            .write_to(&mut bytes, image::ImageFormat::WebP)
+            .unwrap();
+        let bytes = bytes.into_inner();
+        let expected = bytes.clone();
+        let app = axum::Router::new().route(
+            "/image",
+            get(move |headers: axum::http::HeaderMap| {
+                let calls = observed.clone();
+                let bytes = bytes.clone();
+                async move {
+                    let accept = headers["accept"].to_str().unwrap();
+                    if calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                        assert_eq!(
+                            accept,
+                            "image/jpeg,image/webp;q=0.9,image/png;q=0.8,*/*;q=0.1"
+                        );
+                    } else {
+                        assert_eq!(accept, "image/png");
+                    }
+                    // Deliberately misleading MIME: decoding must inspect the actual bytes.
+                    ([("content-type", "image/png")], bytes)
+                }
+            }),
+        );
+        let (base, server) = serve(app).await;
+        let directory = std::env::temp_dir().join(format!(
+            "replayer-format-negotiation-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let url: reqwest::Url = format!("{base}/image").parse().unwrap();
+        let original = cache::fetch(&directory, "page", url.clone(), 1800)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&original.path).unwrap(), expected);
+        assert_eq!(original.hash, digest(&expected));
+        cache::fetch(&directory, "page", url.clone(), 1800)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        let mut request = source::ImageRequest::from(url);
+        request
+            .headers
+            .insert(reqwest::header::ACCEPT, "image/png".parse().unwrap());
+        cache::fetch(&directory, "another-page", request, 1800)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        server.abort();
+        std::fs::remove_dir_all(directory).unwrap();
     });
 }
 
@@ -376,6 +555,86 @@ fn live_dm5_empty_aggregator_falls_back_and_loads_first_middle_last_pages() {
             )
             .unwrap();
         }
+    });
+}
+
+#[test]
+#[ignore = "Samples up to three public pages per source; writes actual image formats to target/comic-format-review/source-audit.json"]
+fn live_source_image_formats() {
+    use serde_json::json;
+    runtime().block_on(async {
+        let directory = std::path::PathBuf::from("target/comic-format-review")
+            .join(format!("source-audit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let sources = source::Sources::connect().unwrap();
+        let mut rows = Vec::new();
+        for (provider, source) in sources.providers() {
+            let groups = match source.search("葬送").await {
+                Ok(groups) => groups,
+                Err(error) => {
+                    println!("{} search failed: {error}", provider.name);
+                    rows.push(json!({"provider":provider.name,"error":error.to_string()}));
+                    continue;
+                }
+            };
+            for group in groups {
+                let mut row = json!({
+                    "provider":provider.name,"site":group.site.name,"site_id":group.site.id,
+                    "search_results":group.books.len(),"samples":[],"errors":[],
+                });
+                if let Some(error) = group.error {
+                    row["errors"].as_array_mut().unwrap().push(json!(error));
+                }
+                // Try a second search result only if the first cannot be read.
+                for book in group.books.iter().take(2) {
+                    let result = async {
+                        let detail = source.detail(book).await?;
+                        let chapter = detail.chapters.first().ok_or_else(|| anyhow::anyhow!("No chapters"))?;
+                        let pages = source.pages(&detail.book, chapter, false).await?;
+                        anyhow::ensure!(!pages.is_empty(), "No pages");
+                        row["book"] = json!(detail.book.title);
+                        row["book_url"] = json!(detail.book.url);
+                        row["chapter"] = json!(chapter.name);
+                        let mut indices = vec![0, pages.len() / 2, pages.len() - 1];
+                        indices.dedup();
+                        for index in indices {
+                            let request = source.book_image_request(&detail.book, &pages[index])?;
+                            match cache::fetch(
+                                &directory,
+                                &format!("{}:{}:{index}", book.key(), chapter.key()),
+                                request,
+                                1800,
+                            ).await {
+                                Ok(image) => {
+                                    let bytes = std::fs::read(&image.path)?;
+                                    let format = image::guess_format(&bytes)?;
+                                    let sample = json!({"page":index + 1,"format":format!("{format:?}"),"bytes":bytes.len(),"path":image.path});
+                                    println!("{} / {} / {} / page {}: {format:?}, {} bytes", provider.name, group.site.name, detail.book.title, index + 1, bytes.len());
+                                    row["samples"].as_array_mut().unwrap().push(sample);
+                                }
+                                Err(error) => {
+                                    row["errors"].as_array_mut().unwrap().push(json!(format!("Page {}: {error}", index + 1)));
+                                    // Do not consume more quota after a quota or connection failure.
+                                    break;
+                                }
+                            }
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    }.await;
+                    if let Err(error) = result {
+                        row["errors"].as_array_mut().unwrap().push(json!(error.to_string()));
+                    }
+                    if !row["samples"].as_array().unwrap().is_empty() {
+                        break;
+                    }
+                }
+                println!("Source audit: {row}");
+                rows.push(row);
+            }
+        }
+        let report = json!({"unix_time":now(),"keyword":"葬送","accept":"image/jpeg,image/webp;q=0.9,image/png;q=0.8,*/*;q=0.1","sources":rows});
+        std::fs::write("target/comic-format-review/source-audit.json", serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        assert!(rows.iter().any(|row| row["samples"].as_array().is_some_and(|samples| !samples.is_empty())), "No source returned a readable image; inspect source-audit.json");
     });
 }
 

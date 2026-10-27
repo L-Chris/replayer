@@ -24,7 +24,13 @@ Comic library storage uses `rusqlite` 0.40.2 (MIT), which embeds SQLite through
 The rusqlite license is bundled in `licenses/rusqlite-MIT.txt`.
 Sources: https://github.com/rusqlite/rusqlite and https://sqlite.org/copyright.html .
 
-Windows packages include FFmpeg shared libraries from the BtbN LGPL shared build.
+Windows release packages include FFmpeg 9.0.2 shared libraries rebuilt in a
+digest-pinned BtbN LGPL shared-build environment. The public recipe is
+`scripts/build-windows-runtime.sh`, with shared encoding options in
+`scripts/ffmpeg-playback-options.sh`. Only unused encoding capabilities are
+removed; playback capabilities are compared against the full build configuration.
+Optimized packages include `FFmpeg-BUILD.txt` and the public build/verification
+recipes. Local bootstrap builds can still use the original verified BtbN archive.
 The FFmpeg license is included as `FFmpeg-LICENSE.txt`; the libraries remain
 separate DLLs and can be replaced with ABI-compatible builds.
 Packages include only `avcodec`, `avformat`, `avutil`, `swresample` and `swscale`.
@@ -42,12 +48,14 @@ The pinned archive and SHA-256 are recorded in `scripts/setup-windows.ps1`.
 The dependency release mirrors the unmodified, checksum-verified BtbN archive
 from `autobuild-2026-09-19-13-11`; upstream daily releases expire after 14 days.
 See the upstream build repository for bundled codec libraries, notices and source
-retrieval instructions. Replayer does not modify the FFmpeg libraries.
+retrieval instructions. The custom runtime builds unmodified FFmpeg source with a smaller encoder
+configuration; it does not patch FFmpeg source.
 
 macOS packages use FFmpeg 9.0.2 built without GPL/nonfree components and LAME 4.0
 as shared libraries. `Contents/Resources/licenses` contains their license texts;
 `Contents/Resources/sources` contains the matching unmodified source archives and
-`setup-macos.sh` with the public build recipe and SHA-256 values. Libraries remain
+`setup-macos.sh`, shared encoding options and the configuration verifier with
+the public build recipe and SHA-256 values. Libraries remain
 separate and replaceable with ABI-compatible builds (a changed bundle must be
 signed again). Sources:
 

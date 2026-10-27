@@ -4,11 +4,7 @@ use super::*;
 fn video_thumbnails_handle_short_clips_black_leaders_and_portrait_aspect() {
     let root = std::env::temp_dir().join(format!("replayer-thumbnails-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
-    let ffmpeg = PathBuf::from(std::env::var_os("FFMPEG_DIR").unwrap()).join(if cfg!(windows) {
-        "bin/ffmpeg.exe"
-    } else {
-        "bin/ffmpeg"
-    });
+    let ffmpeg = crate::test_config::ffmpeg();
     for (name, source, ratio) in [
         (
             "single-frame.mp4",

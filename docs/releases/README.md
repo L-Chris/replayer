@@ -1,8 +1,8 @@
 # Release notes
 
 Before creating a release tag, add its notes as `docs/releases/vX.Y.Z.md`.
-The Windows publishing workflow validates the file and uses it for the release
-body. Rebuilding an existing release preserves its body. See `AGENTS.md` for
+The desktop publishing workflow validates the file and uses it for the release
+body. Rebuilding an existing release preserves its body. See [AGENTS.md](../../AGENTS.md) for
 classification, translation, attribution and UTF-8 verification requirements.
 
 ```markdown

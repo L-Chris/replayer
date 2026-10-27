@@ -1,8 +1,10 @@
 param([switch]$Software, [switch]$Stress)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-$ffmpeg = Join-Path $PSScriptRoot '.deps/ffmpeg-n9.0.1-84-g946fcce07b-win64-lgpl-shared-9.0/bin/ffmpeg.exe'
-if (-not (Test-Path -LiteralPath $ffmpeg)) { throw 'Project FFmpeg binary is missing.' }
+$ffmpeg = $env:REPLAYER_TEST_FFMPEG
+if (-not $ffmpeg -or -not (Test-Path -LiteralPath $ffmpeg)) {
+    throw 'Set REPLAYER_TEST_FFMPEG to a full fixture-generation tool (setup-windows.ps1 -WithTestTools).'
+}
 $media = Join-Path $PSScriptRoot 'target/test-media'
 New-Item -ItemType Directory -Path $media -Force | Out-Null
 function Make-Media([string]$Name, [string[]]$Arguments) {

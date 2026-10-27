@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,10 @@ def main():
     os.chdir(root)
     binary = args.binary.resolve(strict=True)
     prefix = Path(os.environ['FFMPEG_DIR']).resolve(strict=True)
+    listing = run(prefix / 'bin/ffmpeg', '-hide_banner', '-encoders')
+    encoders = re.findall(r'^\s*[VAS][.A-Z]{5}\s+([a-z0-9_-]+)\s', listing, re.MULTILINE)
+    if encoders != ['libmp3lame']:
+        raise ValueError('Packages require only libmp3lame encoding; run scripts/setup-macos.sh first.')
     metadata = json.loads(run('cargo', 'metadata', '--no-deps', '--locked', '--format-version', '1'))
     version = next(p['version'] for p in metadata['packages'] if p['name'] == 'replayer')
     arch = architecture(binary)
@@ -48,7 +53,11 @@ def main():
         # Whitelist package resources; never copy settings, media or the working tree.
         shutil.copytree(prefix / 'share/replayer/licenses', resources / 'licenses')
         shutil.copytree(prefix / 'share/replayer/sources', resources / 'sources')
-        shutil.copy2(root / 'THIRD_PARTY.md', resources)
+        shutil.copy2(root / 'docs/third-party.md', resources / 'THIRD_PARTY.md')
+        shutil.copy2(root / 'README.md', resources)
+        (resources / 'docs').mkdir()
+        for name in ('guide.md', 'third-party.md'):
+            shutil.copy2(root / 'docs' / name, resources / 'docs' / name)
         shutil.copytree(root / 'licenses', resources / 'licenses/replayer')
         with (contents / 'Info.plist').open('wb') as file:
             plistlib.dump({

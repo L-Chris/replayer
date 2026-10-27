@@ -86,6 +86,12 @@ async fn download(
 ) -> Result<(Vec<u8>, Bitmap)> {
     let client = client(headers.contains_key("x-image-ticket"))?;
     let mut request = client.get(url).headers(headers.clone()).timeout(timeout);
+    if !headers.contains_key(reqwest::header::ACCEPT) {
+        request = request.header(
+            reqwest::header::ACCEPT,
+            "image/jpeg,image/webp;q=0.9,image/png;q=0.8,*/*;q=0.1",
+        );
+    }
     if let Some(referer) = referer {
         request = request.header(reqwest::header::REFERER, referer.as_str());
     }

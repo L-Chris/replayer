@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 from macos_bundle import architecture, run, verify_bundle
 
@@ -18,8 +19,11 @@ def main():
     root = Path(__file__).resolve().parents[1]
     os.chdir(root)
     directory = args.directory.resolve()
-    ffmpeg = Path(os.environ['FFMPEG_DIR']) / 'bin/ffmpeg'
-    arch = architecture(ffmpeg)
+    runtime = Path(os.environ['FFMPEG_DIR']) / 'bin/ffmpeg'
+    ffmpeg = os.environ.get('REPLAYER_TEST_FFMPEG') or shutil.which('ffmpeg')
+    assert ffmpeg and Path(ffmpeg).resolve() != runtime.resolve(), \
+        'Set REPLAYER_TEST_FFMPEG to a full external FFmpeg for fixture generation'
+    arch = architecture(runtime)
     rust_arch = 'aarch64' if arch == 'arm64' else arch
     manifest = directory / f'SHA256SUMS-macos-{rust_arch}.txt'
     files = []

@@ -27,19 +27,33 @@ try {
     New-Item -ItemType Directory -Path $iconDirectory -Force | Out-Null
     Copy-Item -LiteralPath 'assets/branding/replayer.ico' -Destination (Join-Path $iconDirectory $iconName)
     $ffmpeg = $env:FFMPEG_DIR
-    if (-not $ffmpeg) { $ffmpeg = Join-Path $root '.deps/ffmpeg-n9.0.1-84-g946fcce07b-win64-lgpl-shared-9.0' }
+    if (-not $ffmpeg) { $ffmpeg = Join-Path $root '.deps/ffmpeg-playback' }
+    $listing = @(& (Join-Path $ffmpeg 'bin/ffmpeg.exe') -hide_banner -encoders)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the playback runtime encoders.' }
+    $encoders = @($listing | ForEach-Object {
+        if ($_ -cmatch '^\s*[VAS][.A-Z]{5}\s+([a-z0-9_-]+)\s') { $Matches[1] }
+    })
+    if ($encoders.Count -ne 1 -or $encoders[0] -cne 'libmp3lame') {
+        throw 'Packages require the playback-only runtime with only libmp3lame encoding. Run setup-windows.ps1 -RuntimeArchive first.'
+    }
     $dlls = @(& "$PSScriptRoot/ffmpeg-runtime.ps1" -Binary $Binary -RuntimeDirectory (Join-Path $ffmpeg 'bin'))
     $dlls | Copy-Item -Destination $stage
     Copy-Item -LiteralPath 'README.md' -Destination $stage
-    Copy-Item -LiteralPath 'SUBTITLES.md' -Destination $stage
-    Copy-Item -LiteralPath 'MAGNET_PLAYBACK.md' -Destination $stage
-    Copy-Item -LiteralPath 'MUSIC_PLAYBACK.md' -Destination $stage
-    Copy-Item -LiteralPath 'MUSIC_SOURCES.md' -Destination $stage
-    Copy-Item -LiteralPath 'COMICS.md' -Destination $stage
-    Copy-Item -LiteralPath 'CLOUD_SYNC.md' -Destination $stage
-    Copy-Item -LiteralPath 'THIRD_PARTY.md' -Destination $stage
+    $userDocs = Join-Path $stage 'docs'
+    New-Item -ItemType Directory -Path $userDocs -Force | Out-Null
+    foreach ($name in @('guide.md', 'third-party.md')) {
+        Copy-Item -LiteralPath (Join-Path 'docs' $name) -Destination $userDocs
+    }
     Copy-Item -LiteralPath 'licenses' -Destination $stage -Recurse
     Copy-Item -LiteralPath (Join-Path $ffmpeg 'LICENSE.txt') -Destination (Join-Path $stage 'FFmpeg-LICENSE.txt')
+    if (Test-Path -LiteralPath (Join-Path $ffmpeg 'BUILD.txt')) {
+        Copy-Item -LiteralPath (Join-Path $ffmpeg 'BUILD.txt') -Destination (Join-Path $stage 'FFmpeg-BUILD.txt')
+        $recipes = Join-Path $stage 'ffmpeg-build'
+        New-Item -ItemType Directory -Path $recipes -Force | Out-Null
+        foreach ($name in @('build-windows-runtime.sh', 'ffmpeg-playback-options.sh', 'verify-ffmpeg-config.py')) {
+            Copy-Item -LiteralPath (Join-Path $ffmpeg $name) -Destination $recipes
+        }
+    }
     $zip = Join-Path $output "replayer-$version-windows-x86_64.zip"
     Compress-Archive -LiteralPath @(Get-ChildItem -LiteralPath $stage -Force | ForEach-Object FullName) -DestinationPath $zip -Force
     if (-not $SkipInstaller) {

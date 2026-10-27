@@ -16,7 +16,7 @@ rfd = "0.17.2"
 rtrb = "0.3"
 base64 = "0.22"
 futures-util = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "multipart", "query", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "macros", "sync"] }
@@ -32,7 +32,7 @@ librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls
 axum = "0.8"
 tokio-util = { version = "0.7", features = ["io"] }
 uuid = { version = "1", features = ["v4"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 tc_tea = { version = "0.2.1", default-features = false }
@@ -50,6 +50,7 @@ winresource = "0.1.31"
 [profile.release]
 lto = true
 codegen-units = 1
+strip = "symbols"
 
 # Keep the fixed debug preview responsive when decoding full comic pages.
 # Application code retains normal debug information and fast incremental builds.
