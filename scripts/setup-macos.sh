@@ -22,11 +22,15 @@ runtime="${REMDIA_RUNTIME_DIR:-$root/.deps/remdia-source/dist/remdia}"
 if [[ ! -f "$runtime/REVISION" ]] || [[ $(tr -d '\r\n' < "$runtime/REVISION") != "$revision" ]]; then
   source_dir="$root/.deps/remdia-source"
   if [[ ! -e "$source_dir/.git" ]]; then
-    mkdir -p "$root/.deps"
-    git clone --no-checkout https://github.com/L-Chris/remdia.git "$source_dir"
+    # A restored build cache may already contain source_dir/target. Initialize
+    # around it; a no-checkout clone also has no populated index to audit yet.
+    mkdir -p "$source_dir"
+    git -C "$source_dir" init
+    git -C "$source_dir" remote add origin https://github.com/L-Chris/remdia.git
+  else
+    git -C "$source_dir" diff --quiet
+    git -C "$source_dir" diff --cached --quiet
   fi
-  git -C "$source_dir" diff --quiet
-  git -C "$source_dir" diff --cached --quiet
   git -C "$source_dir" fetch --depth 1 origin "$revision"
   git -C "$source_dir" checkout --detach "$revision"
   MACOSX_DEPLOYMENT_TARGET="$minimum" "$source_dir/scripts/build-macos.sh" --release --target "$target"
