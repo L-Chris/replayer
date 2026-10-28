@@ -4,53 +4,44 @@ Run commands from the repository root. Use the fixed Cargo preview executable; d
 
 ## Windows
 
-Install Rust, Visual Studio C++ Build Tools/Windows SDK and LLVM with `libclang.dll`.
+Install Rust stable, Visual Studio C++ Build Tools/Windows SDK, CMake and Python 3.
 
 ```powershell
-./scripts/setup-windows.ps1 -WithTestTools
+./scripts/setup-windows.ps1
 ./scripts/preview.ps1
 ./scripts/preview.ps1 -Media "path/to/song.flac"
 ./scripts/preview.ps1 -NoLaunch
 ```
 
-Setup provides verified FFmpeg headers/libraries and configures `FFMPEG_DIR`, `LIBCLANG_PATH` and the runtime PATH for the current shell. Without a custom runtime archive it uses the original pinned full runtime for development. This fallback cannot be used to create release packages.
-
-For the optimized runtime, download the `windows-ffmpeg-runtime` CI artifact, keeping its ZIP and checksum manifest together under `target/windows-runtime`, then run:
-
-```powershell
-./scripts/setup-windows.ps1 -RuntimeArchive target/windows-runtime/ffmpeg-playback.zip -WithTestTools
-```
-
-`-WithTestTools` supplies a separate full FFmpeg and sets `REPLAYER_TEST_FFMPEG` for fixture generation. Its libraries are not added as the app's runtime. `preview.ps1` rebuilds/restarts only this checkout's `target/debug/replayer.exe`; a failed build never launches an older executable.
+Setup builds the exact remdia revision pinned in Cargo.toml. `-RuntimeDirectory`
+can select an already staged SDK runtime whose REVISION matches that pin.
+`preview.ps1` rebuilds/restarts only this checkout's `target/debug/replayer.exe`;
+a failed build never launches an older executable.
 
 ## macOS
 
-Requires macOS 15+, Rust, Xcode Command Line Tools and Homebrew build tools. Intel builds require NASM.
+Requires macOS 15+, Rust stable, Apple command-line tools and CMake.
 
 ```bash
-brew install pkg-config nasm
+brew install cmake
 ./scripts/build-macos.sh
 ./target/debug/replayer "path/to/video.mkv"
 ```
 
-The first build compiles checksum-pinned FFmpeg 9.0.2 and LAME 4.0 into `.deps/macos-aarch64` or `.deps/macos-x86_64`. Playback does not depend on Homebrew libraries. Before standalone Cargo commands, source the generated environment:
+The first build fetches and builds the pinned remdia SDK. Its native and
+VideoToolbox plugins are copied beside the fixed preview executable. Before
+standalone Cargo commands, source the generated environment:
 
 ```bash
 source .deps/macos-aarch64/env.sh  # use macos-x86_64 on Intel
 ```
 
-Fixture generation needs a separate full tool:
-
-```bash
-brew install ffmpeg
-export REPLAYER_TEST_FFMPEG="$(brew --prefix ffmpeg)/bin/ffmpeg"
-```
-
-The app's runtime remains the pinned `.deps` build. Do not use the Windows paths in `.cargo/config.toml` for native macOS builds.
+Both platforms use remdia by default, without FFmpeg or an external fixture
+generator. See [media integration](remdia.md) for graphs and current codec limits.
 
 ## Checks
 
-With the platform environment and fixture tool configured:
+With the platform runtime configured:
 
 ```text
 cargo fmt --all -- --check
@@ -58,7 +49,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-Use `REPLAYER_SETTINGS_FILE` pointing inside `target/` to isolate developer settings. Ordinary tests use generated media and local mock services, and do not consume model credits. Tests find the full fixture executable through `REPLAYER_TEST_FFMPEG`, or on PATH outside `FFMPEG_DIR`.
+Use `REPLAYER_SETTINGS_FILE` pointing inside `target/` to isolate developer settings. Ordinary tests use committed synthetic media and local mock services, and do not consume model credits. Set `REPLAYER_NATIVE_FIXTURES` to `.deps/remdia-source/tests/fixtures` and run `cargo test --locked native_media -- --ignored --nocapture` for the real plugin tests.
 
 Additional checks are explicit:
 
@@ -72,7 +63,7 @@ cargo test --locked music_sources
 
 GPU/visual tests require an adapter. Visual artifacts are written under `target/`. Live source/model tests are ignored by default and may use the network or incur service charges. Their test-only helper reads `.env.example`-documented values from an explicit `.env` or `REPLAYER_ENV_FILE`; the app, preview and subtitle CLI never read those files.
 
-On Windows, `./verify.ps1` generates playback fixtures with `REPLAYER_TEST_FFMPEG`; `-Software` forces software decoding and `-Stress` adds a larger case. CLI smoke tests are `replayer --selftest <video>` and `replayer --selftest-music <audio>`; the music check uses the actual output device. Keep all fixtures/logs inside `target/`.
+On Windows, `./verify.ps1` reuses the fixed preview and committed MP4/MKV corpus; `-Software` forces software decoding and `-Stress` repeats the seek/drain regressions 25 times. CLI smoke tests are `replayer --selftest <video>` and `replayer --selftest-music <audio>`; the music check uses the actual output device. Keep all fixtures/logs inside `target/`.
 
 ## Diagnostics and CLI
 
@@ -94,8 +85,13 @@ The CLI uses saved provider/model settings, preserves absolute media timestamps 
 
 Release Rust builds use LTO, one codegen unit and stripped symbols. Debug previews keep their symbols. HTTP clients share reqwest 0.13 and the AWS-LC rustls provider; the separate `ring` dependency remains for cloud-sync encryption.
 
-Both FFmpeg builds source `scripts/ffmpeg-playback-options.sh`. All playback decoders, demuxers, protocols and hardware acceleration from the platform baseline remain available; only the MP3 encoder used by subtitle uploads is enabled. Test encoders and pure video-encoding libraries are excluded. Both packagers inspect the actual runtime's encoder list and reject extra encoders.
+Both platforms package replaceable remdia component packs and manifests. Audio
+codecs, resampling, subtitle MP3 encoding and pixel conversion stay in the native
+pack; Windows MFT and macOS VideoToolbox supply platform video decoding. Core
+and host do not link the codec implementations. macOS copies CPU NV12 planes to
+WGPU; Metal texture sharing and HDR remain future work.
 
-Windows uses `scripts/build-windows-runtime.sh` with a digest-pinned BtbN LGPL build image and checksum-pinned FFmpeg source. Run it on Linux/macOS with Docker and Python 3. It compares the optimized configuration against the full baseline and fails on lost playback capabilities. The ZIP and checksum manifest are written to `target/windows-runtime/`; CI caches them by recipe hashes. Windows setup verifies the manifest and refreshes extraction when its archive changes.
-
-macOS builds its shared runtime locally and includes matching source archives and the public recipe. No test tool, Homebrew runtime tree, environment dump or user data is packaged. See [releasing](releasing.md) for package commands and [architecture](architecture.md) for implementation boundaries.
+Packagers verify architecture, ABI, revision and native imports and reject FFmpeg
+runtime files. No test tool, Homebrew runtime tree, environment dump or user data
+is packaged. See [releasing](releasing.md) for package commands and
+[architecture](architecture.md) for implementation boundaries.

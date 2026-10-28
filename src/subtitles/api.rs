@@ -552,11 +552,17 @@ mod tests {
                     audio
                 };
                 let decoded = STANDARD.decode(audio).unwrap();
-                assert!(decoded.starts_with(if audio_format == "wav" {
-                    b"RIFF".as_slice()
+                if audio_format == "wav" {
+                    assert!(decoded.starts_with(b"RIFF"));
                 } else {
-                    b"ID3".as_slice()
-                }));
+                    // ID3 is optional; a valid MP3 may start at its MPEG frame.
+                    assert!(
+                        decoded.starts_with(b"ID3")
+                            || (decoded.len() >= 2
+                                && decoded[0] == 0xff
+                                && decoded[1] & 0xe0 == 0xe0)
+                    );
+                }
                 let content = if bilingual {
                     r#"{"c":[{"s":0,"e":0.1,"t":"测试","o":"Test"}]}"#
                 } else {

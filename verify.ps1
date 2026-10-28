@@ -1,36 +1,22 @@
 param([switch]$Software, [switch]$Stress)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-$ffmpeg = $env:REPLAYER_TEST_FFMPEG
-if (-not $ffmpeg -or -not (Test-Path -LiteralPath $ffmpeg)) {
-    throw 'Set REPLAYER_TEST_FFMPEG to a full fixture-generation tool (setup-windows.ps1 -WithTestTools).'
-}
-$media = Join-Path $PSScriptRoot 'target/test-media'
-New-Item -ItemType Directory -Path $media -Force | Out-Null
-function Make-Media([string]$Name, [string[]]$Arguments) {
-    & $ffmpeg -hide_banner -loglevel error -y @Arguments (Join-Path $media $Name)
-    if ($LASTEXITCODE -ne 0) { throw "FFmpeg failed: $Name" }
-}
-Make-Media 'silent.mp4' @('-f','lavfi','-i','testsrc2=size=640x360:rate=30:duration=4','-c:v','mpeg4','-g','90','-bf','2','-q:v','4')
-Make-Media 'audio-short.mp4' @('-f','lavfi','-i','testsrc2=size=640x360:rate=30:duration=4','-f','lavfi','-i','sine=frequency=440:sample_rate=44100:duration=2','-c:v','mpeg4','-g','90','-bf','2','-c:a','aac')
-Make-Media 'video-short.mp4' @('-f','lavfi','-i','testsrc2=size=640x360:rate=30:duration=2','-f','lavfi','-i','sine=frequency=440:sample_rate=44100:duration=4','-c:v','mpeg4','-g','90','-bf','2','-c:a','aac')
-Make-Media 'h264.mp4' @('-f','lavfi','-i','testsrc2=size=1920x1080:rate=30:duration=4','-f','lavfi','-i','sine=frequency=440:sample_rate=44100:duration=4','-c:v','libopenh264','-g','90','-c:a','aac')
-Make-Media '4k.mp4' @('-f','lavfi','-i','testsrc2=size=3840x2160:rate=30:duration=3','-f','lavfi','-i','sine=frequency=440:sample_rate=44100:duration=3','-c:v','libopenh264','-g','90','-c:a','aac')
-Make-Media 'audio-delayed.mp4' @('-f','lavfi','-i','testsrc2=size=640x360:rate=30:duration=4','-itsoffset','1','-f','lavfi','-i','sine=frequency=440:sample_rate=44100:duration=3','-c:v','mpeg4','-bf','2','-c:a','aac')
-$cases = @('silent.mp4','audio-short.mp4','video-short.mp4','h264.mp4','4k.mp4','audio-delayed.mp4')
-if ($Stress) {
-    Make-Media 'large-short-audio.mp4' @('-f','lavfi','-i','testsrc2=size=3840x2160:rate=30:duration=12','-f','lavfi','-i','sine=frequency=440:sample_rate=44100:duration=0.5','-c:v','mpeg4','-q:v','1','-g','30','-c:a','aac')
-    $cases += 'large-short-audio.mp4'
-}
-# A separate executable allows checking while the regular player is running.
-cargo rustc --locked --bin replayer -- -o target/debug/replayer-verify.exe
+./scripts/preview.ps1 -NoLaunch
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+$fixtures = $env:REPLAYER_NATIVE_FIXTURES
+if (-not $fixtures) { $fixtures = Join-Path $PSScriptRoot '.deps/remdia-source/tests/fixtures' }
+$metadata = cargo metadata --no-deps --locked --format-version 1 | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed.' }
+$executable = Join-Path $metadata.target_directory 'debug/replayer.exe'
 $previousSoftware = $env:REPLAYER_SOFTWARE
 try {
     if ($Software) { $env:REPLAYER_SOFTWARE = '1' }
-    foreach ($name in $cases) {
-        & ./target/debug/replayer-verify.exe --selftest (Join-Path $media $name)
-        if ($LASTEXITCODE -ne 0) { throw "Regression failed: $name" }
+    $count = if ($Stress) { 25 } else { 1 }
+    for ($index = 0; $index -lt $count; $index++) {
+        foreach ($name in @('av.mp4','av.mkv')) {
+            & $executable --selftest (Join-Path $fixtures $name)
+            if ($LASTEXITCODE -ne 0) { throw "Playback regression failed: $name" }
+        }
     }
 } finally {
     if ($null -eq $previousSoftware) { Remove-Item Env:REPLAYER_SOFTWARE -ErrorAction SilentlyContinue }

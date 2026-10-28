@@ -6,8 +6,14 @@ pub fn engine() -> Result<remdia::Engine> {
     } else {
         let executable = std::env::current_exe()?;
         let parent = executable.parent().context("executable directory")?;
+        let bundle = parent.parent().unwrap_or(parent).join("Frameworks/remdia");
         let direct = parent.join("plugins");
-        if direct.is_dir() {
+        if cfg!(target_os = "macos")
+            && parent.file_name().is_some_and(|n| n == "MacOS")
+            && bundle.is_dir()
+        {
+            bundle
+        } else if direct.is_dir() {
             direct
         } else {
             parent.parent().unwrap_or(parent).join("plugins")

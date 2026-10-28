@@ -1,12 +1,6 @@
 mod api;
-#[cfg(not(any(windows, feature = "remdia-media")))]
-mod audio;
-#[cfg(any(windows, feature = "remdia-media"))]
 #[path = "native/audio.rs"]
 mod audio;
-#[cfg(not(any(windows, feature = "remdia-media")))]
-mod mp3;
-#[cfg(any(windows, feature = "remdia-media"))]
 #[path = "native/mp3.rs"]
 mod mp3;
 mod scheduler;
@@ -185,15 +179,13 @@ fn generate_with_client(
         through: 0.0,
         total,
     });
-    // Blocking FFmpeg reads stay off the async executor. Both the decode queue
+    // Blocking media reads stay off the async executor. Both the decode queue
     // and the ordered request window are bounded by the configured concurrency.
     let (sender, receiver) = tokio::sync::mpsc::channel(options.concurrency);
-    #[cfg(any(windows, feature = "remdia-media"))]
     let audio = audio.into_transfer();
     let decoder = std::thread::Builder::new()
         .name("replayer-subtitle-audio".into())
         .spawn(move || {
-            #[cfg(any(windows, feature = "remdia-media"))]
             let mut audio = match audio.open() {
                 Ok(audio) => audio,
                 Err(error) => {

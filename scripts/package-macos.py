@@ -24,15 +24,17 @@ def main():
     root = Path(__file__).resolve().parents[1]
     os.chdir(root)
     binary = args.binary.resolve(strict=True)
-    prefix = Path(os.environ['FFMPEG_DIR']).resolve(strict=True)
-    listing = run(prefix / 'bin/ffmpeg', '-hide_banner', '-encoders')
-    encoders = re.findall(r'^\s*[VAS][.A-Z]{5}\s+([a-z0-9_-]+)\s', listing, re.MULTILINE)
-    if encoders != ['libmp3lame']:
-        raise ValueError('Packages require only libmp3lame encoding; run scripts/setup-macos.sh first.')
+    prefix = Path(os.environ.get('REMDIA_RUNTIME_DIR', '.deps/remdia-source/dist/remdia')).resolve(strict=True)
+    cargo = (root / 'Cargo.toml').read_text()
+    revision = re.search(r'^remdia\s*=\s*\{[^}]*rev\s*=\s*"([a-f0-9]{40})"', cargo, re.M)[1]
+    if (prefix / 'REVISION').read_text().strip() != revision:
+        raise ValueError('Runtime revision differs from Cargo.toml; run scripts/setup-macos.sh.')
     metadata = json.loads(run('cargo', 'metadata', '--no-deps', '--locked', '--format-version', '1'))
     version = next(p['version'] for p in metadata['packages'] if p['name'] == 'replayer')
     arch = architecture(binary)
     rust_arch = 'aarch64' if arch == 'arm64' else arch
+    tree = run('cargo', 'tree', '--locked', '--target', rust_arch + '-apple-darwin', '-e', 'normal', '--prefix', 'none')
+    assert not re.search(r'^ffmpeg', tree, re.M | re.I), 'Cargo dependencies still contain FFmpeg'
     minimum = os.environ.get('MACOSX_DEPLOYMENT_TARGET', '15.0')
     output = args.output_directory.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -51,14 +53,27 @@ def main():
         libraries = embed_libraries(executable, contents / 'Frameworks', prefix)
         shutil.copy2(root / 'assets/branding/replayer.icns', resources)
         # Whitelist package resources; never copy settings, media or the working tree.
-        shutil.copytree(prefix / 'share/replayer/licenses', resources / 'licenses')
-        shutil.copytree(prefix / 'share/replayer/sources', resources / 'sources')
+        sdk_notices = resources / 'remdia'
+        sdk_notices.mkdir()
+        for name in ('REVISION', 'THIRD_PARTY.md', 'LICENSE'):
+            shutil.copy2(prefix / name, sdk_notices / name)
+        shutil.copytree(prefix / 'licenses', sdk_notices / 'licenses')
+        (sdk_notices / 'BUILD.txt').write_text(
+            f'SDK source: https://github.com/L-Chris/remdia/tree/{revision}\n'
+            f'Source archive: https://github.com/L-Chris/remdia/archive/{revision}.tar.gz\n'
+            'Install Rust stable, CMake and Apple command-line tools. On matching macOS 15+ hardware:\n'
+            f'git clone https://github.com/L-Chris/remdia.git\ncd remdia\ngit checkout {revision}\n'
+            f'./scripts/build-macos.sh --release --target {rust_arch}-apple-darwin\n'
+            'Cargo.lock fixes the exact source distributions and checksums, including vendored LAME/Opus.\n'
+            'Replace the matching dylib in Contents/Frameworks/remdia with an ABI-compatible rebuild,\n'
+            'then codesign --force --sign - LIBRARY and codesign --force --sign - replayer.app.\n',
+            encoding='utf-8')
         shutil.copy2(root / 'docs/third-party.md', resources / 'THIRD_PARTY.md')
         shutil.copy2(root / 'README.md', resources)
         (resources / 'docs').mkdir()
         for name in ('guide.md', 'third-party.md'):
             shutil.copy2(root / 'docs' / name, resources / 'docs' / name)
-        shutil.copytree(root / 'licenses', resources / 'licenses/replayer')
+        shutil.copytree(root / 'licenses', resources / 'licenses')
         with (contents / 'Info.plist').open('wb') as file:
             plistlib.dump({
                 'CFBundleName': 'replayer', 'CFBundleDisplayName': 'replayer',

@@ -95,8 +95,7 @@ pub(super) fn run_with_cache(
         "concurrency must be between 1 and 6"
     );
     let started = Instant::now();
-    #[cfg_attr(any(windows, feature = "remdia-media"), allow(unused_mut))]
-    let mut audio = loop {
+    let audio = loop {
         ensure!(!cancel.load(Ordering::Acquire), "字幕生成已取消");
         let before = cache.as_ref().map_or(0, |c| c.load(Ordering::Acquire));
         match audio::AudioChunks::open(path, cancel.clone(), client.chunk_seconds()) {
@@ -136,12 +135,10 @@ pub(super) fn run_with_cache(
     );
     let (tx, rx) = crossbeam_channel::unbounded::<Decode>();
     let worker_cancel = cancel.clone();
-    #[cfg(any(windows, feature = "remdia-media"))]
     let audio = audio.into_transfer();
     let decoder = std::thread::Builder::new()
         .name("replayer-subtitle-audio".into())
         .spawn(move || {
-            #[cfg(any(windows, feature = "remdia-media"))]
             let mut audio = match audio.open() {
                 Ok(audio) => audio,
                 Err(error) => {

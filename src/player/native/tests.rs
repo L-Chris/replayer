@@ -118,9 +118,9 @@ fn native_media_drop_interrupts_blocked_network_open() {
     server.join().unwrap();
     assert!(reaped, "native graph worker was not reclaimed");
 }
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
-#[ignore = "requires Windows Media Foundation and remdia DLLs"]
+#[ignore = "requires staged platform video components"]
 fn native_media_video_playback_pause_seek_and_drain() {
     let mut p = Player::open(fixture("av.mp4")).unwrap();
     until(&mut p, Duration::from_secs(8), |p, _| p.position() > 0.15);

@@ -44,21 +44,6 @@ pub(super) fn filename(song: &Song, quality: &str, extension: &str) -> String {
         extension
     )
 }
-#[cfg(not(any(windows, feature = "remdia-media")))]
-pub(super) fn validate(path: &Path) -> Result<()> {
-    // Opening only completed local files avoids signed URLs entering FFmpeg logs.
-    let media = ffmpeg_next::format::input(path)
-        .map_err(|_| anyhow!("Downloaded file is not playable audio"))?;
-    ensure!(
-        media
-            .streams()
-            .best(ffmpeg_next::media::Type::Audio)
-            .is_some(),
-        "Downloaded file has no audio track"
-    );
-    Ok(())
-}
-#[cfg(any(windows, feature = "remdia-media"))]
 pub(super) fn validate(path: &Path) -> Result<()> {
     let mut request = remdia::Request::playback(path.to_string_lossy());
     request.task = remdia::Task::Probe;

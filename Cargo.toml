@@ -10,8 +10,8 @@ cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
 eframe = "0.36"
 egui-phosphor = { version = "0.14", features = ["subset"] }
-# Windows playback and subtitle export use independent remdia component graphs.
-remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "911a19c7f7dab09aefaadf4f695c0d7f229c8a8a" }
+# Playback and subtitle export use independent remdia component graphs.
+remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "0cc821d6b086ebc724a5b4da9d211a668c655850" }
 rfd = "0.17.2"
 rtrb = "0.3"
 base64 = "0.22"
@@ -39,12 +39,8 @@ tc_tea = { version = "0.2.1", default-features = false }
 replayer-image = { path = "crates/replayer-image" }
 
 [features]
-# Windows always uses remdia. This feature also enables its portable audio path
-# on other hosts for integration tests; native video remains Windows-only.
+# Compatibility alias: remdia is now the default on every host.
 remdia-media = []
-
-[target.'cfg(not(windows))'.dependencies]
-ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "format", "software-resampling", "software-scaling"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }

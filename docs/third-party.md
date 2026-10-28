@@ -24,16 +24,16 @@ Comic library storage uses `rusqlite` 0.40.2 (MIT), which embeds SQLite through
 The rusqlite license is bundled in `licenses/rusqlite-MIT.txt`.
 Sources: https://github.com/rusqlite/rusqlite and https://sqlite.org/copyright.html .
 
-Windows source builds use remdia's independently loaded native and Windows
-Media Foundation component DLLs. The executable and component packs do not link
+Windows and macOS source builds use remdia's independently loaded native and
+platform video plugins (Media Foundation / VideoToolbox). The executable and component packs do not link
 to FFmpeg. `Cargo.toml` pins the SDK source revision; `scripts/setup-windows.ps1`
-builds that revision and packaging includes its `REVISION`, `THIRD_PARTY.md`
+and `scripts/setup-macos.sh` build that revision and packaging includes its `REVISION`, `THIRD_PARTY.md`
 and license texts. Published releases built before this migration retain their
 original bundled notices.
 
 The native pack contains Symphonia (MPL-2.0), libopus (BSD-3-Clause), Rubato
 (MIT), and LAME / mp3lame-encoder (LGPL). The LGPL encoder is contained in the
-replaceable native DLL. The matching source revision, dependencies and rebuild
+replaceable native plugin. The matching source revision, dependencies and rebuild
 instructions are recorded in the SDK's third-party notices; its Cargo.lock pins
 the codec dependencies. Windows Media Foundation is supplied by the operating
 system; codec availability depends on the installed Windows components.
@@ -44,16 +44,14 @@ system; codec availability depends on the installed Windows components.
 - https://opus-codec.org/
 - https://lame.sourceforge.io/
 
-macOS packages use FFmpeg 9.0.2 built without GPL/nonfree components and LAME 4.0
-as shared libraries. `Contents/Resources/licenses` contains their license texts;
-`Contents/Resources/sources` contains the matching unmodified source archives and
-`setup-macos.sh`, shared encoding options and the configuration verifier with
-the public build recipe and SHA-256 values. Libraries remain
-separate and replaceable with ABI-compatible builds (a changed bundle must be
-signed again). Sources:
-
-- https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
-- https://downloads.sourceforge.net/project/lame/lame/4.0/lame-4.0.tar.gz
+macOS packages include the same native codec pack plus a VideoToolbox plugin.
+Apple VideoToolbox, CoreMedia, CoreVideo and CoreFoundation are operating-system
+frameworks; their binaries are not redistributed. AVC/HEVC parameter parsing
+uses h264-reader and scuffle-h265 (MIT OR Apache-2.0); corresponding licenses are
+included with the SDK notices. `Contents/Resources/remdia` records the exact SDK
+revision, public source archive URL, licenses and rebuild/replacement commands.
+The component dylibs stay separate and replaceable; modified bundles must be
+signed again. Current builds have no FFmpeg runtime or test-tool dependency.
 
 Magnet playback embeds `librqbit` 9.0.1 and its rqbit support crates, Copyright
 2021 Igor Katson, licensed under Apache-2.0. The license is bundled in

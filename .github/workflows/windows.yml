@@ -1,7 +1,7 @@
 name: Desktop build and release
 on:
   push:
-    branches: [main, feat/remdia-windows]
+    branches: [main, feat/remdia-windows, feat/remdia-macos]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -90,6 +90,8 @@ jobs:
         run: cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
       - name: Native component integration tests
         run: cargo test --locked --target x86_64-pc-windows-msvc native_media -- --ignored --nocapture
+      - name: Offline host regression tests
+        run: cargo test --locked --target x86_64-pc-windows-msvc
       - name: Clock and color checks
         shell: pwsh
         run: |
@@ -148,7 +150,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'pull_request'
+    if: github.ref != 'refs/heads/feat/remdia-windows'
     name: macOS (${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -183,39 +185,44 @@ jobs:
             exit 1
           fi
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
-      - name: Install build tools
-        run: |
-          brew install pkg-config nasm ffmpeg
-          echo "REPLAYER_TEST_FFMPEG=$(brew --prefix ffmpeg)/bin/ffmpeg" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
-        with:
-          path: |
-            .deps/macos-${{ matrix.arch }}
-            .deps/macos-sources
-          key: macos-runtime-${{ matrix.target }}-${{ hashFiles('scripts/setup-macos.sh', 'scripts/ffmpeg-playback-options.sh', 'scripts/verify-ffmpeg-config.py') }}
-      - name: Set up pinned FFmpeg, LAME and libclang
-        run: ./scripts/setup-macos.sh
-      - uses: actions/cache@v4
+      - name: Install native build tools
+        run: command -v cmake || brew install cmake
+      - uses: actions/cache/restore@v4
+        id: mac-cache
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target/${{ matrix.target }}
-            target/debug
-          key: macos-rust-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'scripts/setup-macos.sh') }}
-          restore-keys: |
-            macos-rust-v2-${{ matrix.target }}-
-            macos-rust-${{ matrix.target }}-
-      - name: Lint and test
+            .deps/remdia-source/target
+            target
+          key: macos-remdia-v3-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macos-remdia-v3-${{ matrix.target }}-
+      - name: Build pinned native SDK
         run: |
+          REMDIA_TARGET='${{ matrix.target }}' ./scripts/setup-macos.sh
+          echo "REPLAYER_NATIVE_FIXTURES=$PWD/.deps/remdia-source/tests/fixtures" >> "$GITHUB_ENV"
+      - name: Lint and test host plus real media components
+        run: |
+          source '.deps/macos-${{ matrix.arch }}/env.sh'
           cargo clippy --locked --target '${{ matrix.target }}' --all-targets -- -D warnings
           REPLAYER_SETTINGS_FILE="$PWD/target/ci-macos-settings.json" cargo test --locked --target '${{ matrix.target }}'
+          cargo test --locked --target '${{ matrix.target }}' native_media -- --ignored --nocapture
       - name: Build macOS application
-        run: cargo build --locked --release --target '${{ matrix.target }}'
+        run: ./scripts/build-macos.sh --release --target '${{ matrix.target }}'
       - name: Package and test relocated application
         run: |
+          source '.deps/macos-${{ matrix.arch }}/env.sh'
           python3 scripts/package-macos.py --binary 'target/${{ matrix.target }}/release/replayer' --output-directory 'dist/macos-${{ matrix.arch }}'
           python3 scripts/test-macos-package.py --directory 'dist/macos-${{ matrix.arch }}'
+      - uses: actions/cache/save@v4
+        if: always() && steps.mac-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .deps/remdia-source/target
+            target
+          key: ${{ steps.mac-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
           name: replayer-${{ env.APP_VERSION }}-macos-${{ matrix.arch }}

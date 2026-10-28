@@ -1,6 +1,7 @@
 """Mach-O dependency relocation and verification shared by packaging and smoke tests."""
 from pathlib import Path
 import os
+import json
 import plistlib
 import re
 import shutil
@@ -49,52 +50,31 @@ def minimum_version(path):
 
 
 def embed_libraries(executable, framework_dir, prefix):
-    """Copy only the dependency closure; fail rather than ship unrelated host libraries."""
-    prefix = prefix.resolve()
-    framework_dir.mkdir()
-    sources = {}
-    names = {}
-
-    def resolve(dependency, loader):
-        if dependency.startswith('@loader_path/'):
-            candidate = loader.parent / dependency[len('@loader_path/'):]
-        elif dependency.startswith('@executable_path/'):
-            candidate = executable.parent / dependency[len('@executable_path/'):]
-        elif dependency.startswith('@rpath/'):
-            candidate = prefix / 'lib' / dependency[len('@rpath/'):]
-        else:
-            candidate = Path(dependency)
-        candidate = candidate.resolve(strict=True)
-        if not candidate.is_relative_to(prefix / 'lib'):
-            raise ValueError(f'Non-system dependency outside the pinned runtime: {candidate}. '
-                             'Build using scripts/build-macos.sh.')
-        return candidate
-
-    def visit(source, destination):
-        for dependency in dependencies(source):
-            if system_library(dependency):
-                continue
-            library = resolve(dependency, source)
-            if library not in sources:
-                if library.name in names and names[library.name] != library:
-                    raise ValueError(f'Conflicting library names: {library.name}')
-                names[library.name] = library
-                copied = framework_dir / library.name
-                sources[library] = copied
-                shutil.copy2(library, copied)
-                copied.chmod(0o755)
-                visit(library, copied)
-            run('install_name_tool', '-change', dependency, '@rpath/' + library.name, destination)
-
-    # The executable was copied into its final bundle location before this call.
-    visit(executable, executable)
-    for library in sources.values():
-        run('install_name_tool', '-id', '@rpath/' + library.name, library)
-    for binary in [executable, *sources.values()]:
+    """Explicitly embed dlopen packs, which are absent from the host import list."""
+    plugins = prefix / 'plugins'
+    destination = framework_dir / 'remdia'
+    destination.mkdir(parents=True)
+    libraries = []
+    for name in ('native', 'macos'):
+        manifest = plugins / (name + '.json')
+        data = json.loads(manifest.read_text())
+        library = data['library']
+        if Path(library).name != library or library != f'libremdia_backend_{name}.dylib':
+            raise ValueError(f'Unexpected component filename: {library}')
+        shutil.copy2(manifest, destination / manifest.name)
+        copied = destination / library
+        shutil.copy2(plugins / library, copied)
+        copied.chmod(0o755)
+        libraries.append(copied)
+        run('install_name_tool', '-id', '@rpath/remdia/' + library, copied)
+    for binary in [executable, *libraries]:
+        for dependency in dependencies(binary):
+            if not system_library(dependency):
+                raise ValueError(f'Unexpected non-system import: {binary}: {dependency}')
         for path in rpaths(binary):
             run('install_name_tool', '-delete_rpath', path, binary)
     run('install_name_tool', '-add_rpath', '@executable_path/../Frameworks', executable)
-    return list(sources.values())
+    return libraries
 
 
 def sign_bundle(app, libraries):
@@ -119,21 +99,34 @@ def verify_bundle(app, expected_arch, expected_version=None):
     minimum = tuple((list(map(int, info['LSMinimumSystemVersion'].split('.'))) + [0, 0])[:3])
     icon = contents / 'Resources' / info['CFBundleIconFile']
     assert icon.read_bytes()[:4] == b'icns', 'Missing macOS application icon'
-    assert {file.name for file in (contents / 'Resources/sources').iterdir()} == {
-        'ffmpeg-9.0.2.tar.xz', 'lame-4.0.tar.gz', 'setup-macos.sh',
-        'ffmpeg-playback-options.sh', 'verify-ffmpeg-config.py', 'BUILD.txt'
-    }, 'Package sources must contain only the public build recipe and matching source archives'
-    executable = contents / 'MacOS' / 'replayer'
+    notices = contents / 'Resources/remdia'
+    revision = (notices / 'REVISION').read_text().strip()
+    assert re.fullmatch('[a-f0-9]{40}', revision), 'Invalid SDK revision'
+    for name in ('THIRD_PARTY.md', 'LICENSE', 'BUILD.txt'):
+        assert (notices / name).is_file(), 'Missing SDK source/rebuild notice: ' + name
+    assert any((notices / 'licenses').iterdir()), 'Missing codec licenses'
+    executable = contents / 'MacOS/replayer'
     framework_dir = contents / 'Frameworks'
-    libraries = list(framework_dir.glob('*.dylib'))
-    assert libraries, 'Missing bundled FFmpeg runtime'
-    for binary in [executable, *libraries]:
+    plugins = framework_dir / 'remdia'
+    expected_files = {'native.json', 'macos.json', 'libremdia_backend_native.dylib',
+                      'libremdia_backend_macos.dylib'}
+    assert {p.name for p in plugins.iterdir()} == expected_files, 'Unexpected component pack'
+    assert {p.name for p in framework_dir.iterdir()} == {'remdia'}
+    for name in ('native', 'macos'):
+        manifest = json.loads((plugins / (name + '.json')).read_text())
+        assert manifest['id'] == name and manifest['os'] == 'macos'
+        assert manifest['abi_major'] == 2 and manifest.get('abi_minor', 0) <= 1
+        assert manifest['arch'] == ('aarch64' if expected_arch == 'arm64' else expected_arch)
+        assert manifest['library'] == f'libremdia_backend_{name}.dylib'
+    forbidden = re.compile(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale)', re.I)
+    for path in contents.rglob('*'):
+        assert not forbidden.search(path.name), 'Unexpected legacy runtime: ' + str(path)
+    for binary in [executable, *plugins.glob('*.dylib')]:
         assert architecture(binary) == expected_arch, binary
         assert minimum_version(binary) <= minimum, f'{binary} requires a newer macOS than Info.plist'
         for dependency in dependencies(binary):
-            if not system_library(dependency):
-                assert dependency.startswith('@rpath/'), (binary, dependency)
-                assert (framework_dir / dependency[len('@rpath/'):]).is_file(), (binary, dependency)
+            assert system_library(dependency), (binary, dependency)
+            assert not forbidden.search(dependency), (binary, dependency)
         assert all(path == '@executable_path/../Frameworks' for path in rpaths(binary)), binary
     run('codesign', '--verify', '--deep', '--strict', app)
     return info

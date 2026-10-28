@@ -368,31 +368,10 @@ async fn mp3_flac_and_tail_indexed_m4a_start_while_background_download_is_blocke
         .join("target/test-data")
         .join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(&directory).unwrap();
-    for (extension, codec, bitrate) in [
-        ("mp3", "libmp3lame", "320k"),
-        ("flac", "flac", "320k"),
-        ("m4a", "aac", "320k"),
-    ] {
-        let file = directory.join(format!("sample.{extension}"));
-        let ffmpeg = crate::test_config::ffmpeg();
-        let status = std::process::Command::new(ffmpeg)
-            .args([
-                "-v",
-                "error",
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                "anoisesrc=color=white:sample_rate=44100:duration=70",
-                "-c:a",
-                codec,
-                "-b:a",
-                bitrate,
-            ])
-            .arg(&file)
-            .status()
-            .unwrap();
-        assert!(status.success());
+    for extension in ["mp3", "flac", "m4a"] {
+        let file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(format!("cache-{extension}.{extension}"));
         let data = std::fs::read(&file).unwrap();
         assert!(data.len() as u64 > BLOCK * 3);
         let (remote, source, song, cache, server) =

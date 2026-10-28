@@ -17,19 +17,18 @@ The release title must equal the tag. Notes are English first, followed by Simpl
 
 ## macOS packages
 
-Configure the [build environment](development.md#macos), then:
+Install the [native build prerequisites](remdia.md), then:
 
 ```bash
 ./scripts/build-macos.sh --release
 source .deps/macos-aarch64/env.sh  # use macos-x86_64 on Intel
 python3 scripts/package-macos.py
-export REPLAYER_TEST_FFMPEG="$(brew --prefix ffmpeg)/bin/ffmpeg"
 python3 scripts/test-macos-package.py
 ```
 
 This creates `replayer-VERSION-macos-ARCH.zip`, `.dmg` and a SHA-256 manifest in `dist/`. Use `--output-directory` on the packager and `--directory` on the tester for a review folder under `target/`.
 
-The ZIP contains `replayer.app`; the DMG provides drag-to-install. Packages include only the executable's transitive dylib closure, icons, user documentation, notices and matching FFmpeg/LAME source archives/recipes. Install names are rewritten relative to the app; unexpected non-system dependencies, architecture mismatches and incompatible deployment targets fail validation. Both architectures require macOS 15+.
+The ZIP contains `replayer.app`; the DMG provides drag-to-install. Packages explicitly include the native and VideoToolbox component dylibs and manifests in `Contents/Frameworks/remdia`, plus icons, documentation, licenses and exact SDK source/rebuild instructions. Unexpected non-system imports, architecture mismatches, ABI mismatches and incompatible deployment targets fail validation. Tests use the SDK's committed H.264 fixture. Both architectures require macOS 15+.
 
 The full smoke test mounts the DMG read-only. If local disk permissions prevent mounting, `--skip-dmg-mount` verifies image integrity and tests the relocated ZIP app. CI always mounts the DMG.
 
@@ -75,5 +74,5 @@ Windows update discovery uses GitHub's latest stable release. A newer installer 
 The packages are not currently Authenticode-signed; hashes are integrity checks, not publisher signatures. macOS currently links users to Releases rather than installing updates in-app.
 
 Historical FFmpeg dependency prereleases are excluded from application-update
-discovery and are not used by this Windows build. Component attribution is in
+discovery and are not used by current source builds. Component attribution is in
 [third-party notices](third-party.md).

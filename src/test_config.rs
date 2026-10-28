@@ -2,33 +2,6 @@
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;
 
-/// Fixture generation uses a full external FFmpeg, never the packaged runtime.
-pub fn ffmpeg() -> PathBuf {
-    if let Some(path) = std::env::var_os("REPLAYER_TEST_FFMPEG") {
-        let path = PathBuf::from(path);
-        assert!(
-            path.is_file(),
-            "REPLAYER_TEST_FFMPEG must name a full FFmpeg executable"
-        );
-        return path;
-    }
-    let runtime = std::env::var_os("FFMPEG_DIR").map(PathBuf::from);
-    let name = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
-    for directory in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
-        let path = directory.join(name);
-        if path.is_file() && !runtime.as_ref().is_some_and(|root| path.starts_with(root)) {
-            return path;
-        }
-    }
-    panic!(
-        "Install full FFmpeg for fixture generation and set REPLAYER_TEST_FFMPEG to its executable"
-    );
-}
-
 pub fn get(name: &str) -> Result<Option<String>> {
     if let Ok(value) = std::env::var(name)
         && !value.trim().is_empty()
