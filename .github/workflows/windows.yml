@@ -195,8 +195,11 @@ jobs:
             ~/.cargo/git
             .deps/remdia-source/target
             target
-          key: macos-remdia-v4-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: macos-remdia-v4-${{ matrix.target }}-
+          key: macos-remdia-v5-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'src/**', 'scripts/*macos*') }}
+          restore-keys: |
+            macos-remdia-v5-${{ matrix.target }}-
+            macos-rust-v2-${{ matrix.target }}-
+            macos-remdia-v4-${{ matrix.target }}-
       - name: Build pinned native SDK
         run: |
           REMDIA_TARGET='${{ matrix.target }}' ./scripts/setup-macos.sh
