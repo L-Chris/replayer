@@ -75,6 +75,12 @@ jobs:
           restore-keys: |
             windows-remdia-player-
             windows-x64-
+      - name: Clear cached SDK staging before download
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath target/windows-runtime) {
+            Remove-Item -LiteralPath target/windows-runtime -Recurse -Force
+          }
       - uses: actions/download-artifact@v4
         with:
           name: windows-remdia-runtime

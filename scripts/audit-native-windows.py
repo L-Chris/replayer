@@ -41,6 +41,7 @@ def imports(path):
     return result
 
 root = Path(a.directory)
+assert not (root / 'remdia-licenses/Opus-COPYING.txt').exists(), 'Stale SDK license from a cached runtime'
 for path in root.rglob('*'):
     assert not re.search(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale)', path.name, re.I), path
     if path.suffix.lower() in ('.exe', '.dll'):
