@@ -11,7 +11,7 @@ crossbeam-channel = "0.5.17"
 eframe = "0.36"
 egui-phosphor = { version = "0.14", features = ["subset"] }
 # Playback and subtitle export use independent remdia component graphs.
-remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "4a7aee732d672a089512d0ee9efa28bf22fb4fa0" }
+remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "f6009b0214a7726f0e4a0ff0ef690f9b20d751c2" }
 rfd = "0.17.2"
 rtrb = "0.3"
 base64 = "0.22"
@@ -34,9 +34,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 uuid = { version = "1", features = ["v4"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 tc_tea = { version = "0.2.1", default-features = false }
-replayer-image = { path = "crates/replayer-image" }
 
 [features]
 # Compatibility alias: remdia is now the default on every host.
@@ -55,29 +53,6 @@ winresource = "0.1.31"
 lto = true
 codegen-units = 1
 strip = "symbols"
-
-# Keep the fixed debug preview responsive when decoding full comic pages.
-# Application code retains normal debug information and fast incremental builds.
-[profile.dev.package.image]
-opt-level = 3
-
-[profile.dev.package.zune-jpeg]
-opt-level = 3
-
-[profile.dev.package.zune-core]
-opt-level = 3
-
-[profile.dev.package.png]
-opt-level = 3
-
-[profile.dev.package.image-webp]
-opt-level = 3
-
-[profile.dev.package.fast_image_resize]
-opt-level = 3
-
-[profile.dev.package.replayer-image]
-opt-level = 3
 
 # Pixel conversion is hot even when the rest of the UI is built for debugging.
 [profile.dev.package.epaint]

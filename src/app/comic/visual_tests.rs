@@ -1,5 +1,7 @@
 //! Offline render of the actual comic UI, without a window or network services.
 use super::*;
+#[cfg(test)]
+use crate::pixels::test_support::TestImageOutput;
 use eframe::{egui_wgpu, wgpu};
 
 fn fixture(ctx: &egui::Context) -> State {
@@ -55,14 +57,14 @@ fn fixture(ctx: &egui::Context) -> State {
                     ..Default::default()
                 })
                 .unwrap();
-            let tile = image::RgbaImage::from_fn(100, 172, |x, y| {
+            let tile = crate::pixels::generated(100, 172, |x, y| {
                 let band = ((x / 20 + y / 40 + i as u32) % 3) as u8;
-                image::Rgba([
+                [
                     42 + band * 16,
                     65 + ((i * 11) % 55) as u8,
                     75 + band * 20,
                     255,
-                ])
+                ]
             });
             covers.insert(
                 book.key(),
@@ -150,7 +152,7 @@ fn visible_covers_keep_their_textures_when_a_large_search_fills_the_cache() {
                 Bitmap {
                     width: 3,
                     height: 4,
-                    tiles: vec![image::RgbaImage::from_pixel(3, 4, image::Rgba([90; 4]))],
+                    tiles: vec![crate::pixels::solid(3, 4, [90; 4])],
                 },
             ),
         );
@@ -381,9 +383,9 @@ fn reader_fixture(ctx: &egui::Context) -> State {
         Bitmap {
             width: 850,
             height: 1200,
-            tiles: vec![image::RgbaImage::from_fn(850, 1200, |x, y| {
+            tiles: vec![crate::pixels::generated(850, 1200, |x, y| {
                 let value = if x % 280 < 6 || y % 360 < 6 { 50 } else { 220 };
-                image::Rgba([value, value, value, 255])
+                [value, value, value, 255]
             })],
         },
     );
@@ -1083,15 +1085,14 @@ fn branding_scaling_visuals() {
     std::fs::create_dir_all(&directory).unwrap();
     let mut capture = Capture::new();
     let ctx = egui::Context::default();
-    let image = image::load_from_memory(include_bytes!(
+    let image = crate::pixels::read_image(include_bytes!(
         "../../../assets/branding/replayer-mark-256.png"
     ))
-    .unwrap()
-    .into_rgba8();
+    .unwrap();
     // Reproduce the previous direct 256px -> 26pt GPU minification for comparison.
     let original = ctx.load_texture(
         "brand-before",
-        egui::ColorImage::from_rgba_unmultiplied([256, 256], image.as_raw()),
+        egui::ColorImage::from_rgba_unmultiplied([256, 256], image.bytes()),
         egui::TextureOptions::LINEAR,
     );
     for percent in [100, 125, 150, 200, 250] {
@@ -1604,7 +1605,7 @@ impl Capture {
                 for row in bytes.chunks(stride as usize) {
                     pixels.extend_from_slice(&row[..size[0] as usize * 4]);
                 }
-                image::RgbaImage::from_raw(size[0], size[1], pixels)
+                crate::pixels::Image::from_rgba(size[0], size[1], pixels)
                     .unwrap()
                     .save(path)
                     .unwrap();

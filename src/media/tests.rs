@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use crate::pixels::test_support::TestImageOutput;
 #[test]
 #[ignore = "requires staged remdia components and REPLAYER_NATIVE_FIXTURES"]
 fn native_media_video_thumbnail_and_embedded_cover() {
@@ -28,12 +30,8 @@ fn live_video_thumbnail() {
     let info = probe_info(&path).expect("probe media");
     let art = info.artwork.as_ref().expect("video thumbnail");
     std::fs::create_dir_all("target/ui-review").unwrap();
-    image::save_buffer(
-        "target/ui-review/video-thumbnail.png",
-        &art.rgba,
-        art.width as u32,
-        art.height as u32,
-        image::ColorType::Rgba8,
-    )
-    .unwrap();
+    crate::pixels::Image::from_rgba(art.width as u32, art.height as u32, art.rgba.clone())
+        .unwrap()
+        .save("target/ui-review/video-thumbnail.png")
+        .unwrap();
 }

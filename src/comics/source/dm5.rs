@@ -1,6 +1,8 @@
 //! DM5's public reader protocol. Extract data from its packed image response;
 //! never execute downloaded JavaScript. Page endpoints are resolved on demand.
 use super::{http_url, limited_body};
+#[cfg(test)]
+use crate::pixels::test_support::TestImageOutput;
 use anyhow::{Result, anyhow, ensure};
 use regex::Regex;
 use reqwest::{Client, Url};
@@ -384,13 +386,9 @@ mod tests {
                                 n.fetch_add(1, Ordering::Relaxed);
                                 assert!(headers["referer"].to_str().unwrap().ends_with("/m123/"));
                                 let mut bytes = std::io::Cursor::new(Vec::new());
-                                image::RgbaImage::from_pixel(
-                                    32,
-                                    48,
-                                    image::Rgba([100, 120, 140, 255]),
-                                )
-                                .write_to(&mut bytes, image::ImageFormat::Png)
-                                .unwrap();
+                                crate::pixels::solid(32, 48, [100, 120, 140, 255])
+                                    .write_to(&mut bytes, "png")
+                                    .unwrap();
                                 bytes.into_inner()
                             }
                         }),

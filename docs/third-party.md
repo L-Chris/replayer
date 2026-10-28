@@ -14,10 +14,7 @@ Both MIT notices are bundled in `licenses/egui-phosphor-MIT.txt` and
 Sources: https://github.com/amPerl/egui-phosphor and
 https://github.com/phosphor-icons/web .
 
-Comic preview resizing uses `fast_image_resize` 6.1.0 (MIT OR Apache-2.0),
-Copyright Kirill Kuzminykh. The MIT license is bundled in
-`licenses/fast_image_resize-MIT.txt`.
-Source: https://github.com/Cykooz/fast_image_resize .
+Comic images, artwork and translation pixel operations use the remdia system image pack (WIC / ImageIO / CoreGraphics). The application has no direct image or fast_image_resize dependency. The GUI framework still brings its internal image/clipboard dependencies transitively. Windows packages may include the narrow image-webp fallback (MIT OR Apache-2.0), documented and licensed in the SDK notices.
 
 Comic library storage uses `rusqlite` 0.40.2 (MIT), which embeds SQLite through
 `libsqlite3-sys` with the bundled feature. SQLite is in the public domain.
@@ -25,7 +22,7 @@ The rusqlite license is bundled in `licenses/rusqlite-MIT.txt`.
 Sources: https://github.com/rusqlite/rusqlite and https://sqlite.org/copyright.html .
 
 Windows and macOS source builds use remdia's independently loaded native and
-platform video plugins (Media Foundation / VideoToolbox). The executable and component packs do not link
+platform video and system image plugins (Media Foundation / VideoToolbox / WIC / ImageIO). The executable and component packs do not link
 to FFmpeg. `Cargo.toml` pins the SDK source revision; `scripts/setup-windows.ps1`
 and `scripts/setup-macos.sh` build that revision and packaging includes its `REVISION`, `THIRD_PARTY.md`
 and license texts. Published releases built before this migration retain their

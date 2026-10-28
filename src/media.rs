@@ -95,19 +95,11 @@ pub fn decode_artwork(bytes: &[u8]) -> Option<Arc<Artwork>> {
     if bytes.len() > 8 * 1024 * 1024 {
         return None;
     }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(64 * 1024 * 1024);
-    reader.limits(limits);
-    let image = reader.decode().ok()?.thumbnail(600, 600).to_rgba8();
+    let image = crate::pixels::thumbnail(bytes, 600, 600).ok()?;
     Some(Arc::new(Artwork {
         width: image.width() as usize,
         height: image.height() as usize,
-        rgba: image.into_raw(),
+        rgba: image.bytes().to_vec(),
     }))
 }
 pub(crate) fn remdia_info(session: &mut remdia::Session, path: &Path) -> Info {
@@ -191,25 +183,15 @@ pub fn probe_info(path: &str) -> Option<Arc<Info>> {
             let Some(frame) = thumbnail.read().ok().flatten() else {
                 break;
             };
-            let remdia::FrameInfo::Video {
-                width,
-                height,
-                planes,
-                format,
-                ..
-            } = frame.info()
-            else {
+            let remdia::FrameInfo::Image { image, .. } = frame.info() else {
                 continue;
             };
-            if format != "rgba" {
+            if image.format != "rgba8" {
                 continue;
             }
+            let (width, height) = (&image.width, &image.height);
             let mut rgba = Vec::with_capacity(*width as usize * *height as usize * 4);
-            for row in frame
-                .bytes()
-                .chunks(planes[0].stride)
-                .take(*height as usize)
-            {
+            for row in frame.bytes().chunks(image.stride).take(*height as usize) {
                 rgba.extend_from_slice(&row[..*width as usize * 4]);
             }
             let lit = rgba

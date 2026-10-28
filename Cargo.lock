@@ -1652,20 +1652,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
-name = "fast_image_resize"
-version = "6.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9c50201dc184ba6553da1695aac20a042efffbe2d84542cee31917c86c3ab1e"
-dependencies = [
- "bytemuck",
- "cfg-if",
- "document-features",
- "image",
- "num-traits",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2435,23 +2421,10 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
- "image-webp",
  "moxcms",
  "num-traits",
  "png",
  "tiff",
- "zune-core",
- "zune-jpeg",
-]
-
-[[package]]
-name = "image-webp"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
-dependencies = [
- "byteorder-lite",
- "quick-error",
 ]
 
 [[package]]
@@ -4443,8 +4416,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "remdia"
-version = "0.2.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=4a7aee732d672a089512d0ee9efa28bf22fb4fa0#4a7aee732d672a089512d0ee9efa28bf22fb4fa0"
+version = "0.3.0"
+source = "git+https://github.com/L-Chris/remdia.git?rev=f6009b0214a7726f0e4a0ff0ef690f9b20d751c2#f6009b0214a7726f0e4a0ff0ef690f9b20d751c2"
 dependencies = [
  "anyhow",
  "libloading",
@@ -4458,16 +4431,16 @@ dependencies = [
 
 [[package]]
 name = "remdia-buffer"
-version = "0.2.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=4a7aee732d672a089512d0ee9efa28bf22fb4fa0#4a7aee732d672a089512d0ee9efa28bf22fb4fa0"
+version = "0.3.0"
+source = "git+https://github.com/L-Chris/remdia.git?rev=f6009b0214a7726f0e4a0ff0ef690f9b20d751c2#f6009b0214a7726f0e4a0ff0ef690f9b20d751c2"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "remdia-graph"
-version = "0.2.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=4a7aee732d672a089512d0ee9efa28bf22fb4fa0#4a7aee732d672a089512d0ee9efa28bf22fb4fa0"
+version = "0.3.0"
+source = "git+https://github.com/L-Chris/remdia.git?rev=f6009b0214a7726f0e4a0ff0ef690f9b20d751c2#f6009b0214a7726f0e4a0ff0ef690f9b20d751c2"
 dependencies = [
  "anyhow",
  "remdia-buffer",
@@ -4479,13 +4452,13 @@ dependencies = [
 
 [[package]]
 name = "remdia-plugin-abi"
-version = "0.2.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=4a7aee732d672a089512d0ee9efa28bf22fb4fa0#4a7aee732d672a089512d0ee9efa28bf22fb4fa0"
+version = "0.3.0"
+source = "git+https://github.com/L-Chris/remdia.git?rev=f6009b0214a7726f0e4a0ff0ef690f9b20d751c2#f6009b0214a7726f0e4a0ff0ef690f9b20d751c2"
 
 [[package]]
 name = "remdia-types"
-version = "0.2.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=4a7aee732d672a089512d0ee9efa28bf22fb4fa0#4a7aee732d672a089512d0ee9efa28bf22fb4fa0"
+version = "0.3.0"
+source = "git+https://github.com/L-Chris/remdia.git?rev=f6009b0214a7726f0e4a0ff0ef690f9b20d751c2#f6009b0214a7726f0e4a0ff0ef690f9b20d751c2"
 dependencies = [
  "anyhow",
  "serde",
@@ -4512,12 +4485,10 @@ dependencies = [
  "eframe",
  "egui-phosphor",
  "futures-util",
- "image",
  "librqbit",
  "quick-xml 0.42.0",
  "regex",
  "remdia",
- "replayer-image",
  "reqwest",
  "rfd",
  "ring",
@@ -4537,15 +4508,6 @@ dependencies = [
  "uuid",
  "windows-sys 0.61.2",
  "winresource",
-]
-
-[[package]]
-name = "replayer-image"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fast_image_resize",
- "image",
 ]
 
 [[package]]

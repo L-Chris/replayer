@@ -9,14 +9,14 @@
 | `src/renderer/native.rs`, `src/video.wgsl` | GPU video conversion and presentation |
 | `src/media*`, `src/queue.rs`, `src/lyrics.rs` | Metadata, local adapters, saved queues and lyrics |
 | `src/music_sources/` | Source adapters, downloads and streaming cache |
-| `src/comics/`, `crates/replayer-image/` | Comic sources, library, image preparation and translation |
+| `src/comics/`, `src/pixels.rs` | Comic sources, library, image preparation and translation |
 | `src/subtitles/` | Audio extraction, AI scheduling, subtitle validation and SRT |
 | `src/sync/`, `src/credentials.rs` | WebDAV merge protocol, encryption and credential storage |
 | `src/torrent.rs`, `src/updater.rs` | Torrent bridge and release discovery/installation |
 
 ## Playback
 
-The UI holds an asynchronous `Player` handle. A worker owns a remdia demux/decoder/filter graph; a session coordinates bounded frame queues, audio output and presentation. Codec implementations live in independent component plugins behind C ABI v2.1. The audio callback uses a preallocated SPSC PCM buffer and atomic control/progress data, avoiding locks and allocation in the callback.
+The UI holds an asynchronous `Player` handle. A worker owns a remdia demux/decoder/filter graph; a session coordinates bounded frame queues, audio output and presentation. Codec implementations live in independent component plugins behind C ABI v2.2. The audio callback uses a preallocated SPSC PCM buffer and atomic control/progress data, avoiding locks and allocation in the callback.
 
 The audio device drives the clock when audio is available; underruns freeze progress at submitted audio. A wall clock allows silent video and video beyond a short audio track to continue. EOF drains decoders, resampling, device output and remaining video before reporting completion. Ended sessions retain enough state for seeking and replay.
 
@@ -38,7 +38,7 @@ QQ local adapters prepare supported encrypted audio in bounded, cancellable work
 
 Original downloads are cached unchanged and detected by content. JPEG/WebP/PNG request preferences do not trigger lossy conversion of ordinary original pages. DM5 can fall back to its public reader data when aggregation fails; remote scripts are parsed for data and are not executed. Komiic requests use short-lived tickets, bounded concurrency and quota backoff; tickets and ticketed URLs are not persisted.
 
-Image decoding, resizing, tiling and pixel conversion run in bounded background work. Prepared images use memory budgets and shared in-flight requests. Source-byte changes and explicit disk-cache clearing invalidate the corresponding memory entries.
+Image decoding, resizing, tiling, cropping, composition and encoding use remdia image components in the same graph runtime as audio/video. Windows uses WIC and macOS uses ImageIO/CoreGraphics; a narrow Windows WebP plugin covers systems without a WIC WebP decoder. Processing runs in bounded background work. Prepared images use memory budgets and shared in-flight requests. Source-byte changes and explicit disk-cache clearing invalidate the corresponding memory entries.
 
 Image translation uses an independent model configuration and `images/edits` adapter. Uploads and new translated results use JPEG at quality 95, with transparent areas composited on white. Long pages are split with overlap and restored to their canvas dimensions. Originals are preserved, old PNG/WebP translations remain valid, and cache identity includes source content, service/model, language and generation options. Encoding is bounded and performed off the UI thread. A failed page is not automatically charged again by an unconditional retry.
 

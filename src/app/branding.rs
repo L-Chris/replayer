@@ -1,43 +1,23 @@
 use super::*;
 use std::sync::OnceLock;
 
-/// Resample premultiplied colors so transparent pixels cannot darken the edge.
-/// Match egui's gamma-space blending when filtering the approved artwork.
+/// Use remdia system components for alpha-aware branding image scaling.
 fn rasterize(size: [usize; 2]) -> egui::ColorImage {
-    static SOURCE: OnceLock<image::Rgba32FImage> = OnceLock::new();
+    static SOURCE: OnceLock<crate::pixels::Image> = OnceLock::new();
     let source = SOURCE.get_or_init(|| {
-        let mut image = image::load_from_memory(include_bytes!(
+        crate::pixels::read_image(include_bytes!(
             "../../assets/branding/replayer-mark-256.png"
         ))
-        .expect("embedded replayer brand image")
-        .into_rgba32f();
-        for pixel in image.pixels_mut() {
-            let alpha = pixel[3];
-            for channel in &mut pixel.0[..3] {
-                *channel *= alpha;
-            }
-        }
-        image
+        .expect("embedded brand image through remdia")
     });
-    let image = image::imageops::resize(
-        source,
-        size[0] as u32,
-        size[1] as u32,
-        image::imageops::FilterType::Lanczos3,
-    );
+    let image = crate::pixels::resize(source, size[0] as u32, size[1] as u32, false)
+        .expect("brand resize through remdia");
     let pixels = image
-        .pixels()
-        .map(|pixel| {
-            let alpha = pixel[3].clamp(0.0, 1.0);
-            let byte = |value: f32| (value * 255.0).round() as u8;
-            // Lanczos can overshoot; retain valid premultiplied colors.
-            Color32::from_rgba_premultiplied(
-                byte(pixel[0].clamp(0.0, alpha)),
-                byte(pixel[1].clamp(0.0, alpha)),
-                byte(pixel[2].clamp(0.0, alpha)),
-                byte(alpha),
-            )
-        })
+        .bytes()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| Color32::from_rgba_unmultiplied(pixel[0], pixel[1], pixel[2], pixel[3]))
         .collect();
     egui::ColorImage::new(size, pixels)
 }

@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use crate::pixels::test_support::TestImageOutput;
 use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -153,8 +155,8 @@ fn errors_do_not_echo_credentials_or_upstream_bodies() {
 #[test]
 fn download_is_local_playable_reusable_and_never_sends_api_key_to_cdn() {
     let mut cover = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(24, 24, image::Rgba([30, 100, 200, 255]))
-        .write_to(&mut cover, image::ImageFormat::Png)
+    crate::pixels::solid(24, 24, [30, 100, 200, 255])
+        .write_to(&mut cover, "png")
         .unwrap();
     let cover = cover.into_inner();
     let (cdn, requests, worker) = server(vec![(200, wav()), (200, cover.clone()), (200, cover)]);

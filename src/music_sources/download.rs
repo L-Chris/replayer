@@ -105,11 +105,10 @@ async fn cache_cover(path: &Path, url: reqwest::Url) -> Result<()> {
         bytes.extend_from_slice(&chunk);
     }
     let art = crate::media::decode_artwork(&bytes).ok_or_else(|| anyhow!("Invalid cover"))?;
-    let image = image::RgbaImage::from_raw(art.width as u32, art.height as u32, art.rgba.clone())
-        .ok_or_else(|| anyhow!("Invalid cover"))?;
-    let mut output = std::io::Cursor::new(Vec::new());
-    image.write_to(&mut output, image::ImageFormat::Png)?;
-    crate::media::write_companion(path, ".replayer-cover.png", &output.into_inner())
+    let image =
+        crate::pixels::Image::from_rgba(art.width as u32, art.height as u32, art.rgba.clone())?;
+    let output = crate::pixels::png(&image)?;
+    crate::media::write_companion(path, ".replayer-cover.png", &output)
 }
 pub async fn download(
     source: &dyn MusicSource,
