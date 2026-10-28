@@ -2,7 +2,7 @@
 
 Windows uses the public [remdia SDK](https://github.com/L-Chris/remdia), pinned
 to an exact Git revision in Cargo.toml. Its core loads independent components
-through C ABI v2. Neither the Windows executable nor its media DLLs depends on
+through C ABI v2.1. Neither the Windows executable nor its media DLLs depends on
 FFmpeg. macOS retains the existing backend while Windows integration is validated.
 
 ## Build and preview
@@ -15,7 +15,8 @@ Install Rust stable, Visual Studio C++ Build Tools, CMake and Python 3. Run:
 ```
 
 Setup fetches the pinned SDK into `.deps/remdia-source`, builds its two component
-DLLs, and verifies their revision and ABI. Preview copies them beside the fixed
+DLLs, and verifies their revision and ABI. ABI 2.1 format-change notifications update
+negotiated buffer bounds before frames cross component edges. Preview copies them beside the fixed
 `target/debug/replayer.exe`. A previously staged runtime can be supplied through
 `-RuntimeDirectory` or `REMDIA_RUNTIME_DIR`; its REVISION must match Cargo.toml.
 The application normally discovers `plugins/` beside its executable.
