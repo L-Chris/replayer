@@ -34,7 +34,7 @@ try {
     if ((Get-Content (Join-Path $RuntimeDirectory 'REVISION') -Raw).Trim() -cne $Matches[1]) { throw 'Runtime revision does not match Cargo.toml.' }
     $plugins = Join-Path $stage 'plugins'
     New-Item -ItemType Directory -Force $plugins | Out-Null
-    foreach ($name in @('native', 'windows', 'image', 'image_webp')) {
+    foreach ($name in @('native', 'windows', 'image', 'image_webp', 'system_audio', 'system_demux', 'fallback_demux', 'fallback_vorbis', 'fallback_mp3_lame')) {
         foreach ($filename in @("$name.json", "remdia_backend_$name.dll")) {
             Copy-Item -LiteralPath (Join-Path $RuntimeDirectory "plugins/$filename") -Destination $plugins
         }

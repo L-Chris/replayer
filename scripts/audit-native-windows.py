@@ -46,6 +46,6 @@ for path in root.rglob('*'):
     if path.suffix.lower() in ('.exe', '.dll'):
         linked = imports(path)
         assert not any(re.search(r'(avcodec|avformat|avutil|swresample|swscale|vcruntime|msvcp|msvcr\d)', item, re.I) for item in linked), (path, linked)
-for name in ('native', 'windows', 'image', 'image_webp'):
+for name in ('native', 'windows', 'image', 'image_webp', 'system_audio', 'system_demux', 'fallback_demux', 'fallback_vorbis', 'fallback_mp3_lame'):
     assert (root / 'plugins' / f'remdia_backend_{name}.dll').is_file(), f'Missing {name} pack'
 print('Windows Cargo dependencies and PE imports are FFmpeg-free; component CRT is static')

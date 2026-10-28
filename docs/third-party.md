@@ -28,27 +28,31 @@ and `scripts/setup-macos.sh` build that revision and packaging includes its `REV
 and license texts. Published releases built before this migration retain their
 original bundled notices.
 
-The native pack contains Symphonia (MPL-2.0), libopus (BSD-3-Clause), Rubato
-(MIT), and LAME / mp3lame-encoder (LGPL). The LGPL encoder is contained in the
-replaceable native plugin. The matching source revision, dependencies and rebuild
-instructions are recorded in the SDK's third-party notices; its Cargo.lock pins
-the codec dependencies. Windows Media Foundation is supplied by the operating
-system; codec availability depends on the installed Windows components.
+The native utility pack has no third-party media algorithm implementation. Separate
+system packs use Media Foundation / WIC on Windows and AVFoundation,
+AudioToolbox, VideoToolbox, ImageIO and CoreGraphics on macOS. These operating
+system binaries are not redistributed. Codec availability depends on the installed
+system components.
+
+Narrow replaceable compatibility packs contain Symphonia (MPL-2.0) for unsupported
+container/progressive HTTP demux, Windows Vorbis (MPL-2.0), Windows WebP
+(MIT OR Apache-2.0), and LAME / mp3lame-encoder (LGPL) for 16 kHz gapless MP3
+export. System availability is queried before selecting the relevant graph node.
+Symphonia's upstream ADTS/MPA/FLAC reader crates also contain codec code, but the
+compatibility demux does not register or call those decoders. Rubato and libopus
+are no longer included in the SDK. AVC/HEVC parameter parsing uses h264-reader
+and scuffle-h265 (MIT OR Apache-2.0); video decoding uses the system framework.
 
 - https://github.com/L-Chris/remdia
 - https://github.com/L-Chris/remdia/blob/main/THIRD_PARTY.md
 - https://github.com/pdeljanov/Symphonia
-- https://opus-codec.org/
 - https://lame.sourceforge.io/
 
-macOS packages include the same native codec pack plus a VideoToolbox plugin.
-Apple VideoToolbox, CoreMedia, CoreVideo and CoreFoundation are operating-system
-frameworks; their binaries are not redistributed. AVC/HEVC parameter parsing
-uses h264-reader and scuffle-h265 (MIT OR Apache-2.0); corresponding licenses are
-included with the SDK notices. `Contents/Resources/remdia` records the exact SDK
-revision, public source archive URL, licenses and rebuild/replacement commands.
-The component dylibs stay separate and replaceable; modified bundles must be
-signed again. Current builds have no FFmpeg runtime or test-tool dependency.
+The SDK notices record the exact matching source, dependency versions and rebuild
+instructions. macOS `Contents/Resources/remdia` records the SDK revision, source
+archive URL, licenses and rebuild/replacement commands. Component libraries stay
+separate and replaceable; modified app bundles must be signed again. Builds and
+integration tests do not require FFmpeg.
 
 Magnet playback embeds `librqbit` 9.0.1 and its rqbit support crates, Copyright
 2021 Igor Katson, licensed under Apache-2.0. The license is bundled in
