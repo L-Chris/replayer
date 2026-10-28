@@ -193,7 +193,13 @@ fn encrypted_music_plays_seeks_and_finishes() {
                     "{:?}",
                     player.poll_event()
                 );
-                assert!(start.elapsed() < Duration::from_secs(8));
+                assert!(
+                    start.elapsed() < Duration::from_secs(8),
+                    "legacy={legacy}, snapshot={:?}, position={}, event={:?}",
+                    player.snapshot(),
+                    player.position(),
+                    player.poll_event()
+                );
                 std::thread::sleep(Duration::from_millis(5));
             }
         };
