@@ -4417,7 +4417,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "remdia"
 version = "0.3.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=26aed471ad59ce5d1fe76d9cff748108c67b0e02#26aed471ad59ce5d1fe76d9cff748108c67b0e02"
+source = "git+https://github.com/L-Chris/remdia.git?rev=5bba7ce7ca25b0eb66d7904370678de6ff0d6703#5bba7ce7ca25b0eb66d7904370678de6ff0d6703"
 dependencies = [
  "anyhow",
  "libloading",
@@ -4432,7 +4432,7 @@ dependencies = [
 [[package]]
 name = "remdia-buffer"
 version = "0.3.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=26aed471ad59ce5d1fe76d9cff748108c67b0e02#26aed471ad59ce5d1fe76d9cff748108c67b0e02"
+source = "git+https://github.com/L-Chris/remdia.git?rev=5bba7ce7ca25b0eb66d7904370678de6ff0d6703#5bba7ce7ca25b0eb66d7904370678de6ff0d6703"
 dependencies = [
  "anyhow",
 ]
@@ -4440,7 +4440,7 @@ dependencies = [
 [[package]]
 name = "remdia-graph"
 version = "0.3.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=26aed471ad59ce5d1fe76d9cff748108c67b0e02#26aed471ad59ce5d1fe76d9cff748108c67b0e02"
+source = "git+https://github.com/L-Chris/remdia.git?rev=5bba7ce7ca25b0eb66d7904370678de6ff0d6703#5bba7ce7ca25b0eb66d7904370678de6ff0d6703"
 dependencies = [
  "anyhow",
  "remdia-buffer",
@@ -4453,12 +4453,12 @@ dependencies = [
 [[package]]
 name = "remdia-plugin-abi"
 version = "0.3.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=26aed471ad59ce5d1fe76d9cff748108c67b0e02#26aed471ad59ce5d1fe76d9cff748108c67b0e02"
+source = "git+https://github.com/L-Chris/remdia.git?rev=5bba7ce7ca25b0eb66d7904370678de6ff0d6703#5bba7ce7ca25b0eb66d7904370678de6ff0d6703"
 
 [[package]]
 name = "remdia-types"
 version = "0.3.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=26aed471ad59ce5d1fe76d9cff748108c67b0e02#26aed471ad59ce5d1fe76d9cff748108c67b0e02"
+source = "git+https://github.com/L-Chris/remdia.git?rev=5bba7ce7ca25b0eb66d7904370678de6ff0d6703#5bba7ce7ca25b0eb66d7904370678de6ff0d6703"
 dependencies = [
  "anyhow",
  "serde",
