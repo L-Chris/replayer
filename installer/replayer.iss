@@ -40,6 +40,11 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
+; Remove the retired third-party WebP pack from earlier test installations.
+Type: files; Name: "{app}\plugins\image_webp.json"
+Type: files; Name: "{app}\plugins\remdia_backend_image_webp.dll"
+Type: files; Name: "{app}\remdia-licenses\image-webp-MIT.txt"
+Type: files; Name: "{app}\remdia-licenses\image-webp-Apache-2.0.txt"
 ; Remove obsolete FFmpeg runtime libraries when upgrading to remdia.
 Type: files; Name: "{app}\avdevice-63.dll"
 Type: files; Name: "{app}\avfilter-12.dll"

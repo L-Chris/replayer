@@ -10,6 +10,7 @@ p.add_argument('--directory', required=True)
 a = p.parse_args()
 tree = subprocess.check_output(['cargo', 'tree', '--locked', '--target', 'x86_64-pc-windows-msvc', '-e', 'normal', '--prefix', 'none'], text=True)
 assert not re.search(r'^ffmpeg', tree, re.M | re.I), 'Windows dependency tree still contains FFmpeg'
+assert not re.search(r'^image-webp ', tree, re.M), 'Windows dependency tree still contains image-webp'
 
 def imports(path):
     data = path.read_bytes()

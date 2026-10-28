@@ -17,6 +17,9 @@ $pinnedLink = Join-Path $pinnedDirectory "replayer-icon-test-$fixtureID.lnk"
 $unrelatedLink = Join-Path $pinnedDirectory "unrelated-icon-test-$fixtureID.lnk"
 $desktopLink = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'replayer.lnk'
 $startLink = Join-Path ([Environment]::GetFolderPath('Programs')) 'replayer/replayer.lnk'
+$retiredWebpFiles = @('plugins/image_webp.json', 'plugins/remdia_backend_image_webp.dll',
+    'remdia-licenses/image-webp-MIT.txt', 'remdia-licenses/image-webp-Apache-2.0.txt')
+$unrelatedPluginFile = Join-Path $InstallDirectory 'plugins/upgrade-test.keep'
 
 function Assert-LinkIcon([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { throw "Missing shortcut: $Path" }
@@ -62,7 +65,15 @@ try {
         $link.Save()
     }
     # An existing desktop shortcut must be refreshed even if the task is unchecked.
+    foreach ($relative in $retiredWebpFiles) {
+        Set-Content -LiteralPath (Join-Path $InstallDirectory $relative) -Value 'retired WebP fixture' -Encoding ascii
+    }
+    Set-Content -LiteralPath $unrelatedPluginFile -Value 'preserve unrelated plugin files' -Encoding ascii
     Install-Fixture '!desktopicon'
+    foreach ($relative in $retiredWebpFiles) {
+        if (Test-Path -LiteralPath (Join-Path $InstallDirectory $relative)) { throw "Upgrade retained removed WebP file: $relative" }
+    }
+    if (-not (Test-Path -LiteralPath $unrelatedPluginFile)) { throw 'Upgrade removed an unrelated plugin file.' }
     foreach ($path in @($desktopLink, $startLink, $pinnedLink)) { Assert-LinkIcon $path }
     if ($shell.CreateShortcut($pinnedLink).Arguments -cne '--icon-smoke-fixture') {
         throw 'Pinned shortcut arguments changed after upgrading.'
@@ -72,6 +83,7 @@ try {
     }
     Write-Host 'Installed desktop, Start Menu and existing pinned icons match current branding.'
 } finally {
+    if (Test-Path -LiteralPath $unrelatedPluginFile) { Remove-Item -LiteralPath $unrelatedPluginFile }
     foreach ($path in @($pinnedLink, $unrelatedLink)) {
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
     }
