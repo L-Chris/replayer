@@ -61,6 +61,11 @@ scanning a missing download prefix; VBR accuracy is limited by this estimate.
 Local audio and timestamped containers retain precise seek paths. Unsupported
 codecs return a clear error rather than using another decoder backend.
 
+Multichannel AAC, AC-3 and E-AC-3 use Windows Media Foundation or macOS
+AudioToolbox. Availability depends on the installed system codecs; no additional
+standalone decoder is bundled or used as a fallback. Other supported audio keeps
+using the existing native audio components.
+
 ## Validation and packaging
 
 After setup, set `REPLAYER_NATIVE_FIXTURES` to the SDK's `tests/fixtures`:

@@ -4444,7 +4444,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "remdia"
 version = "0.2.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=d69ef6e72806c11a2f517a8fd65b6ba28c16ac87#d69ef6e72806c11a2f517a8fd65b6ba28c16ac87"
+source = "git+https://github.com/L-Chris/remdia.git?rev=4a7aee732d672a089512d0ee9efa28bf22fb4fa0#4a7aee732d672a089512d0ee9efa28bf22fb4fa0"
 dependencies = [
  "anyhow",
  "libloading",
@@ -4459,7 +4459,7 @@ dependencies = [
 [[package]]
 name = "remdia-buffer"
 version = "0.2.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=d69ef6e72806c11a2f517a8fd65b6ba28c16ac87#d69ef6e72806c11a2f517a8fd65b6ba28c16ac87"
+source = "git+https://github.com/L-Chris/remdia.git?rev=4a7aee732d672a089512d0ee9efa28bf22fb4fa0#4a7aee732d672a089512d0ee9efa28bf22fb4fa0"
 dependencies = [
  "anyhow",
 ]
@@ -4467,7 +4467,7 @@ dependencies = [
 [[package]]
 name = "remdia-graph"
 version = "0.2.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=d69ef6e72806c11a2f517a8fd65b6ba28c16ac87#d69ef6e72806c11a2f517a8fd65b6ba28c16ac87"
+source = "git+https://github.com/L-Chris/remdia.git?rev=4a7aee732d672a089512d0ee9efa28bf22fb4fa0#4a7aee732d672a089512d0ee9efa28bf22fb4fa0"
 dependencies = [
  "anyhow",
  "remdia-buffer",
@@ -4480,12 +4480,12 @@ dependencies = [
 [[package]]
 name = "remdia-plugin-abi"
 version = "0.2.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=d69ef6e72806c11a2f517a8fd65b6ba28c16ac87#d69ef6e72806c11a2f517a8fd65b6ba28c16ac87"
+source = "git+https://github.com/L-Chris/remdia.git?rev=4a7aee732d672a089512d0ee9efa28bf22fb4fa0#4a7aee732d672a089512d0ee9efa28bf22fb4fa0"
 
 [[package]]
 name = "remdia-types"
 version = "0.2.0"
-source = "git+https://github.com/L-Chris/remdia.git?rev=d69ef6e72806c11a2f517a8fd65b6ba28c16ac87#d69ef6e72806c11a2f517a8fd65b6ba28c16ac87"
+source = "git+https://github.com/L-Chris/remdia.git?rev=4a7aee732d672a089512d0ee9efa28bf22fb4fa0#4a7aee732d672a089512d0ee9efa28bf22fb4fa0"
 dependencies = [
  "anyhow",
  "serde",
@@ -4500,7 +4500,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "replayer"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "axum",

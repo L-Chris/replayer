@@ -200,6 +200,12 @@ pub(super) fn run(
                 if audio
                     .as_ref()
                     .is_some_and(|a| a.pending.len() > rate as usize / 2)
+                    // Some video MFTs need more than half a second of input
+                    // before their first output. Audio cannot drain while the
+                    // seek clock is paused: stopping here would deadlock open
+                    // or seek before the first video frame. AudioPipeline's
+                    // two-second pending budget still bounds this preroll.
+                    && (!seeking || !header.has_video || video_end > target || eof)
                 {
                     break;
                 }

@@ -1,6 +1,6 @@
 [package]
 name = "replayer"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 
 [dependencies]
@@ -11,7 +11,7 @@ crossbeam-channel = "0.5.17"
 eframe = "0.36"
 egui-phosphor = { version = "0.14", features = ["subset"] }
 # Playback and subtitle export use independent remdia component graphs.
-remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "d69ef6e72806c11a2f517a8fd65b6ba28c16ac87" }
+remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "4a7aee732d672a089512d0ee9efa28bf22fb4fa0" }
 rfd = "0.17.2"
 rtrb = "0.3"
 base64 = "0.22"

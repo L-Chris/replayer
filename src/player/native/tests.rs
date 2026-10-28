@@ -166,6 +166,28 @@ fn native_media_video_playback_pause_seek_and_drain() {
 }
 
 #[test]
+#[ignore = "requires staged remdia platform components"]
+fn native_media_video_open_and_paused_seek_survive_audio_preroll() {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/av-audio-preroll.mkv")
+        .to_string_lossy()
+        .into_owned();
+    let mut player = Player::open(source).unwrap();
+    until(&mut player, Duration::from_secs(6), |p, _| {
+        p.snapshot().state == PlaybackState::Playing && p.position() > 0.1
+    });
+    player.set_playing(false);
+    let seek = player.seek(0.25);
+    until(&mut player, Duration::from_secs(6), |p, events| {
+        p.snapshot().state == PlaybackState::Paused
+            && events
+                .iter()
+                .any(|e| matches!(e,Event::SeekCompleted {id,..} if *id==seek))
+    });
+    assert!((player.position() - 0.25).abs() < 0.03);
+}
+
+#[test]
 #[ignore = "requires remdia component DLLs and native fixtures"]
 fn native_media_progressive_audio_buffers_and_new_seek_preempts_missing_data() {
     use std::{
