@@ -141,11 +141,14 @@ fn native_media_video_playback_pause_seek_and_drain() {
         }
         if let Some(f) = p.next_frame(p.sync_time()) {
             assert_eq!(f.epoch, id);
-            assert!(f.pts >= 1.25);
+            assert!(f.pts >= 1.25 && f.pts < 1.25 + 1. / 24. + 0.001);
+            assert_eq!((f.image().width(), f.image().height()), (160, 90));
             preview = true;
         }
         if completed {
-            preview |= f64::from_bits(p.shared.presented.load(Ordering::Acquire)) >= 1.25;
+            let presented = f64::from_bits(p.shared.presented.load(Ordering::Acquire));
+            assert!(presented < 1.25 + 1. / 24. + 0.001);
+            preview |= presented >= 1.25;
             break;
         }
         std::thread::sleep(Duration::from_millis(5));

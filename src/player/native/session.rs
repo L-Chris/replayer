@@ -168,7 +168,7 @@ pub(super) fn run(
                 }
             }
         }
-        if let (Some(a), Some(out)) = (&mut audio, &mut output) {
+        if !audio_fallback && let (Some(a), Some(out)) = (&mut audio, &mut output) {
             a.pump(out);
         }
         // Read decoded outputs while audio needs them, even if the video consumer has
@@ -191,7 +191,7 @@ pub(super) fn run(
                         remdia::FrameInfo::Audio { .. } => {
                             if let Some(a) = &mut audio {
                                 a.append(&frame, epoch, target)?;
-                                if let Some(out) = &mut output {
+                                if !audio_fallback && let Some(out) = &mut output {
                                     a.pump(out);
                                 }
                             }
@@ -217,6 +217,10 @@ pub(super) fn run(
                                 video.pop_front();
                             }
                             video.push_back(f);
+                            // Publish the target preview before reading ahead to prime audio.
+                            if seeking {
+                                break;
+                            }
                         }
                         _ => {}
                     },
@@ -237,7 +241,7 @@ pub(super) fn run(
                 }
             }
         }
-        if let (Some(a), Some(out)) = (&mut audio, &mut output) {
+        if !audio_fallback && let (Some(a), Some(out)) = (&mut audio, &mut output) {
             a.pump(out);
         }
         let now = s.clock.now();
@@ -287,6 +291,8 @@ pub(super) fn run(
             } else {
                 starving = None;
             }
+            // Keep new PCM out of the device queue until its timestamps have
+            // caught up with the video wall clock after a sparse audio gap.
             if audio_fallback && !a.pending.is_empty() {
                 let position = s.clock.now();
                 a.catch_up(position);

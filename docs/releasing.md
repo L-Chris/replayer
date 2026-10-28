@@ -4,7 +4,7 @@
 
 The desktop workflow builds Windows x64, macOS Apple Silicon and macOS Intel. Branch/PR builds upload artifacts; a stable `vX.Y.Z` tag matching `Cargo.toml` publishes only after all platform jobs pass.
 
-Windows FFmpeg is cross-built on Linux using the pinned dependency image before the Windows app job. macOS builds natively on each architecture. CI runs formatting, Clippy, tests, release builds and package smoke tests. The Windows test installs the package and plays media with developer runtime paths removed; the macOS test checks signatures, relocation and playback from ZIP and mounted DMG.
+Windows builds the exact remdia revision pinned in Cargo.toml before the app job. macOS builds natively on each architecture. CI runs formatting, Clippy, tests, release builds and package smoke tests. The Windows test installs the package and plays media with developer runtime paths removed; the macOS test checks signatures, relocation and playback from ZIP and mounted DMG.
 
 To release:
 
@@ -47,17 +47,24 @@ Libraries are signed before the app. Developer ID builds use the hardened runtim
 
 ## Windows packages
 
-Install Inno Setup 6 and prepare the optimized runtime as described in [development](development.md#package-size-policy). Keep `ffmpeg-playback.zip` with its `SHA256SUMS.txt` under `target/windows-runtime`:
+Install Inno Setup 6 and the [remdia build prerequisites](remdia.md), then:
 
 ```powershell
-./scripts/setup-windows.ps1 -RuntimeArchive target/windows-runtime/ffmpeg-playback.zip -WithTestTools
+./scripts/setup-windows.ps1
 cargo build --locked --release
 ./scripts/package-windows.ps1
 ```
 
-CI passes its explicit target binary to the packager. Local builds use `target/release/replayer.exe` by default. `-SkipInstaller` produces only the portable ZIP. The full legacy runtime remains a development/test bootstrap; packaging rejects it because it exposes extra encoders.
+CI passes its explicit target binary to the packager. Local builds use
+`target/release/replayer.exe` by default. `-SkipInstaller` produces only the
+portable ZIP. `-RuntimeDirectory` selects an already built SDK runtime whose
+REVISION matches Cargo.toml.
 
-Output names are `replayer-VERSION-windows-x86_64-setup.exe` and `.zip`, with a SHA-256 manifest. The app includes five FFmpeg DLLs (`avcodec`, `avformat`, `avutil`, `swresample`, `swscale`); import-table checks reject excluded FFmpeg dependencies. Runtime provenance and public recipes accompany the notices. CI statically links the app's MSVC runtime.
+Output names are `replayer-VERSION-windows-x86_64-setup.exe` and `.zip`, with a
+SHA-256 manifest. The app includes the native and Windows remdia component DLLs,
+manifests, matching revision and codec notices. Windows Cargo dependencies,
+package filenames and PE imports are checked for FFmpeg. CI statically links
+the app's MSVC runtime and tests the installed package with build paths removed.
 
 The installer is per-user, defaults to `%LOCALAPPDATA%/Programs/replayer` and does not replace user settings or downloaded media. Installed-update smoke tests also check shortcut/icon behavior.
 
@@ -67,4 +74,6 @@ Windows update discovery uses GitHub's latest stable release. A newer installer 
 
 The packages are not currently Authenticode-signed; hashes are integrity checks, not publisher signatures. macOS currently links users to Releases rather than installing updates in-app.
 
-The old full Windows FFmpeg archive is mirrored in the `deps-ffmpeg-9.0.2` prerelease for development/test bootstrap and is excluded from application-update discovery. Its URL/checksum stay paired in `scripts/setup-windows.ps1`; optimized builds are pinned by `scripts/build-windows-runtime.sh`. Component attribution is in [third-party notices](third-party.md).
+Historical FFmpeg dependency prereleases are excluded from application-update
+discovery and are not used by this Windows build. Component attribution is in
+[third-party notices](third-party.md).
