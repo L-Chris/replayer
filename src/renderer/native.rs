@@ -1,15 +1,12 @@
 use crate::player::VideoFrame;
+use crate::player::{Image, Pixel, Range, Space};
 use anyhow::Result;
 use eframe::{egui, egui_wgpu, wgpu};
-use ffmpeg::{format::Pixel, frame, software};
-use ffmpeg_next as ffmpeg;
 
 /// The UI consumes a texture/aspect ratio; pixel conversion stays here.
 pub struct VideoRenderer {
     gpu: Option<GpuVideo>,
     cpu_texture: Option<egui::TextureHandle>,
-    scaler: Option<software::scaling::Context>,
-    converted: frame::Video,
     staging: Vec<u8>,
     current: Option<(egui::TextureId, f32)>,
 }
@@ -18,8 +15,6 @@ impl VideoRenderer {
         Self {
             gpu: state.map(GpuVideo::new),
             cpu_texture: None,
-            scaler: None,
-            converted: frame::Video::empty(),
             staging: Vec::new(),
             current: None,
         }
@@ -52,30 +47,7 @@ impl VideoRenderer {
         }
         let w = source.width();
         let h = source.height();
-        let replace = self.scaler.as_ref().is_none_or(|s| {
-            s.input().format != source.format() || s.input().width != w || s.input().height != h
-        });
-        if replace {
-            self.scaler = Some(software::scaling::Context::get(
-                source.format(),
-                w,
-                h,
-                Pixel::RGBA,
-                w,
-                h,
-                software::scaling::Flags::BILINEAR,
-            )?);
-            self.converted = frame::Video::empty();
-        }
-        self.scaler
-            .as_mut()
-            .unwrap()
-            .run(source, &mut self.converted)?;
-        self.staging.resize(w as usize * h as usize * 4, 0);
-        for (row, dst) in self.staging.chunks_exact_mut(w as usize * 4).enumerate() {
-            let offset = row * self.converted.stride(0);
-            dst.copy_from_slice(&self.converted.data(0)[offset..offset + w as usize * 4]);
-        }
+        self.staging = cpu_rgba(source)?;
         let image =
             egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &self.staging);
         if let Some(texture) = &mut self.cpu_texture {
@@ -108,7 +80,7 @@ impl GpuVideo {
         let device = &state.device;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("video-yuv"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("video.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../video.wgsl").into()),
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("video-yuv"),
@@ -154,7 +126,7 @@ impl GpuVideo {
             images: None,
         }
     }
-    fn upload(&mut self, frame: &frame::Video) -> egui::TextureId {
+    fn upload(&mut self, frame: &Image) -> egui::TextureId {
         let w = frame.width();
         let h = frame.height();
         let format = frame.format();
@@ -331,15 +303,14 @@ impl Drop for GpuVideo {
         }
     }
 }
-fn color_matrix(frame: &frame::Video) -> [[f32; 4]; 4] {
-    use ffmpeg::util::color::{Range, Space};
+fn color_matrix(frame: &Image) -> [[f32; 4]; 4] {
     let (kr, kb) = match frame.color_space() {
         Space::BT709 => (0.2126, 0.0722),
         Space::BT2020NCL | Space::BT2020CL => (0.2627, 0.0593),
         Space::Unspecified if frame.height() > 576 => (0.2126, 0.0722),
         _ => (0.299, 0.114),
     };
-    let full = frame.color_range() == Range::JPEG || frame.format() == Pixel::YUVJ420P;
+    let full = frame.color_range() == Range::Jpeg || frame.format() == Pixel::YUVJ420P;
     let (depth, shift) = sample_layout(frame.format());
     let max = ((1u32 << depth) - 1) as f32;
     let unit = (1u32 << (depth - 8)) as f32;
@@ -378,6 +349,42 @@ fn sample_layout(format: Pixel) -> (u32, u32) {
     }
 }
 
+fn cpu_rgba(source: &Image) -> Result<Vec<u8>> {
+    let w = source.width() as usize;
+    let h = source.height() as usize;
+    let mut output = vec![0u8; w * h * 4];
+    let matrix = color_matrix(source);
+    for y in 0..h {
+        for x in 0..w {
+            let offset = (y * w + x) * 4;
+            match source.format() {
+                Pixel::Rgba | Pixel::Bgra => {
+                    let i = y * source.stride(0) + x * 4;
+                    output[offset..offset + 4].copy_from_slice(&source.data(0)[i..i + 4]);
+                    if source.format() == Pixel::Bgra {
+                        output.swap(offset, offset + 2);
+                    }
+                }
+                Pixel::NV12 => {
+                    let yy = source.data(0)[y * source.stride(0) + x] as f32 / 255.;
+                    let i = (y / 2) * source.stride(1) + (x / 2) * 2;
+                    let u = source.data(1)[i] as f32 / 255.;
+                    let v = source.data(1)[i + 1] as f32 / 255.;
+                    for ch in 0..3 {
+                        let r = matrix[ch];
+                        output[offset + ch] = ((r[0] * yy + r[1] * u + r[2] * v + r[3]) * 255.)
+                            .round()
+                            .clamp(0., 255.) as u8;
+                    }
+                    output[offset + 3] = 255;
+                }
+                _ => anyhow::bail!("CPU renderer does not support this native video format"),
+            }
+        }
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,7 +399,7 @@ mod tests {
             Pixel::YUV420P16LE,
             Pixel::P016LE,
         ] {
-            let f = frame::Video::new(format, 16, 16);
+            let f = Image::new(format, 16, 16);
             let matrix = color_matrix(&f);
             let (depth, _) = sample_layout(format);
             let max = ((1u32 << depth) - 1) as f32;
@@ -465,7 +472,7 @@ mod tests {
             (Pixel::YUV420P16LE, 16, 128, 128, [0, 0, 0]),
             (Pixel::NV12, 235, 128, 128, [255, 255, 255]),
         ] {
-            let mut frame = frame::Video::new(format, 7, 5);
+            let mut frame = Image::new(format, 7, 5);
             let (depth, shift) = sample_layout(format);
             let interleaved = matches!(format, Pixel::NV12 | Pixel::P010LE | Pixel::P016LE);
             if depth > 8 {

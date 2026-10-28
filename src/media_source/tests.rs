@@ -166,28 +166,9 @@ fn encrypted_music_plays_seeks_and_finishes() {
     use crate::player::{PlaybackState, Player};
     use std::time::{Duration, Instant};
     let fixture = Fixture::new();
-    let flac = fixture.0.join("plain.flac");
-    let ffmpeg = crate::test_config::ffmpeg();
-    assert!(
-        std::process::Command::new(ffmpeg)
-            .args([
-                "-v",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                "sine=duration=4:sample_rate=44100",
-                "-metadata",
-                "title=QQ adapter test",
-                "-c:a",
-                "flac"
-            ])
-            .arg(&flac)
-            .status()
-            .unwrap()
-            .success()
-    );
-    let plain = fs::read(flac).unwrap();
+    let plain =
+        fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/adapter.flac"))
+            .unwrap();
     for legacy in [true, false] {
         let mut encoded = plain.clone();
         let mut cipher = if legacy {

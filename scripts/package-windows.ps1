@@ -2,6 +2,7 @@ param(
     [string]$Binary = 'target/release/replayer.exe',
     [string]$OutputDirectory = 'dist',
     [string]$Iscc = '',
+    [string]$RuntimeDirectory = $env:REMDIA_RUNTIME_DIR,
     [switch]$SkipInstaller
 )
 $ErrorActionPreference = 'Stop'
@@ -26,18 +27,25 @@ try {
     $iconDirectory = Join-Path $stage 'icons'
     New-Item -ItemType Directory -Path $iconDirectory -Force | Out-Null
     Copy-Item -LiteralPath 'assets/branding/replayer.ico' -Destination (Join-Path $iconDirectory $iconName)
-    $ffmpeg = $env:FFMPEG_DIR
-    if (-not $ffmpeg) { $ffmpeg = Join-Path $root '.deps/ffmpeg-playback' }
-    $listing = @(& (Join-Path $ffmpeg 'bin/ffmpeg.exe') -hide_banner -encoders)
-    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect the playback runtime encoders.' }
-    $encoders = @($listing | ForEach-Object {
-        if ($_ -cmatch '^\s*[VAS][.A-Z]{5}\s+([a-z0-9_-]+)\s') { $Matches[1] }
-    })
-    if ($encoders.Count -ne 1 -or $encoders[0] -cne 'libmp3lame') {
-        throw 'Packages require the playback-only runtime with only libmp3lame encoding. Run setup-windows.ps1 -RuntimeArchive first.'
+    if (-not $RuntimeDirectory) { $RuntimeDirectory = Join-Path $root '.deps/remdia-source/dist/remdia' }
+    if (-not (Test-Path (Join-Path $RuntimeDirectory 'plugins/native.json'))) { throw 'Run setup-windows.ps1 to build remdia components first.' }
+    $cargo = Get-Content (Join-Path $root 'Cargo.toml') -Raw
+    if ($cargo -notmatch '(?m)^remdia\s*=\s*\{[^}]*rev\s*=\s*"([a-f0-9]{40})"') { throw 'Missing pinned remdia revision.' }
+    if ((Get-Content (Join-Path $RuntimeDirectory 'REVISION') -Raw).Trim() -cne $Matches[1]) { throw 'Runtime revision does not match Cargo.toml.' }
+    $plugins = Join-Path $stage 'plugins'
+    New-Item -ItemType Directory -Force $plugins | Out-Null
+    foreach ($name in @('native', 'windows')) {
+        foreach ($filename in @("$name.json", "remdia_backend_$name.dll")) {
+            Copy-Item -LiteralPath (Join-Path $RuntimeDirectory "plugins/$filename") -Destination $plugins
+        }
     }
-    $dlls = @(& "$PSScriptRoot/ffmpeg-runtime.ps1" -Binary $Binary -RuntimeDirectory (Join-Path $ffmpeg 'bin'))
-    $dlls | Copy-Item -Destination $stage
+    if (Test-Path (Join-Path $RuntimeDirectory 'licenses')) {
+        Copy-Item -LiteralPath (Join-Path $RuntimeDirectory 'licenses') -Destination (Join-Path $stage 'remdia-licenses') -Recurse
+    }
+    Copy-Item -LiteralPath (Join-Path $RuntimeDirectory 'THIRD_PARTY.md') -Destination (Join-Path $stage 'remdia-THIRD-PARTY.md')
+    Copy-Item -LiteralPath (Join-Path $RuntimeDirectory 'REVISION') -Destination (Join-Path $stage 'remdia-REVISION')
+    python scripts/audit-native-windows.py --directory $stage
+    if ($LASTEXITCODE -ne 0) { throw 'Windows dependency audit failed.' }
     Copy-Item -LiteralPath 'README.md' -Destination $stage
     $userDocs = Join-Path $stage 'docs'
     New-Item -ItemType Directory -Path $userDocs -Force | Out-Null
@@ -45,15 +53,6 @@ try {
         Copy-Item -LiteralPath (Join-Path 'docs' $name) -Destination $userDocs
     }
     Copy-Item -LiteralPath 'licenses' -Destination $stage -Recurse
-    Copy-Item -LiteralPath (Join-Path $ffmpeg 'LICENSE.txt') -Destination (Join-Path $stage 'FFmpeg-LICENSE.txt')
-    if (Test-Path -LiteralPath (Join-Path $ffmpeg 'BUILD.txt')) {
-        Copy-Item -LiteralPath (Join-Path $ffmpeg 'BUILD.txt') -Destination (Join-Path $stage 'FFmpeg-BUILD.txt')
-        $recipes = Join-Path $stage 'ffmpeg-build'
-        New-Item -ItemType Directory -Path $recipes -Force | Out-Null
-        foreach ($name in @('build-windows-runtime.sh', 'ffmpeg-playback-options.sh', 'verify-ffmpeg-config.py')) {
-            Copy-Item -LiteralPath (Join-Path $ffmpeg $name) -Destination $recipes
-        }
-    }
     $zip = Join-Path $output "replayer-$version-windows-x86_64.zip"
     Compress-Archive -LiteralPath @(Get-ChildItem -LiteralPath $stage -Force | ForEach-Object FullName) -DestinationPath $zip -Force
     if (-not $SkipInstaller) {

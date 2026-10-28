@@ -7,10 +7,12 @@ mod credentials;
 mod jobs;
 mod lyrics;
 mod media;
+mod media_backend;
 mod media_source;
 mod music_sources;
 mod player;
 mod queue;
+#[path = "renderer/native.rs"]
 mod renderer;
 mod selftest;
 mod settings;

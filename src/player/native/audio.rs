@@ -8,8 +8,7 @@ use anyhow::Result;
 use anyhow::{Context, bail};
 #[cfg(not(test))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use ffmpeg::{ChannelLayout, codec, format, frame, software};
-use ffmpeg_next as ffmpeg;
+
 use rtrb::{Producer, RingBuffer};
 
 #[derive(Clone, Copy)]
@@ -25,6 +24,8 @@ pub struct OutputControl {
     pub enabled: AtomicBool,
     pub failed: AtomicBool,
     pub underruns: AtomicU64,
+    #[cfg(test)]
+    pub simulated_rate: AtomicU32,
 }
 impl OutputControl {
     pub fn new() -> Self {
@@ -33,6 +34,8 @@ impl OutputControl {
             enabled: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
+            #[cfg(test)]
+            simulated_rate: AtomicU32::new(48000),
         }
     }
 }
@@ -152,20 +155,30 @@ pub fn open_output(
     control: Arc<OutputControl>,
     _volume: Arc<AtomicU32>,
 ) -> Result<AudioOut> {
-    let rate = 48000;
-    let capacity = 24000;
+    let rate = control.simulated_rate.load(Ordering::Acquire);
+    let capacity = rate as usize / 2;
     let (producer, mut consumer) = RingBuffer::<Sample>::new(capacity);
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = stop.clone();
     std::thread::spawn(move || {
+        let mut tick = std::time::Instant::now();
+        let mut remainder = 0.0;
         while !worker_stop.load(Ordering::Acquire) {
+            let now = std::time::Instant::now();
+            let samples = now.duration_since(tick).as_secs_f64() * rate as f64 + remainder;
+            tick = now;
+            remainder = samples.fract();
+            // Simulate a device at its sample rate even when CI coalesces the
+            // five-millisecond sleeps. A fixed 240 frames per wake slows the
+            // media clock whenever thread scheduling is delayed.
+            let due = (samples as usize).min(capacity);
             let epoch = control.epoch.load(Ordering::Acquire);
             while consumer.peek().is_ok_and(|s| s.epoch < epoch) {
                 let _ = consumer.pop();
             }
             if control.enabled.load(Ordering::Acquire) {
                 let mut last = None;
-                for _ in 0..240 {
+                for _ in 0..due {
                     if consumer.peek().is_ok_and(|s| s.epoch == epoch) {
                         last = consumer.pop().ok();
                     } else {
@@ -174,11 +187,9 @@ pub fn open_output(
                 }
                 if let Some(sample) = last {
                     assert!(sample.pcm.iter().all(|v| v.is_finite()));
-                    clock.progress.publish(
-                        epoch,
-                        sample.pts + 1.0 / rate as f64,
-                        clock.wall() + 0.005,
-                    );
+                    clock
+                        .progress
+                        .publish(epoch, sample.pts + 1.0 / rate as f64, clock.wall());
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -200,207 +211,88 @@ impl Drop for AudioOut {
 }
 
 pub struct AudioPipeline {
-    dec: ffmpeg::decoder::Audio,
-    resampler: software::resampling::Context,
-    tb: f64,
-    origin: f64,
-    rate: u32,
-    next_pts: Option<f64>,
     pub pending: VecDeque<Sample>,
     pub end: f64,
     pub submitted_end: Option<f64>,
+    rate: u32,
     queued_until: f64,
     discard_before: f64,
 }
 impl AudioPipeline {
-    pub fn new(params: codec::Parameters, tb: f64, origin: f64, rate: u32) -> Result<Self> {
-        let mut dec = codec::context::Context::from_parameters(params)?
-            .decoder()
-            .audio()?;
-        dec.set_packet_time_base(ffmpeg::Rational::from(tb));
-        let layout = if !dec.channel_layout().is_empty() {
-            dec.channel_layout()
-        } else {
-            ChannelLayout::default(dec.channels() as i32)
-        };
-        let resampler = software::resampling::Context::get(
-            dec.format(),
-            layout,
-            dec.rate(),
-            format::Sample::F32(format::sample::Type::Packed),
-            ChannelLayout::STEREO,
-            rate,
-        )?;
-        Ok(Self {
-            dec,
-            resampler,
-            tb,
-            origin,
-            rate,
-            next_pts: None,
+    pub fn new(rate: u32) -> Self {
+        Self {
             pending: VecDeque::new(),
-            end: 0.0,
+            end: 0.,
             submitted_end: None,
-            queued_until: 0.0,
-            discard_before: 0.0,
-        })
+            rate,
+            queued_until: 0.,
+            discard_before: 0.,
+        }
     }
-    pub fn reset(&mut self, target: f64) -> Result<()> {
-        self.dec.flush();
-        let input = *self.resampler.input();
-        self.resampler = software::resampling::Context::get(
-            input.format,
-            input.channel_layout,
-            input.rate,
-            format::Sample::F32(format::sample::Type::Packed),
-            ChannelLayout::STEREO,
-            self.rate,
-        )?;
+    pub fn reset(&mut self, target: f64) {
         self.pending.clear();
-        self.next_pts = None;
         self.end = target;
         self.submitted_end = None;
         self.queued_until = target;
         self.discard_before = target;
-        Ok(())
     }
-    pub fn decode(
-        &mut self,
-        packet: Option<&ffmpeg::Packet>,
-        epoch: u64,
-        target: f64,
-    ) -> Result<()> {
-        let sent = match packet {
-            Some(p) => self.dec.send_packet(p),
-            None => self.dec.send_eof(),
-        };
-        if let Err(e) = sent {
-            if super::again(e) {
-                self.receive(epoch, target)?;
-                match packet {
-                    Some(p) => self.dec.send_packet(p)?,
-                    None => self.dec.send_eof()?,
-                }
-            } else if packet.is_none() || e != ffmpeg::Error::InvalidData {
-                // A corrupt packet is skipped; the decoder resyncs downstream.
-                return Err(e.into());
-            }
-        }
-        self.receive(epoch, target)?;
-        if packet.is_none() {
-            loop {
-                let mut output = self.output(4096);
-                self.resampler.flush(&mut output)?;
-                if output.samples() == 0 {
-                    break;
-                }
-                self.append(&output, epoch, target);
-            }
-        }
-        Ok(())
-    }
-    fn output(&self, samples: usize) -> frame::Audio {
-        frame::Audio::new(
-            format::Sample::F32(format::sample::Type::Packed),
+    pub fn append(&mut self, frame: &remdia::Frame, epoch: u64, target: f64) -> Result<()> {
+        let remdia::FrameInfo::Audio {
+            pts_us,
+            rate,
+            channels,
             samples,
-            ChannelLayout::STEREO,
-        )
-    }
-    /// Corrupt streams can decode a frame with new parameters; swr would fail
-    /// with INPUT_CHANGED, so rebuild the resampler around the change instead.
-    fn match_resampler(&mut self, input: &frame::Audio) -> Result<()> {
-        let current = *self.resampler.input();
-        if current.format == input.format()
-            && current.rate == input.rate()
-            && current.channel_layout == input.channel_layout()
-        {
+            ..
+        } = *frame.info()
+        else {
             return Ok(());
-        }
-        self.resampler = software::resampling::Context::get(
-            input.format(),
-            input.channel_layout(),
-            input.rate(),
-            format::Sample::F32(format::sample::Type::Packed),
-            ChannelLayout::STEREO,
-            self.rate,
-        )?;
-        Ok(())
-    }
-    fn receive(&mut self, epoch: u64, target: f64) -> Result<()> {
-        let mut input = frame::Audio::empty();
-        loop {
-            match self.dec.receive_frame(&mut input) {
-                Ok(()) => {}
-                Err(e) if super::again(e) || e == ffmpeg::Error::Eof => break,
-                Err(ffmpeg::Error::InvalidData) => continue,
-                Err(e) => return Err(e.into()),
-            }
-            if input.channel_layout().is_empty() {
-                input.set_channel_layout(ChannelLayout::default(input.channels() as i32));
-            }
-            self.match_resampler(&input)?;
-            let pts = input
-                .timestamp()
-                .or(input.pts())
-                .map(|p| p as f64 * self.tb - self.origin);
-            // Preserve normal resampler delay, but follow genuine timestamp discontinuities.
-            if self.next_pts.is_none()
-                || pts
-                    .zip(self.next_pts)
-                    .is_some_and(|(a, b)| (a - b).abs() > 0.1)
-            {
-                self.next_pts = Some(pts.unwrap_or(target));
-            }
-            let delay = self
-                .resampler
-                .delay()
-                .map_or(0, |d| d.output.max(0) as usize);
-            let count = (input.samples() as f64 * self.rate as f64 / input.rate().max(1) as f64)
-                .ceil() as usize
-                + delay
-                + 256;
-            let mut output = self.output(count);
-            self.resampler.run(&input, &mut output)?;
-            self.append(&output, epoch, target);
-        }
-        Ok(())
-    }
-    fn append(&mut self, output: &frame::Audio, epoch: u64, target: f64) {
-        let target = target.max(self.discard_before);
-        let pts = self.next_pts.unwrap_or(target);
-        let n = output.samples();
-        self.next_pts = Some(pts + n as f64 / self.rate as f64);
-        let bytes = &output.data(0)[..n * 8];
-        let pcm: &[f32] = bytemuck::cast_slice(bytes);
-        let skip = ((target - pts).max(0.0) * self.rate as f64).ceil() as usize;
-        for (i, pair) in pcm.as_chunks::<2>().0.iter().enumerate().skip(skip) {
+        };
+        anyhow::ensure!(
+            rate == self.rate && channels == 2,
+            "remdia/device PCM format mismatch"
+        );
+        let pts = pts_us as f64 / 1e6;
+        let skip = ((target.max(self.discard_before) - pts).max(0.) * rate as f64).ceil() as usize;
+        anyhow::ensure!(
+            self.pending.len() + samples <= self.rate as usize * 2,
+            "decoded audio exceeded two-second pending budget"
+        );
+        for (i, pair) in frame
+            .bytes()
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .enumerate()
+            .skip(skip)
+        {
+            let left = f32::from_le_bytes(pair[..4].try_into().unwrap());
+            let right = f32::from_le_bytes(pair[4..].try_into().unwrap());
             self.pending.push_back(Sample {
                 epoch,
-                pts: pts + i as f64 / self.rate as f64,
-                pcm: [pair[0], pair[1]],
+                pts: pts + i as f64 / rate as f64,
+                pcm: [left, right],
             });
         }
-        if n > skip {
-            self.end = self.next_pts.unwrap();
+        if samples > skip {
+            self.end = pts + samples as f64 / rate as f64;
         }
+        Ok(())
     }
     pub fn pump(&mut self, out: &mut AudioOut) {
         for _ in 0..out.producer.slots() {
             let Some(next) = self.pending.front() else {
                 break;
             };
-            // Timestamp gaps become bounded, lazily generated silence. No huge
-            // allocation when an audio track starts minutes after the video.
             let sample = if next.pts > self.queued_until + 1.5 / self.rate as f64 {
                 Sample {
                     epoch: next.epoch,
                     pts: self.queued_until,
-                    pcm: [0.0; 2],
+                    pcm: [0.; 2],
                 }
             } else {
                 self.pending.pop_front().unwrap()
             };
-            self.queued_until = sample.pts + 1.0 / self.rate as f64;
+            self.queued_until = sample.pts + 1. / self.rate as f64;
             let result = out.producer.push(sample);
             debug_assert!(result.is_ok());
             self.submitted_end = Some(self.queued_until);

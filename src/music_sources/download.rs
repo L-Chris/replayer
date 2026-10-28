@@ -45,14 +45,13 @@ pub(super) fn filename(song: &Song, quality: &str, extension: &str) -> String {
     )
 }
 pub(super) fn validate(path: &Path) -> Result<()> {
-    // Opening only completed local files avoids signed URLs entering FFmpeg logs.
-    let media = ffmpeg_next::format::input(path)
+    let mut request = remdia::Request::playback(path.to_string_lossy());
+    request.task = remdia::Task::Probe;
+    let engine = crate::media_backend::engine()?;
+    let media = unsafe { engine.open(request, remdia::Cancellation::default()) }
         .map_err(|_| anyhow!("Downloaded file is not playable audio"))?;
     ensure!(
-        media
-            .streams()
-            .best(ffmpeg_next::media::Type::Audio)
-            .is_some(),
+        media.info().tracks.iter().any(|t| t.kind == "audio"),
         "Downloaded file has no audio track"
     );
     Ok(())

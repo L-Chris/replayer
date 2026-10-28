@@ -1,14 +1,14 @@
+#[path = "native/audio.rs"]
 mod audio;
 mod clock;
+#[path = "native/demux.rs"]
 mod demux;
-mod music;
-#[cfg(test)]
-mod music_tests;
-#[cfg(test)]
-mod network_tests;
+#[path = "native/session.rs"]
 mod session;
+#[path = "native/video.rs"]
 mod video;
 pub use video::VideoFrame;
+pub(crate) use video::{Image, Pixel, Range, Space};
 
 use anyhow::Result;
 use audio::OutputControl;
@@ -42,6 +42,7 @@ pub enum Event {
     MediaInfo(Arc<crate::media::Info>),
     Opened,
     SeekCompleted {
+        /// The caller's seek ID, preserved across internal device recovery.
         id: u64,
         position: f64,
     },
@@ -59,6 +60,10 @@ struct Shared {
     snapshot: Mutex<Snapshot>,
     clock: Arc<Clock>,
     requested: Arc<AtomicU64>,
+    // Serialize generation allocation with publication of the user's intent.
+    // Internal audio recovery advances the generation without replacing it.
+    seek_intent: Mutex<(u64, f64)>,
+    cancel: remdia::Cancellation,
     progressive: bool,
     source_key: Option<String>,
     desired_playing: AtomicBool,
@@ -93,6 +98,7 @@ impl Player {
         let (frame_tx, frames) = bounded(3);
         let stale_frames = frames.clone();
         let (event_tx, events) = unbounded();
+        let requested = Arc::new(AtomicU64::new(1));
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(Snapshot {
                 media: None,
@@ -103,7 +109,9 @@ impl Player {
                 epoch: 1,
             }),
             clock: Arc::new(Clock::new()),
-            requested: Arc::new(AtomicU64::new(1)),
+            requested: requested.clone(),
+            seek_intent: Mutex::new((0, 0.0)),
+            cancel: remdia::Cancellation::with_requested_generation(requested),
             progressive,
             source_key,
             desired_playing: AtomicBool::new(true),
@@ -196,6 +204,8 @@ impl Player {
         let ended = self.snapshot().state == PlaybackState::Ended;
         self.set_playing(ended || !self.shared.desired_playing.load(Ordering::Acquire));
     }
+    /// Returns the ID reported by SeekCompleted. Device recovery may advance
+    /// frame generations while retaining this user request and its target.
     pub fn seek(&self, target: f64) -> u64 {
         let duration = self.duration();
         let target = if target.is_finite() {
@@ -208,9 +218,14 @@ impl Player {
         } else {
             target
         };
+        let mut intent = self.shared.seek_intent.lock().unwrap();
         let id = self.shared.requested.fetch_add(1, Ordering::AcqRel) + 1;
+        *intent = (id, target);
         self.shared.output.enabled.store(false, Ordering::Release);
-        self.shared.output.epoch.store(id, Ordering::Release);
+        self.shared.output.epoch.fetch_max(id, Ordering::AcqRel);
+        if self.snapshot().state != PlaybackState::Opening {
+            self.shared.cancel.interrupt();
+        }
         let _ = self.commands.send(Command::Seek { id, target });
         id
     }
@@ -252,8 +267,9 @@ impl Drop for Player {
     fn drop(&mut self) {
         self.shared.output.enabled.store(false, Ordering::Release);
         self.shared.stop.store(true, Ordering::Release);
+        self.shared.cancel.cancel();
         if let Some(thread) = self.thread.take() {
-            // Cancellation interrupts FFmpeg I/O; joining is kept off the UI thread.
+            // Cancellation interrupts media I/O; joining is kept off the UI thread.
             let _ = std::thread::Builder::new()
                 .name("replayer-reaper".into())
                 .spawn(move || {
@@ -262,154 +278,6 @@ impl Drop for Player {
         }
     }
 }
-fn again(error: ffmpeg_next::Error) -> bool {
-    matches!(error, ffmpeg_next::Error::Other { errno } if errno == ffmpeg_next::error::EAGAIN)
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn open_errors_keep_the_real_cause() {
-        let player = Player::open("replayer-intentionally-missing-file.mp4".into()).unwrap();
-        let start = Instant::now();
-        loop {
-            if let Some(Event::Error(error)) = player.poll_event() {
-                assert!(error.contains("replayer-intentionally-missing-file"));
-                assert!(!error.contains("timed out opening"));
-                break;
-            }
-            assert!(start.elapsed() < Duration::from_secs(5));
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    #[test]
-    fn drop_cancels_blocked_network_open_and_reaps_threads() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let server = std::thread::spawn(move || {
-            let (_socket, _) = listener.accept().unwrap();
-            accepted_tx.send(()).unwrap();
-            let _ = release_rx.recv_timeout(Duration::from_secs(5));
-        });
-        let player = Player::open(format!("http://{address}/blocked.mp4")).unwrap();
-        accepted_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-        let shared = player.shared.clone();
-        let start = Instant::now();
-        drop(player);
-        assert!(start.elapsed() < Duration::from_millis(200));
-        while Arc::strong_count(&shared) > 1 && start.elapsed() < Duration::from_secs(3) {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let reaped = Arc::strong_count(&shared) == 1;
-        let _ = release_tx.send(());
-        server.join().unwrap();
-        assert!(
-            reaped,
-            "session did not release its shared state after cancellation"
-        );
-    }
-
-    #[test]
-    fn video_device_failure_recovers_audio() {
-        let root =
-            std::env::temp_dir().join(format!("replayer-video-device-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("sample.mp4");
-        let exe = crate::test_config::ffmpeg();
-        assert!(
-            std::process::Command::new(exe)
-                .args([
-                    "-v",
-                    "error",
-                    "-y",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "testsrc2=size=320x180:rate=24:duration=6",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "sine=frequency=440:sample_rate=48000:duration=6",
-                    "-c:v",
-                    "mpeg4",
-                    "-g",
-                    "24",
-                    "-q:v",
-                    "4",
-                    "-c:a",
-                    "aac",
-                    "-movflags",
-                    "+faststart",
-                ])
-                .arg(&path)
-                .status()
-                .unwrap()
-                .success()
-        );
-        let mut player = Player::open(path.to_string_lossy().into_owned()).unwrap();
-        let pump = |player: &mut Player| {
-            let mut events = Vec::new();
-            while let Some(event) = player.poll_event() {
-                if let Event::Error(error) = &event {
-                    panic!("{error}");
-                }
-                events.push(event);
-            }
-            player.next_frame(player.sync_time());
-            events
-        };
-        let start = Instant::now();
-        loop {
-            let s = player.snapshot();
-            assert!(s.state != PlaybackState::Failed, "open failed");
-            if s.state == PlaybackState::Playing && s.has_audio && player.position() > 0.1 {
-                break;
-            }
-            assert!(start.elapsed() < Duration::from_secs(10), "{s:?}");
-            pump(&mut player);
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let epoch_before = player.snapshot().epoch;
-        player.shared.output.failed.store(true, Ordering::Release);
-        let mut warnings = Vec::new();
-        let start = Instant::now();
-        loop {
-            let s = player.snapshot();
-            if s.state == PlaybackState::Playing && s.epoch > epoch_before && s.has_audio {
-                break;
-            }
-            assert!(s.state != PlaybackState::Failed, "recovery failed: {s:?}");
-            assert!(
-                start.elapsed() < Duration::from_secs(10),
-                "no recovery: {s:?}"
-            );
-            for event in pump(&mut player) {
-                if let Event::Warning(message) = event {
-                    warnings.push(message);
-                }
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(warnings.is_empty(), "recovery warned: {warnings:?}");
-        let before = player.position();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while player.position() < before + 0.2 {
-            pump(&mut player);
-            assert!(
-                Instant::now() < deadline,
-                "clock froze after audio recovery: {}",
-                player.position()
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        drop(player);
-        std::thread::sleep(Duration::from_millis(50));
-        std::fs::remove_dir_all(&root).unwrap();
-    }
-}
+#[path = "native/tests.rs"]
+mod native_tests;

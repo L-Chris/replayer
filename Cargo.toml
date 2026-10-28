@@ -10,8 +10,8 @@ cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
 eframe = "0.36"
 egui-phosphor = { version = "0.14", features = ["subset"] }
-# Playback and subtitle audio extraction do not use capture devices or filters.
-ffmpeg-next = { version = "9.0", default-features = false, features = ["codec", "format", "software-resampling", "software-scaling"] }
+# Playback and subtitle export use independent remdia component graphs.
+remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "d69ef6e72806c11a2f517a8fd65b6ba28c16ac87" }
 rfd = "0.17.2"
 rtrb = "0.3"
 base64 = "0.22"
@@ -37,6 +37,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 tc_tea = { version = "0.2.1", default-features = false }
 replayer-image = { path = "crates/replayer-image" }
+
+[features]
+# Compatibility alias: remdia is now the default on every host.
+remdia-media = []
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }

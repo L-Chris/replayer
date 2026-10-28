@@ -6,7 +6,7 @@
 | --- | --- |
 | `src/app/` | UI, navigation, settings drafts and reader/media views |
 | `src/player/` | Media sessions, demux, decoding, audio output and playback clock |
-| `src/renderer.rs`, `src/video.wgsl` | GPU video conversion and presentation |
+| `src/renderer/native.rs`, `src/video.wgsl` | GPU video conversion and presentation |
 | `src/media*`, `src/queue.rs`, `src/lyrics.rs` | Metadata, local adapters, saved queues and lyrics |
 | `src/music_sources/` | Source adapters, downloads and streaming cache |
 | `src/comics/`, `crates/replayer-image/` | Comic sources, library, image preparation and translation |
@@ -16,13 +16,13 @@
 
 ## Playback
 
-The UI holds an asynchronous `Player` handle. A demux worker owns the FFmpeg input; a session coordinates bounded packet/frame queues, decoding and audio output. The audio callback uses a preallocated SPSC PCM buffer and atomic control/progress data, avoiding locks and allocation in the callback.
+The UI holds an asynchronous `Player` handle. A worker owns a remdia demux/decoder/filter graph; a session coordinates bounded frame queues, audio output and presentation. Codec implementations live in independent component plugins behind C ABI v2.1. The audio callback uses a preallocated SPSC PCM buffer and atomic control/progress data, avoiding locks and allocation in the callback.
 
 The audio device drives the clock when audio is available; underruns freeze progress at submitted audio. A wall clock allows silent video and video beyond a short audio track to continue. EOF drains decoders, resampling, device output and remaining video before reporting completion. Ended sessions retain enough state for seeking and replay.
 
 Each seek increments an epoch. Old audio and video are rejected, packet queues are flushed and the demux worker seeks. Video before the requested position is discarded and audio is clipped to the target. Completion means the new position is prepared, not that the device has already played it. Stop interrupts blocking I/O; worker reclamation stays off the UI thread.
 
-Windows attempts D3D11VA and can fall back to software decoding. WGPU converts supported 8/10/12/16-bit YUV420 and NV12/P010/P016 formats; other formats use swscale. Hardware frames are downloaded and uploaded again, so this is not a zero-copy pipeline or complete HDR color-management implementation.
+Windows uses software Media Foundation transforms. macOS uses synchronous VideoToolbox decoding with hardware preference and system software fallback. Both return CPU NV12 planes to WGPU; thumbnails use a separate conversion/resize component. The current verified path is 8-bit SDR H.264 in MP4/MKV. Shared GPU textures and HDR tone mapping remain future work. See [media integration](remdia.md) for supported paths and limits.
 
 ## Network media
 

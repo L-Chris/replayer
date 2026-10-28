@@ -411,7 +411,7 @@ pub async fn prepare(
                 .open(&worker.path)?
                 .sync_all()?;
             validate(&worker.path)?;
-            // Keep the cache path alive for active FFmpeg readers after publication.
+            // Keep the cache path alive for active media readers after publication.
             if let Err(error) = std::fs::hard_link(&worker.path, &target) {
                 if error.kind() != std::io::ErrorKind::AlreadyExists {
                     return Err(error).context("Cannot publish downloaded music file");

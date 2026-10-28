@@ -95,7 +95,7 @@ pub(super) fn run_with_cache(
         "concurrency must be between 1 and 6"
     );
     let started = Instant::now();
-    let mut audio = loop {
+    let audio = loop {
         ensure!(!cancel.load(Ordering::Acquire), "字幕生成已取消");
         let before = cache.as_ref().map_or(0, |c| c.load(Ordering::Acquire));
         match audio::AudioChunks::open(path, cancel.clone(), client.chunk_seconds()) {
@@ -135,9 +135,19 @@ pub(super) fn run_with_cache(
     );
     let (tx, rx) = crossbeam_channel::unbounded::<Decode>();
     let worker_cancel = cancel.clone();
+    let audio = audio.into_transfer();
     let decoder = std::thread::Builder::new()
         .name("replayer-subtitle-audio".into())
         .spawn(move || {
+            let mut audio = match audio.open() {
+                Ok(audio) => audio,
+                Err(error) => {
+                    while let Ok((_, _, reply)) = rx.recv() {
+                        let _ = reply.send(Err(anyhow::anyhow!(error.to_string())));
+                    }
+                    return;
+                }
+            };
             while let Ok((start, end, reply)) = rx.recv() {
                 if worker_cancel.load(Ordering::Acquire) {
                     break;

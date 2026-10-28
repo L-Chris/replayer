@@ -40,9 +40,14 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
-; Remove the two obsolete bundled DLLs when upgrading an existing installation.
+; Remove obsolete FFmpeg runtime libraries when upgrading to remdia.
 Type: files; Name: "{app}\avdevice-63.dll"
 Type: files; Name: "{app}\avfilter-12.dll"
+Type: files; Name: "{app}\avcodec-63.dll"
+Type: files; Name: "{app}\avformat-63.dll"
+Type: files; Name: "{app}\avutil-61.dll"
+Type: files; Name: "{app}\swresample-7.dll"
+Type: files; Name: "{app}\swscale-10.dll"
 
 [Icons]
 Name: "{group}\replayer"; Filename: "{app}\replayer.exe"; IconFilename: "{app}\icons\{#AppIconFile}"; IconIndex: 0

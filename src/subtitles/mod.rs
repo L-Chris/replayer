@@ -1,5 +1,7 @@
 mod api;
+#[path = "native/audio.rs"]
 mod audio;
+#[path = "native/mp3.rs"]
 mod mp3;
 mod scheduler;
 pub use api::Config as LlmConfig;
@@ -177,12 +179,20 @@ fn generate_with_client(
         through: 0.0,
         total,
     });
-    // Blocking FFmpeg reads stay off the async executor. Both the decode queue
+    // Blocking media reads stay off the async executor. Both the decode queue
     // and the ordered request window are bounded by the configured concurrency.
     let (sender, receiver) = tokio::sync::mpsc::channel(options.concurrency);
+    let audio = audio.into_transfer();
     let decoder = std::thread::Builder::new()
         .name("replayer-subtitle-audio".into())
         .spawn(move || {
+            let mut audio = match audio.open() {
+                Ok(audio) => audio,
+                Err(error) => {
+                    let _ = sender.blocking_send(Err(error));
+                    return;
+                }
+            };
             loop {
                 match audio.next() {
                     Ok(Some(chunk)) => {
