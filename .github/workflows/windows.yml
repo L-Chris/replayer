@@ -137,7 +137,7 @@ jobs:
             if ($process.ExitCode -ne 0) { throw "Installed native selftest failed: $($process.ExitCode)" }
           } finally { $env:PATH = $savedPath; $env:REMDIA_PLUGIN_DIR = $savedPlugins }
       - uses: actions/cache/save@v4
-        if: always() && steps.rust-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.rust-cache.outputs.cache-hit != 'true' }}
         with:
           path: |
             ~/.cargo/registry
@@ -226,7 +226,7 @@ jobs:
           python3 scripts/package-macos.py --binary 'target/${{ matrix.target }}/release/replayer' --output-directory 'dist/macos-${{ matrix.arch }}'
           python3 scripts/test-macos-package.py --directory 'dist/macos-${{ matrix.arch }}'
       - uses: actions/cache/save@v4
-        if: always() && steps.mac-cache.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.mac-cache.outputs.cache-hit != 'true' }}
         with:
           path: |
             ~/.cargo/registry
