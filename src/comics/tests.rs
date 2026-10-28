@@ -309,6 +309,15 @@ fn image_edit_uploads_jpeg_and_normalizes_provider_results_to_jpeg() {
         // Some compatible gateways ignore output_format. They must still yield
         // a JPEG cache after canvas reconstruction, without a second API call.
         for (name, format) in [("webp", "webp"), ("jpeg", "jpeg"), ("png", "png")] {
+            if format == "webp" && !crate::pixels::test_support::webp_supported() {
+                assert!(
+                    crate::pixels::read_image(include_bytes!(
+                        "../../tests/fixtures/images/legacy-white.webp"
+                    ))
+                    .is_err()
+                );
+                continue;
+            }
             let mut response = std::io::Cursor::new(Vec::new());
             if format == "webp" {
                 response.get_mut().extend_from_slice(include_bytes!(
@@ -407,7 +416,7 @@ fn image_negotiation_preserves_original_bytes_and_explicit_provider_headers() {
     runtime().block_on(async {
         let calls = Arc::new(AtomicUsize::new(0));
         let observed = calls.clone();
-        let bytes = include_bytes!("../../tests/fixtures/images/legacy-white.webp").to_vec();
+        let bytes = png(32, 64);
         let expected = bytes.clone();
         let app = axum::Router::new().route(
             "/image",
@@ -425,7 +434,7 @@ fn image_negotiation_preserves_original_bytes_and_explicit_provider_headers() {
                         assert_eq!(accept, "image/png");
                     }
                     // Deliberately misleading MIME: decoding must inspect the actual bytes.
-                    ([("content-type", "image/png")], bytes)
+                    ([("content-type", "image/jpeg")], bytes)
                 }
             }),
         );

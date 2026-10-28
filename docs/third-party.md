@@ -14,7 +14,7 @@ Both MIT notices are bundled in `licenses/egui-phosphor-MIT.txt` and
 Sources: https://github.com/amPerl/egui-phosphor and
 https://github.com/phosphor-icons/web .
 
-Comic images, artwork and translation pixel operations use the remdia system image pack (WIC / ImageIO / CoreGraphics). The application has no direct image or fast_image_resize dependency. The GUI framework still brings its internal image/clipboard dependencies transitively. Windows packages may include the narrow image-webp fallback (MIT OR Apache-2.0), documented and licensed in the SDK notices.
+Comic images, artwork and translation pixel operations use the remdia system image pack (WIC / ImageIO / CoreGraphics). The application has no direct image or fast_image_resize dependency. The GUI framework still brings its internal image/clipboard dependencies transitively. WebP decoding requires an installed system codec; no third-party WebP fallback is bundled.
 
 Comic library storage uses `rusqlite` 0.40.2 (MIT), which embeds SQLite through
 `libsqlite3-sys` with the bundled feature. SQLite is in the public domain.

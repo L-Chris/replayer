@@ -151,6 +151,19 @@ pub fn format(bytes: &[u8]) -> Result<String> {
 #[cfg(test)]
 pub mod test_support {
     use super::*;
+    pub fn webp_supported() -> bool {
+        let caps = unsafe {
+            crate::media_backend::engine()
+                .unwrap()
+                .image_capabilities()
+                .unwrap()
+        };
+        caps["decode"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|format| format == "org.webmproject.webp")
+    }
     pub trait TestImageOutput {
         fn write_to(&self, writer: &mut impl std::io::Write, format: &str) -> Result<()>;
         fn save(&self, path: impl AsRef<std::path::Path>) -> Result<()>;

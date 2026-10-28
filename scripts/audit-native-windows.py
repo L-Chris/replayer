@@ -43,10 +43,10 @@ def imports(path):
 root = Path(a.directory)
 assert not (root / 'remdia-licenses/Opus-COPYING.txt').exists(), 'Stale SDK license from a cached runtime'
 for path in root.rglob('*'):
-    assert not re.search(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale)', path.name, re.I), path
+    assert not re.search(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale|image[_-]webp)', path.name, re.I), path
     if path.suffix.lower() in ('.exe', '.dll'):
         linked = imports(path)
         assert not any(re.search(r'(avcodec|avformat|avutil|swresample|swscale|vcruntime|msvcp|msvcr\d)', item, re.I) for item in linked), (path, linked)
-for name in ('native', 'windows', 'image', 'image_webp', 'system_audio', 'system_demux', 'fallback_demux', 'fallback_vorbis', 'fallback_mp3_lame'):
+for name in ('native', 'windows', 'image', 'system_audio', 'system_demux', 'fallback_demux', 'fallback_vorbis', 'fallback_mp3_lame'):
     assert (root / 'plugins' / f'remdia_backend_{name}.dll').is_file(), f'Missing {name} pack'
 print('Windows Cargo dependencies and PE imports are FFmpeg-free; component CRT is static')

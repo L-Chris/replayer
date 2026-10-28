@@ -80,6 +80,9 @@ fn samples() -> Vec<(String, Vec<u8>)> {
         ("WebP", "webp", 1600, 2400),
     ] {
         if format == "webp" {
+            if !crate::pixels::test_support::webp_supported() {
+                continue;
+            }
             samples.push((
                 name.into(),
                 include_bytes!("../../../tests/fixtures/images/comic.webp").to_vec(),
