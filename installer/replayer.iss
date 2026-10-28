@@ -45,6 +45,13 @@ Type: files; Name: "{app}\plugins\image_webp.json"
 Type: files; Name: "{app}\plugins\remdia_backend_image_webp.dll"
 Type: files; Name: "{app}\remdia-licenses\image-webp-MIT.txt"
 Type: files; Name: "{app}\remdia-licenses\image-webp-Apache-2.0.txt"
+; Windows audio decoding/MP3 encoding now use installed system codecs.
+Type: files; Name: "{app}\plugins\fallback_vorbis.json"
+Type: files; Name: "{app}\plugins\remdia_backend_fallback_vorbis.dll"
+Type: files; Name: "{app}\plugins\fallback_mp3_lame.json"
+Type: files; Name: "{app}\plugins\remdia_backend_fallback_mp3_lame.dll"
+Type: files; Name: "{app}\remdia-licenses\LAME-COPYING.txt"
+Type: files; Name: "{app}\remdia-licenses\mp3lame-encoder-LGPL-3.0.txt"
 ; Remove obsolete FFmpeg runtime libraries when upgrading to remdia.
 Type: files; Name: "{app}\avdevice-63.dll"
 Type: files; Name: "{app}\avfilter-12.dll"

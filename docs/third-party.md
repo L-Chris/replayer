@@ -35,9 +35,10 @@ system binaries are not redistributed. Codec availability depends on the install
 system components.
 
 Narrow replaceable compatibility packs contain Symphonia (MPL-2.0) for unsupported
-container/progressive HTTP demux, Windows Vorbis (MPL-2.0), Windows WebP
-(MIT OR Apache-2.0), and LAME / mp3lame-encoder (LGPL) for 16 kHz gapless MP3
-export. System availability is queried before selecting the relevant graph node.
+container/progressive HTTP demux, and LAME / mp3lame-encoder (LGPL) on macOS
+for MP3 export. Windows uses the system MP3 encoder with a separate owned gapless
+mux. Software Vorbis/WebP decoders are not bundled; those formats require an
+installed system decoder. System availability is queried before selecting the relevant graph node.
 Symphonia's upstream ADTS/MPA/FLAC reader crates also contain codec code, but the
 compatibility demux does not register or call those decoders. Rubato and libopus
 are no longer included in the SDK. AVC/HEVC parameter parsing uses h264-reader
