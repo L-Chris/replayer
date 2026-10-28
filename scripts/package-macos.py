@@ -54,7 +54,7 @@ def main():
         shutil.copy2(root / 'assets/branding/replayer.icns', resources)
         # Whitelist package resources; never copy settings, media or the working tree.
         sdk_notices = resources / 'remdia'
-        sdk_notices.mkdir()
+        sdk_notices.mkdir(exist_ok=True)
         for name in ('REVISION', 'THIRD_PARTY.md', 'LICENSE'):
             shutil.copy2(prefix / name, sdk_notices / name)
         shutil.copytree(prefix / 'licenses', sdk_notices / 'licenses')

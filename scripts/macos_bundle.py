@@ -54,6 +54,10 @@ def embed_libraries(executable, framework_dir, prefix):
     plugins = prefix / 'plugins'
     destination = framework_dir / 'remdia'
     destination.mkdir(parents=True)
+    # Code signing expects code under Frameworks and data under Resources.
+    # Relative links preserve the registry's adjacent-manifest convention.
+    manifests = framework_dir.parent / 'Resources/remdia/plugins'
+    manifests.mkdir(parents=True)
     libraries = []
     for name in ('native', 'macos'):
         manifest = plugins / (name + '.json')
@@ -61,7 +65,8 @@ def embed_libraries(executable, framework_dir, prefix):
         library = data['library']
         if Path(library).name != library or library != f'libremdia_backend_{name}.dylib':
             raise ValueError(f'Unexpected component filename: {library}')
-        shutil.copy2(manifest, destination / manifest.name)
+        shutil.copy2(manifest, manifests / manifest.name)
+        (destination / manifest.name).symlink_to('../../Resources/remdia/plugins/' + manifest.name)
         copied = destination / library
         shutil.copy2(plugins / library, copied)
         copied.chmod(0o755)
@@ -113,7 +118,9 @@ def verify_bundle(app, expected_arch, expected_version=None):
     assert {p.name for p in plugins.iterdir()} == expected_files, 'Unexpected component pack'
     assert {p.name for p in framework_dir.iterdir()} == {'remdia'}
     for name in ('native', 'macos'):
-        manifest = json.loads((plugins / (name + '.json')).read_text())
+        link = plugins / (name + '.json')
+        assert link.is_symlink() and link.resolve() == notices / 'plugins' / link.name
+        manifest = json.loads(link.read_text())
         assert manifest['id'] == name and manifest['os'] == 'macos'
         assert manifest['abi_major'] == 2 and manifest.get('abi_minor', 0) <= 1
         assert manifest['arch'] == ('aarch64' if expected_arch == 'arm64' else expected_arch)

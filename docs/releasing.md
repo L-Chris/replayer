@@ -28,7 +28,7 @@ python3 scripts/test-macos-package.py
 
 This creates `replayer-VERSION-macos-ARCH.zip`, `.dmg` and a SHA-256 manifest in `dist/`. Use `--output-directory` on the packager and `--directory` on the tester for a review folder under `target/`.
 
-The ZIP contains `replayer.app`; the DMG provides drag-to-install. Packages explicitly include the native and VideoToolbox component dylibs and manifests in `Contents/Frameworks/remdia`, plus icons, documentation, licenses and exact SDK source/rebuild instructions. Unexpected non-system imports, architecture mismatches, ABI mismatches and incompatible deployment targets fail validation. Tests use the SDK's committed H.264 fixture. Both architectures require macOS 15+.
+The ZIP contains `replayer.app`; the DMG provides drag-to-install. Packages explicitly include the native and VideoToolbox component dylibs and manifests in `Contents/Frameworks/remdia`, plus icons, documentation, licenses and exact SDK source/rebuild instructions. Unexpected non-system imports, architecture mismatches, ABI mismatches and incompatible deployment targets fail validation. Manifest data is sealed under `Contents/Resources/remdia/plugins` and exposed beside the dylibs through relative symlinks for plugin discovery. Tests use the SDK's committed H.264 fixture. Both architectures require macOS 15+.
 
 The full smoke test mounts the DMG read-only. If local disk permissions prevent mounting, `--skip-dmg-mount` verifies image integrity and tests the relocated ZIP app. CI always mounts the DMG.
 
