@@ -91,7 +91,11 @@ jobs:
       - name: Native component integration tests
         run: cargo test --locked --target x86_64-pc-windows-msvc native_media -- --ignored --nocapture
       - name: Offline host regression tests
-        run: cargo test --locked --target x86_64-pc-windows-msvc
+        run: |
+          cargo test --locked --target x86_64-pc-windows-msvc encrypted_music_plays_seeks_and_finishes -- --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Clock and color checks
         shell: pwsh
         run: |
