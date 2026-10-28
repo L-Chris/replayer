@@ -243,6 +243,11 @@ fn native_media_progressive_audio_buffers_and_new_seek_preempts_missing_data() {
         until(&mut player, Duration::from_secs(3), |p, _| {
             p.snapshot().epoch == pending && p.snapshot().state == PlaybackState::Seeking
         });
+        player
+            .shared
+            .output
+            .simulated_rate
+            .store(44100, Ordering::Release);
         player.shared.output.failed.store(true, Ordering::Release);
         until(&mut player, Duration::from_secs(3), |p, events| {
             events.iter().any(|e| matches!(e, Event::Recovered))

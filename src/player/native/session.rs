@@ -72,7 +72,7 @@ pub(super) fn run(
     let mut reopen_due: Option<Instant> = None;
     let mut reopen_deadline: Option<Instant> = None;
     let mut reopens = 0;
-    let mut pending_rate = None;
+    let mut desired_rate = None;
     s.clock.reset(epoch, target, false, audio.is_some());
     while !s.stop.load(Ordering::Acquire) {
         let mut seek: Option<(u64, f64)> = None;
@@ -119,7 +119,9 @@ pub(super) fn run(
                 .send(Seek {
                     epoch,
                     target,
-                    rate: pending_rate.take(),
+                    // Keep the desired device rate on every seek: the demux
+                    // worker may coalesce this request with a newer one.
+                    rate: desired_rate,
                 })
                 .context("send remdia seek")?;
         }
@@ -143,7 +145,7 @@ pub(super) fn run(
             reopen_due = None;
             match audio::open_output(s.clock.clone(), s.output.clone(), s.volume.clone()) {
                 Ok(out) => {
-                    pending_rate = Some(out.rate);
+                    desired_rate = Some(out.rate);
                     audio = Some(AudioPipeline::new(out.rate));
                     output = Some(out);
                     reopens += 1;

@@ -132,9 +132,15 @@ fn run(
             if let Some(rate) = next.rate
                 && rate != request.audio_rate
             {
-                request.audio_rate = rate;
+                let mut updated = request.clone();
+                updated.audio_rate = rate;
                 s.cancel.begin();
-                session = unsafe { engine.open(request.clone(), s.cancel.clone()) }?;
+                let opened = unsafe { engine.open(updated.clone(), s.cancel.clone()) };
+                if s.requested.load(Ordering::Acquire) > next.epoch {
+                    continue;
+                }
+                session = opened?;
+                request = updated;
             }
             waiting.store(true, Ordering::Release);
             let result = session.seek((next.target * 1e6).round() as i64);

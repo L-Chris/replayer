@@ -24,6 +24,8 @@ pub struct OutputControl {
     pub enabled: AtomicBool,
     pub failed: AtomicBool,
     pub underruns: AtomicU64,
+    #[cfg(test)]
+    pub simulated_rate: AtomicU32,
 }
 impl OutputControl {
     pub fn new() -> Self {
@@ -32,6 +34,8 @@ impl OutputControl {
             enabled: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
+            #[cfg(test)]
+            simulated_rate: AtomicU32::new(48000),
         }
     }
 }
@@ -151,8 +155,8 @@ pub fn open_output(
     control: Arc<OutputControl>,
     _volume: Arc<AtomicU32>,
 ) -> Result<AudioOut> {
-    let rate = 48000;
-    let capacity = 24000;
+    let rate = control.simulated_rate.load(Ordering::Acquire);
+    let capacity = rate as usize / 2;
     let (producer, mut consumer) = RingBuffer::<Sample>::new(capacity);
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = stop.clone();
