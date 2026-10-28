@@ -1,7 +1,7 @@
 name: Desktop build and release
 on:
   push:
-    branches: [main]
+    branches: [main, feat/remdia-windows]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -14,23 +14,42 @@ concurrency:
 
 jobs:
   windows-runtime:
-    name: Windows playback-only FFmpeg
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    name: FFmpeg-free remdia components
+    runs-on: windows-2025
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/cache@v4
-        id: runtime
+      - name: Read pinned SDK revision
+        id: sdk
+        shell: pwsh
+        run: |
+          $cargo = Get-Content Cargo.toml -Raw
+          if ($cargo -notmatch '(?m)^remdia\s*=\s*\{[^}]*rev\s*=\s*"([a-f0-9]{40})"') { throw 'Missing pinned remdia revision' }
+          "revision=$($Matches[1])" >> $env:GITHUB_OUTPUT
+      - uses: actions/checkout@v4
         with:
-          path: target/windows-runtime
-          key: windows-playback-runtime-${{ hashFiles('scripts/build-windows-runtime.sh', 'scripts/ffmpeg-playback-options.sh', 'scripts/verify-ffmpeg-config.py') }}
-      - name: Build with pinned BtbN dependencies
-        if: steps.runtime.outputs.cache-hit != 'true'
-        run: ./scripts/build-windows-runtime.sh
+          repository: L-Chris/remdia
+          ref: ${{ steps.sdk.outputs.revision }}
+          path: .deps/remdia-source
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            .deps/remdia-source/target
+          key: windows-remdia-v2-${{ steps.sdk.outputs.revision }}
+          restore-keys: windows-remdia-v2-
+      - name: Build native component DLLs and CLI
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Release
+        working-directory: .deps/remdia-source
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-ffmpeg-runtime
-          path: target/windows-runtime/*
+          name: windows-remdia-runtime
+          include-hidden-files: true
+          path: |
+            .deps/remdia-source/dist/remdia/**
+            .deps/remdia-source/tests/fixtures/**
           if-no-files-found: error
 
   build:
@@ -39,23 +58,9 @@ jobs:
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: '0'
-      # Bundle the MSVC runtime in the application, avoiding an extra install step.
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
     steps:
       - uses: actions/checkout@v4
-      - name: Check installer script before building
-        shell: pwsh
-        run: |
-          $stage = Join-Path $PWD 'target/installer-check'
-          $output = Join-Path $PWD 'target/installer-check-output'
-          New-Item -ItemType Directory -Path (Join-Path $stage 'icons') -Force | Out-Null
-          Copy-Item assets/branding/replayer.ico (Join-Path $stage 'icons/replayer-check.ico')
-          # Only compile the installer script; this fixture is never launched or published.
-          Set-Content -LiteralPath (Join-Path $stage 'replayer.exe') -Value 'Installer syntax fixture' -Encoding ascii
-          $iscc = @('C:/Program Files (x86)/Inno Setup 6/ISCC.exe', 'C:/Program Files/Inno Setup 6/ISCC.exe', 'C:/Program Files (x86)/Inno Setup 7/ISCC.exe') | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-          if (-not $iscc) { throw 'Inno Setup compiler not found.' }
-          & $iscc '/DAppVersion=0.0.0' "/DSourceDir=$stage" "/DOutputDir=$output" '/DAppIconFile=replayer-check.ico' 'installer/replayer.iss'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -65,17 +70,32 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-            .deps/ffmpeg-ci.zip
-          key: windows-x64-${{ hashFiles('Cargo.lock', 'scripts/setup-windows.ps1') }}
+          key: windows-remdia-player-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
+            windows-remdia-player-
             windows-x64-
       - uses: actions/download-artifact@v4
         with:
-          name: windows-ffmpeg-runtime
+          name: windows-remdia-runtime
           path: target/windows-runtime
-      - name: Set up verified playback-only FFmpeg and LLVM
+      - name: Configure native SDK
         shell: pwsh
-        run: ./scripts/setup-windows.ps1 -RuntimeArchive target/windows-runtime/ffmpeg-playback.zip -WithTestTools
+        run: |
+          ./scripts/setup-windows.ps1 -RuntimeDirectory target/windows-runtime/dist/remdia
+          "REPLAYER_NATIVE_FIXTURES=$PWD/target/windows-runtime/tests/fixtures" >> $env:GITHUB_ENV
+      - name: Check source, dependency isolation and native host tests
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --target x86_64-pc-windows-msvc native_media -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --target x86_64-pc-windows-msvc player::clock::
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --target x86_64-pc-windows-msvc limited_range_black_and_white
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate release version
         shell: pwsh
         env:
@@ -84,45 +104,34 @@ jobs:
         run: |
           $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
           $version = ($metadata.packages | Where-Object name -eq replayer).version
-          if ($env:RELEASE_REF.StartsWith('refs/tags/') -and $env:RELEASE_TAG -cne "v$version") {
-            throw "Tag must be v$version to match Cargo.toml"
-          }
+          if ($env:RELEASE_REF.StartsWith('refs/tags/') -and $env:RELEASE_TAG -cne "v$version") { throw "Tag must match Cargo.toml" }
           "APP_VERSION=$version" >> $env:GITHUB_ENV
-      - name: Check formatting, lint and tests
-        shell: pwsh
-        run: |
-          cargo fmt --all -- --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo clippy --locked --target x86_64-pc-windows-msvc --all-targets -- -D warnings
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --target x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build Windows x64
         run: cargo build --locked --release --target x86_64-pc-windows-msvc
       - name: Build installer and portable package
         shell: pwsh
-        run: |
-          ./scripts/package-windows.ps1 -Binary target/x86_64-pc-windows-msvc/release/replayer.exe
-      - name: Smoke test installed package
+        run: ./scripts/package-windows.ps1 -Binary target/x86_64-pc-windows-msvc/release/replayer.exe
+      - name: Smoke test installed package without build paths
         shell: pwsh
         run: |
-          $installDir = Join-Path $env:RUNNER_TEMP 'replayer-smoke'
+          $installDir = Join-Path $env:RUNNER_TEMP 'replayer-native-smoke'
           $setup = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
           ./scripts/test-installed-icons.ps1 -Installer $setup.FullName -InstallDirectory $installDir
-          $media = Join-Path $env:RUNNER_TEMP 'replayer-smoke.mp4'
-          & $env:REPLAYER_TEST_FFMPEG -v error -y -f lavfi -i 'testsrc2=size=320x180:rate=24:duration=4' -c:v mpeg4 $media
-          if ($LASTEXITCODE -ne 0) { throw 'Smoke media creation failed.' }
-          $env:REPLAYER_SOFTWARE = '1'
+          $media = (Resolve-Path target/windows-runtime/tests/fixtures/av.mp4).Path
           $savedPath = $env:PATH
+          $savedPlugins = $env:REMDIA_PLUGIN_DIR
           try {
-            # Prevent missing package DLLs from being supplied by the build environment.
             $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
-            $process = Start-Process -FilePath (Join-Path $installDir 'replayer.exe') -ArgumentList @('--selftest', ('"' + $media + '"')) -WorkingDirectory $installDir -WindowStyle Hidden -Wait -PassThru
-            if ($process.ExitCode -ne 0) { throw "Installed player selftest failed: $($process.ExitCode)" }
-          } finally { $env:PATH = $savedPath }
+            Remove-Item Env:REMDIA_PLUGIN_DIR -ErrorAction SilentlyContinue
+            $log = Join-Path $env:RUNNER_TEMP 'replayer-native-selftest.log'
+            $errors = Join-Path $env:RUNNER_TEMP 'replayer-native-selftest.err'
+            $process = Start-Process -FilePath (Join-Path $installDir 'replayer.exe') -ArgumentList @('--selftest', ('"' + $media + '"')) -WorkingDirectory $installDir -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError $errors -Wait -PassThru
+            Get-Content $log, $errors
+            if ($process.ExitCode -ne 0) { throw "Installed native selftest failed: $($process.ExitCode)" }
+          } finally { $env:PATH = $savedPath; $env:REMDIA_PLUGIN_DIR = $savedPlugins }
       - uses: actions/upload-artifact@v4
         with:
-          name: replayer-${{ env.APP_VERSION }}-windows-x86_64
+          name: replayer-${{ env.APP_VERSION }}-windows-x86_64-remdia
           path: |
             dist/*.exe
             dist/*.zip
@@ -130,6 +139,7 @@ jobs:
           if-no-files-found: error
 
   macos:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'pull_request'
     name: macOS (${{ matrix.arch }})
     strategy:
       fail-fast: false

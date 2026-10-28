@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-#[cfg(test)]
+#[cfg(all(test, not(any(windows, feature = "remdia-media"))))]
 mod tests;
 
 /// Metadata accompanying downloaded audio. No credentials or remote URLs are stored.
@@ -112,6 +112,7 @@ pub fn decode_artwork(bytes: &[u8]) -> Option<Arc<Artwork>> {
 }
 /// One metadata reader for playback and queue entries: embedded tags take
 /// precedence, downloaded companion data fills omissions, then the UI uses names.
+#[cfg(not(any(windows, feature = "remdia-media")))]
 pub fn info(input: &ffmpeg_next::format::context::Input, path: &Path) -> Info {
     use ffmpeg_next::{format::stream::Disposition, media::Type};
     let video = input.streams().any(|s| {
@@ -174,6 +175,7 @@ pub fn info(input: &ffmpeg_next::format::context::Input, path: &Path) -> Info {
 }
 /// Reads tags and artwork without playback, off the UI thread, including files
 /// that have never been selected. Bound probing so one bad file cannot stall a queue.
+#[cfg(not(any(windows, feature = "remdia-media")))]
 pub fn probe_info(path: &str) -> Option<Arc<Info>> {
     let stop = std::sync::atomic::AtomicBool::new(false);
     let prepared = crate::media_source::prepare(path, &stop, None).ok()?;
@@ -194,6 +196,7 @@ pub fn probe_info(path: &str) -> Option<Arc<Info>> {
 
 /// Library artwork is decoded on the metadata worker, never the UI or playback
 /// threads. Limit both wall time and packet count for damaged/huge inputs.
+#[cfg(not(any(windows, feature = "remdia-media")))]
 fn video_thumbnail(
     input: &mut ffmpeg_next::format::context::Input,
     started: std::time::Instant,
@@ -286,6 +289,7 @@ fn video_thumbnail(
     fallback
 }
 
+#[cfg(not(any(windows, feature = "remdia-media")))]
 fn thumbnail_image(decoded: &ffmpeg_next::frame::Video) -> Option<Arc<Artwork>> {
     use ffmpeg_next::{frame, software::scaling, util::format::Pixel};
     if decoded.width() == 0 || decoded.height() == 0 {
@@ -318,4 +322,129 @@ fn thumbnail_image(decoded: &ffmpeg_next::frame::Video) -> Option<Arc<Artwork>> 
         height: height as usize,
         rgba,
     }))
+}
+
+#[cfg(any(windows, feature = "remdia-media"))]
+pub(crate) fn remdia_info(session: &mut remdia::Session, path: &Path) -> Info {
+    let media = session.info();
+    let video = media
+        .tracks
+        .iter()
+        .any(|t| t.kind == "video" && !t.attached_picture);
+    let local = if video {
+        LocalMetadata::default()
+    } else {
+        LocalMetadata::load(path)
+    };
+    let tag = |key: &str| {
+        media
+            .metadata
+            .get(key)
+            .filter(|v| !v.trim().is_empty())
+            .cloned()
+            .or_else(|| {
+                media.tracks.iter().find_map(|t| {
+                    t.metadata
+                        .get(key)
+                        .filter(|v| !v.trim().is_empty())
+                        .cloned()
+                })
+            })
+    };
+    let (title, artist, album) = (tag("title"), tag("artist"), tag("album"));
+    let nonempty = |v: String| (!v.trim().is_empty()).then_some(v);
+    let artwork = if video {
+        None
+    } else {
+        session
+            .artwork()
+            .ok()
+            .flatten()
+            .and_then(|f| decode_artwork(f.bytes()))
+            .or_else(|| {
+                read_bounded(
+                    &companion_path(path, ".replayer-cover.png"),
+                    8 * 1024 * 1024,
+                )
+                .and_then(|b| decode_artwork(&b))
+            })
+    };
+    Info {
+        kind: if video { Kind::Video } else { Kind::Music },
+        title: title.or_else(|| nonempty(local.title)),
+        artist: artist.or_else(|| nonempty(local.artist)),
+        album: album.or_else(|| nonempty(local.album)),
+        artwork,
+    }
+}
+#[cfg(any(windows, feature = "remdia-media"))]
+pub fn probe_info(path: &str) -> Option<Arc<Info>> {
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let prepared = crate::media_source::prepare(path, &stop, None).ok()?;
+    let engine = crate::media_backend::engine().ok()?;
+    let mut request = remdia::Request::playback(prepared.path());
+    request.task = remdia::Task::Probe;
+    request.timeout_ms = 3000;
+    let mut session =
+        unsafe { engine.open(request.clone(), remdia::Cancellation::default()) }.ok()?;
+    let mut metadata = remdia_info(&mut session, Path::new(path));
+    if metadata.kind == Kind::Video {
+        let duration = session.info().duration_us.unwrap_or(0);
+        drop(session);
+        request.task = remdia::Task::Thumbnail;
+        let mut thumbnail =
+            unsafe { engine.open(request, remdia::Cancellation::default()) }.ok()?;
+        let target = if duration > 10_000_000 {
+            (duration / 10).min(30_000_000)
+        } else {
+            0
+        };
+        if target > 0 {
+            let _ = thumbnail.seek(target);
+        }
+        let mut fallback = None;
+        for _ in 0..12 {
+            let Some(frame) = thumbnail.read().ok().flatten() else {
+                break;
+            };
+            let remdia::FrameInfo::Video {
+                width,
+                height,
+                planes,
+                format,
+                ..
+            } = frame.info()
+            else {
+                continue;
+            };
+            if format != "rgba" {
+                continue;
+            }
+            let mut rgba = Vec::with_capacity(*width as usize * *height as usize * 4);
+            for row in frame
+                .bytes()
+                .chunks(planes[0].stride)
+                .take(*height as usize)
+            {
+                rgba.extend_from_slice(&row[..*width as usize * 4]);
+            }
+            let lit = rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| u16::from(p[0]) + u16::from(p[1]) + u16::from(p[2]) > 72)
+                .count();
+            let art = Arc::new(Artwork {
+                width: *width as usize,
+                height: *height as usize,
+                rgba,
+            });
+            fallback = Some(art);
+            if lit > (*width as usize * *height as usize) / 100 {
+                break;
+            }
+        }
+        metadata.artwork = fallback;
+    }
+    Some(Arc::new(metadata))
 }

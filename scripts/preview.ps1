@@ -23,8 +23,12 @@ try {
             }
         }
     }
+    . "$PSScriptRoot/setup-windows.ps1"
     cargo build --locked --bin replayer
     if ($LASTEXITCODE -ne 0) { throw 'Preview build failed; no executable was launched.' }
+    $plugins = Join-Path (Split-Path -Parent $previewExe) 'plugins'
+    New-Item -ItemType Directory -Force $plugins | Out-Null
+    Copy-Item "$env:REMDIA_PLUGIN_DIR/*" $plugins -Force
     if (-not $NoLaunch) {
         # UseShellExecute detaches the child from this shell's pipe handles;
         # otherwise the launched app keeps stdout open and callers block forever.

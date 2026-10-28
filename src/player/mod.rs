@@ -1,14 +1,33 @@
+#[cfg(not(any(windows, feature = "remdia-media")))]
+mod audio;
+#[cfg(any(windows, feature = "remdia-media"))]
+#[path = "native/audio.rs"]
 mod audio;
 mod clock;
+#[cfg(not(any(windows, feature = "remdia-media")))]
 mod demux;
+#[cfg(any(windows, feature = "remdia-media"))]
+#[path = "native/demux.rs"]
+mod demux;
+#[cfg(not(any(windows, feature = "remdia-media")))]
 mod music;
-#[cfg(test)]
+#[cfg(all(test, not(any(windows, feature = "remdia-media"))))]
 mod music_tests;
-#[cfg(test)]
+#[cfg(all(test, not(any(windows, feature = "remdia-media"))))]
 mod network_tests;
+#[cfg(not(any(windows, feature = "remdia-media")))]
 mod session;
+#[cfg(any(windows, feature = "remdia-media"))]
+#[path = "native/session.rs"]
+mod session;
+#[cfg(not(any(windows, feature = "remdia-media")))]
+mod video;
+#[cfg(any(windows, feature = "remdia-media"))]
+#[path = "native/video.rs"]
 mod video;
 pub use video::VideoFrame;
+#[cfg(any(windows, feature = "remdia-media"))]
+pub(crate) use video::{Image, Pixel, Range, Space};
 
 use anyhow::Result;
 use audio::OutputControl;
@@ -59,6 +78,8 @@ struct Shared {
     snapshot: Mutex<Snapshot>,
     clock: Arc<Clock>,
     requested: Arc<AtomicU64>,
+    #[cfg(any(windows, feature = "remdia-media"))]
+    cancel: remdia::Cancellation,
     progressive: bool,
     source_key: Option<String>,
     desired_playing: AtomicBool,
@@ -93,6 +114,7 @@ impl Player {
         let (frame_tx, frames) = bounded(3);
         let stale_frames = frames.clone();
         let (event_tx, events) = unbounded();
+        let requested = Arc::new(AtomicU64::new(1));
         let shared = Arc::new(Shared {
             snapshot: Mutex::new(Snapshot {
                 media: None,
@@ -103,7 +125,9 @@ impl Player {
                 epoch: 1,
             }),
             clock: Arc::new(Clock::new()),
-            requested: Arc::new(AtomicU64::new(1)),
+            requested: requested.clone(),
+            #[cfg(any(windows, feature = "remdia-media"))]
+            cancel: remdia::Cancellation::with_requested_generation(requested),
             progressive,
             source_key,
             desired_playing: AtomicBool::new(true),
@@ -211,6 +235,10 @@ impl Player {
         let id = self.shared.requested.fetch_add(1, Ordering::AcqRel) + 1;
         self.shared.output.enabled.store(false, Ordering::Release);
         self.shared.output.epoch.store(id, Ordering::Release);
+        #[cfg(any(windows, feature = "remdia-media"))]
+        if self.snapshot().state != PlaybackState::Opening {
+            self.shared.cancel.interrupt();
+        }
         let _ = self.commands.send(Command::Seek { id, target });
         id
     }
@@ -252,8 +280,10 @@ impl Drop for Player {
     fn drop(&mut self) {
         self.shared.output.enabled.store(false, Ordering::Release);
         self.shared.stop.store(true, Ordering::Release);
+        #[cfg(any(windows, feature = "remdia-media"))]
+        self.shared.cancel.cancel();
         if let Some(thread) = self.thread.take() {
-            // Cancellation interrupts FFmpeg I/O; joining is kept off the UI thread.
+            // Cancellation interrupts media I/O; joining is kept off the UI thread.
             let _ = std::thread::Builder::new()
                 .name("replayer-reaper".into())
                 .spawn(move || {
@@ -262,11 +292,12 @@ impl Drop for Player {
         }
     }
 }
+#[cfg(not(any(windows, feature = "remdia-media")))]
 fn again(error: ffmpeg_next::Error) -> bool {
     matches!(error, ffmpeg_next::Error::Other { errno } if errno == ffmpeg_next::error::EAGAIN)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(any(windows, feature = "remdia-media"))))]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
@@ -413,3 +444,7 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
+
+#[cfg(all(test, any(windows, feature = "remdia-media")))]
+#[path = "native/tests.rs"]
+mod native_tests;

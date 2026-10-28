@@ -4546,6 +4546,57 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "remdia"
+version = "0.2.0"
+source = "git+https://github.com/L-Chris/remdia.git?rev=cadc0af749864ca308abb1e50de32e71127302cf#cadc0af749864ca308abb1e50de32e71127302cf"
+dependencies = [
+ "anyhow",
+ "libloading",
+ "remdia-buffer",
+ "remdia-graph",
+ "remdia-plugin-abi",
+ "remdia-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "remdia-buffer"
+version = "0.2.0"
+source = "git+https://github.com/L-Chris/remdia.git?rev=cadc0af749864ca308abb1e50de32e71127302cf#cadc0af749864ca308abb1e50de32e71127302cf"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
+name = "remdia-graph"
+version = "0.2.0"
+source = "git+https://github.com/L-Chris/remdia.git?rev=cadc0af749864ca308abb1e50de32e71127302cf#cadc0af749864ca308abb1e50de32e71127302cf"
+dependencies = [
+ "anyhow",
+ "remdia-buffer",
+ "remdia-plugin-abi",
+ "remdia-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "remdia-plugin-abi"
+version = "0.2.0"
+source = "git+https://github.com/L-Chris/remdia.git?rev=cadc0af749864ca308abb1e50de32e71127302cf#cadc0af749864ca308abb1e50de32e71127302cf"
+
+[[package]]
+name = "remdia-types"
+version = "0.2.0"
+source = "git+https://github.com/L-Chris/remdia.git?rev=cadc0af749864ca308abb1e50de32e71127302cf#cadc0af749864ca308abb1e50de32e71127302cf"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4570,6 +4621,7 @@ dependencies = [
  "librqbit",
  "quick-xml 0.42.0",
  "regex",
+ "remdia",
  "replayer-image",
  "reqwest",
  "rfd",

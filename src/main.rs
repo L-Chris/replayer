@@ -7,10 +7,16 @@ mod credentials;
 mod jobs;
 mod lyrics;
 mod media;
+#[cfg(any(windows, feature = "remdia-media"))]
+mod media_backend;
 mod media_source;
 mod music_sources;
 mod player;
 mod queue;
+#[cfg(not(any(windows, feature = "remdia-media")))]
+mod renderer;
+#[cfg(any(windows, feature = "remdia-media"))]
+#[path = "renderer/native.rs"]
 mod renderer;
 mod selftest;
 mod settings;

@@ -24,32 +24,25 @@ Comic library storage uses `rusqlite` 0.40.2 (MIT), which embeds SQLite through
 The rusqlite license is bundled in `licenses/rusqlite-MIT.txt`.
 Sources: https://github.com/rusqlite/rusqlite and https://sqlite.org/copyright.html .
 
-Windows release packages include FFmpeg 9.0.2 shared libraries rebuilt in a
-digest-pinned BtbN LGPL shared-build environment. The public recipe is
-`scripts/build-windows-runtime.sh`, with shared encoding options in
-`scripts/ffmpeg-playback-options.sh`. Only unused encoding capabilities are
-removed; playback capabilities are compared against the full build configuration.
-Optimized packages include `FFmpeg-BUILD.txt` and the public build/verification
-recipes. Local bootstrap builds can still use the original verified BtbN archive.
-The FFmpeg license is included as `FFmpeg-LICENSE.txt`; the libraries remain
-separate DLLs and can be replaced with ABI-compatible builds.
-Packages include only `avcodec`, `avformat`, `avutil`, `swresample` and `swscale`.
-Device capture (`avdevice`) and filter graphs (`avfilter`) are not used or bundled;
-packaging checks the executable and DLL import tables for excluded FFmpeg dependencies.
+Windows source builds use remdia's independently loaded native and Windows
+Media Foundation component DLLs. The executable and component packs do not link
+to FFmpeg. `Cargo.toml` pins the SDK source revision; `scripts/setup-windows.ps1`
+builds that revision and packaging includes its `REVISION`, `THIRD_PARTY.md`
+and license texts. Published releases built before this migration retain their
+original bundled notices.
 
-CI dependency source, build scripts and configuration:
+The native pack contains Symphonia (MPL-2.0), libopus (BSD-3-Clause), Rubato
+(MIT), and LAME / mp3lame-encoder (LGPL). The LGPL encoder is contained in the
+replaceable native DLL. The matching source revision, dependencies and rebuild
+instructions are recorded in the SDK's third-party notices; its Cargo.lock pins
+the codec dependencies. Windows Media Foundation is supplied by the operating
+system; codec availability depends on the installed Windows components.
 
-- https://github.com/BtbN/FFmpeg-Builds
-- https://github.com/L-Chris/replayer/releases/tag/deps-ffmpeg-9.0.2
-- https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
-- https://ffmpeg.org/legal.html
-
-The pinned archive and SHA-256 are recorded in `scripts/setup-windows.ps1`.
-The dependency release mirrors the unmodified, checksum-verified BtbN archive
-from `autobuild-2026-09-19-13-11`; upstream daily releases expire after 14 days.
-See the upstream build repository for bundled codec libraries, notices and source
-retrieval instructions. The custom runtime builds unmodified FFmpeg source with a smaller encoder
-configuration; it does not patch FFmpeg source.
+- https://github.com/L-Chris/remdia
+- https://github.com/L-Chris/remdia/blob/main/THIRD_PARTY.md
+- https://github.com/pdeljanov/Symphonia
+- https://opus-codec.org/
+- https://lame.sourceforge.io/
 
 macOS packages use FFmpeg 9.0.2 built without GPL/nonfree components and LAME 4.0
 as shared libraries. `Contents/Resources/licenses` contains their license texts;
