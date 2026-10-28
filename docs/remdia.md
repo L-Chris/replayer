@@ -58,7 +58,10 @@ codec parameter changes require reopening from a keyframe.
 
 Remote elementary MPEG audio uses approximate byte/duration seeking to avoid
 scanning a missing download prefix; VBR accuracy is limited by this estimate.
-Local audio and timestamped containers retain precise seek paths. Unsupported
+Local audio and timestamped containers retain precise seek paths. Windows MF
+FLAC currently pre-rolls from the beginning because its native nonzero seeks
+return premature EOF for valid small-block streams; long-file seek latency can
+grow with the target position. Unsupported
 codecs return a clear error rather than using another decoder backend.
 
 Audio decoding and resampling now use Media Foundation / AudioToolbox for MP3,
