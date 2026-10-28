@@ -60,6 +60,7 @@ pub(super) fn run(
     let _ = events.send(Event::MediaInfo(header.info));
     let _ = events.send(Event::Opened);
     let (mut epoch, mut target) = (1u64, 0f64);
+    let mut completed_seek = 0;
     let (mut seeking, mut ack, mut eof, mut ended, mut buffering, mut audio_finished) =
         (true, true, false, false, false, false);
     let mut video = VecDeque::<VideoFrame>::new();
@@ -74,10 +75,14 @@ pub(super) fn run(
     let mut pending_rate = None;
     s.clock.reset(epoch, target, false, audio.is_some());
     while !s.stop.load(Ordering::Acquire) {
-        let mut seek = None;
+        let mut seek: Option<(u64, f64)> = None;
         while let Some(command) = deferred.pop_front().or_else(|| commands.try_recv().ok()) {
             match command {
-                Command::Seek { id, target } if id > epoch => seek = Some((id, target)),
+                Command::Seek { id, target }
+                    if id > epoch && seek.is_none_or(|(latest, _)| id > latest) =>
+                {
+                    seek = Some((id, target));
+                }
                 Command::Playing(playing) if !seeking && !ended && !buffering => {
                     s.clock.set_playing(playing);
                     s.output.enabled.store(
@@ -138,14 +143,24 @@ pub(super) fn run(
             reopen_due = None;
             match audio::open_output(s.clock.clone(), s.output.clone(), s.volume.clone()) {
                 Ok(out) => {
-                    let position = s.clock.now();
                     pending_rate = Some(out.rate);
                     audio = Some(AudioPipeline::new(out.rate));
                     output = Some(out);
                     reopens += 1;
                     reopen_deadline = None;
-                    let id = s.requested.fetch_add(1, Ordering::AcqRel) + 1;
-                    s.output.epoch.store(id, Ordering::Release);
+                    // A device reset must not supersede a pending user's target.
+                    // Allocate under the same lock as Player::seek so a newer
+                    // user command always wins, regardless of queue order.
+                    let (id, position) = {
+                        let intent = s.seek_intent.lock().unwrap();
+                        let position = if intent.0 > completed_seek {
+                            intent.1
+                        } else {
+                            s.clock.now()
+                        };
+                        (s.requested.fetch_add(1, Ordering::AcqRel) + 1, position)
+                    };
+                    s.output.epoch.fetch_max(id, Ordering::AcqRel);
                     s.cancel.interrupt();
                     deferred.push_back(Command::Seek {
                         id,
@@ -326,11 +341,13 @@ pub(super) fn run(
             s.output
                 .enabled
                 .store(playing && active_audio, Ordering::Release);
-            if epoch > 1 {
+            let intent = s.seek_intent.lock().unwrap();
+            if intent.0 > completed_seek && intent.0 <= epoch {
                 let _ = events.send(Event::SeekCompleted {
-                    id: epoch,
+                    id: intent.0,
                     position: target,
                 });
+                completed_seek = intent.0;
             }
         }
         if buffering {

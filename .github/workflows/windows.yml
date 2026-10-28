@@ -210,6 +210,10 @@ jobs:
           cargo clippy --locked --target '${{ matrix.target }}' --all-targets -- -D warnings
           REPLAYER_SETTINGS_FILE="$PWD/target/ci-macos-settings.json" cargo test --locked --target '${{ matrix.target }}'
           cargo test --locked --target '${{ matrix.target }}' native_media -- --ignored --nocapture
+      - name: Preflight actual audio device and video lifecycle
+        run: |
+          ./scripts/build-macos.sh --target '${{ matrix.target }}'
+          env -u REMDIA_PLUGIN_DIR -u REMDIA_RUNTIME_DIR PATH=/usr/bin:/bin:/usr/sbin:/sbin REPLAYER_SOFTWARE=1 REPLAYER_SETTINGS_FILE="$PWD/target/preflight-settings.json" "$PWD/target/${{ matrix.target }}/debug/replayer" --selftest "$REPLAYER_NATIVE_FIXTURES/av.mp4"
       - name: Build macOS application
         run: ./scripts/build-macos.sh --release --target '${{ matrix.target }}'
       - name: Package and test relocated application

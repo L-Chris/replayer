@@ -42,6 +42,7 @@ pub enum Event {
     MediaInfo(Arc<crate::media::Info>),
     Opened,
     SeekCompleted {
+        /// The caller's seek ID, preserved across internal device recovery.
         id: u64,
         position: f64,
     },
@@ -59,6 +60,9 @@ struct Shared {
     snapshot: Mutex<Snapshot>,
     clock: Arc<Clock>,
     requested: Arc<AtomicU64>,
+    // Serialize generation allocation with publication of the user's intent.
+    // Internal audio recovery advances the generation without replacing it.
+    seek_intent: Mutex<(u64, f64)>,
     cancel: remdia::Cancellation,
     progressive: bool,
     source_key: Option<String>,
@@ -106,6 +110,7 @@ impl Player {
             }),
             clock: Arc::new(Clock::new()),
             requested: requested.clone(),
+            seek_intent: Mutex::new((0, 0.0)),
             cancel: remdia::Cancellation::with_requested_generation(requested),
             progressive,
             source_key,
@@ -199,6 +204,8 @@ impl Player {
         let ended = self.snapshot().state == PlaybackState::Ended;
         self.set_playing(ended || !self.shared.desired_playing.load(Ordering::Acquire));
     }
+    /// Returns the ID reported by SeekCompleted. Device recovery may advance
+    /// frame generations while retaining this user request and its target.
     pub fn seek(&self, target: f64) -> u64 {
         let duration = self.duration();
         let target = if target.is_finite() {
@@ -211,9 +218,11 @@ impl Player {
         } else {
             target
         };
+        let mut intent = self.shared.seek_intent.lock().unwrap();
         let id = self.shared.requested.fetch_add(1, Ordering::AcqRel) + 1;
+        *intent = (id, target);
         self.shared.output.enabled.store(false, Ordering::Release);
-        self.shared.output.epoch.store(id, Ordering::Release);
+        self.shared.output.epoch.fetch_max(id, Ordering::AcqRel);
         if self.snapshot().state != PlaybackState::Opening {
             self.shared.cancel.interrupt();
         }

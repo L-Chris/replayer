@@ -236,9 +236,29 @@ fn native_media_progressive_audio_buffers_and_new_seek_preempts_missing_data() {
                 .iter()
                 .any(|e| matches!(e,Event::SeekCompleted {id:done,..} if *done==id))
         });
+        // Recover while a second distant seek is blocked. Recovery gets a new
+        // media generation but must retain the user's target and acknowledgement.
+        player.set_playing(false);
+        let pending = player.seek(2.5);
+        until(&mut player, Duration::from_secs(3), |p, _| {
+            p.snapshot().epoch == pending && p.snapshot().state == PlaybackState::Seeking
+        });
+        player.shared.output.failed.store(true, Ordering::Release);
+        until(&mut player, Duration::from_secs(3), |p, events| {
+            events.iter().any(|e| matches!(e, Event::Recovered))
+                && p.shared.requested.load(Ordering::Acquire) > pending
+        });
         available.store(data.len(), Ordering::Release);
+        until(&mut player, Duration::from_secs(5), |p, events| {
+            events.iter().any(|e| {
+                matches!(e, Event::SeekCompleted { id, position }
+                if *id == pending && (*position - 2.5).abs() < 0.001)
+            }) && p.snapshot().state == PlaybackState::Paused
+        });
+        assert!((player.position() - 2.5).abs() < 0.03);
+        player.set_playing(true);
         until(&mut player, Duration::from_secs(5), |p, _| {
-            p.position() > 1.2
+            p.position() > 2.6
         });
     }));
     stop.store(true, Ordering::Release);

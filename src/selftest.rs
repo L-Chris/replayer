@@ -104,7 +104,9 @@ fn seek(p: &mut Player, target: f64) -> Result<()> {
             }
         }
         if let Some(frame) = p.next_frame(p.sync_time()) {
-            ensure!(frame.epoch == id, "stale generation after seek");
+            // Device recovery may start a newer generation while preserving
+            // the caller's seek ID. Only an older generation is stale.
+            ensure!(frame.epoch >= id, "stale generation after seek");
             ensure!(
                 frame.pts + 0.001 >= target,
                 "pre-target seek frame: {} < {target}",
