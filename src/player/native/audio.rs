@@ -157,14 +157,24 @@ pub fn open_output(
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = stop.clone();
     std::thread::spawn(move || {
+        let mut tick = std::time::Instant::now();
+        let mut remainder = 0.0;
         while !worker_stop.load(Ordering::Acquire) {
+            let now = std::time::Instant::now();
+            let samples = now.duration_since(tick).as_secs_f64() * rate as f64 + remainder;
+            tick = now;
+            remainder = samples.fract();
+            // Simulate a device at its sample rate even when CI coalesces the
+            // five-millisecond sleeps. A fixed 240 frames per wake slows the
+            // media clock whenever thread scheduling is delayed.
+            let due = (samples as usize).min(capacity);
             let epoch = control.epoch.load(Ordering::Acquire);
             while consumer.peek().is_ok_and(|s| s.epoch < epoch) {
                 let _ = consumer.pop();
             }
             if control.enabled.load(Ordering::Acquire) {
                 let mut last = None;
-                for _ in 0..240 {
+                for _ in 0..due {
                     if consumer.peek().is_ok_and(|s| s.epoch == epoch) {
                         last = consumer.pop().ok();
                     } else {
@@ -173,11 +183,9 @@ pub fn open_output(
                 }
                 if let Some(sample) = last {
                     assert!(sample.pcm.iter().all(|v| v.is_finite()));
-                    clock.progress.publish(
-                        epoch,
-                        sample.pts + 1.0 / rate as f64,
-                        clock.wall() + 0.005,
-                    );
+                    clock
+                        .progress
+                        .publish(epoch, sample.pts + 1.0 / rate as f64, clock.wall());
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
