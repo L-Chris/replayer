@@ -61,5 +61,6 @@ cargo build --locked --release
 CI builds the exact SDK revision, exercises native audio and video, checks
 Windows Cargo dependencies and PE imports, and runs the installed application's
 selftest with only the Windows system PATH. Packaging bundles both component
-DLLs, manifests and matching notices. The installer removes DLL names shipped
+DLLs, manifests and matching notices. The executable and SDK component packs
+statically link the MSVC runtime; the import audit rejects VC runtime DLL imports. The installer removes DLL names shipped
 by the previous Windows backend. No release is published by a feature build.

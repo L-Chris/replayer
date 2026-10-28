@@ -11,7 +11,7 @@ crossbeam-channel = "0.5.17"
 eframe = "0.36"
 egui-phosphor = { version = "0.14", features = ["subset"] }
 # Windows playback and subtitle export use independent remdia component graphs.
-remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "99b605fd74bf8a9fa2a9a01439287be28b452fc3" }
+remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "5d919c706e87725c0cadcb1105da951f3f21629f" }
 rfd = "0.17.2"
 rtrb = "0.3"
 base64 = "0.22"
