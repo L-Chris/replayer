@@ -1,7 +1,6 @@
 use super::*;
 use anyhow::{Context, anyhow, ensure};
 use futures_util::StreamExt;
-use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
     io::Write,
@@ -36,11 +35,12 @@ pub(super) fn filename(song: &Song, quality: &str, extension: &str) -> String {
         })
         .take(70)
         .collect();
-    let hash = Sha256::digest(format!("{}\0{}\0{quality}", song.source, song.id).as_bytes());
+    let hash =
+        crate::crypto::sha256_hex(format!("{}\0{}\0{quality}", song.source, song.id).as_bytes());
     format!(
         "{} [{}].{}",
         safe.trim_matches([' ', '.']),
-        &format!("{hash:x}")[..16],
+        &hash[..16],
         extension
     )
 }

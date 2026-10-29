@@ -4,6 +4,7 @@ mod ai;
 mod app;
 mod comics;
 mod credentials;
+mod crypto;
 mod jobs;
 mod lyrics;
 mod media;

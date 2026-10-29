@@ -83,7 +83,7 @@ The CLI uses saved provider/model settings, preserves absolute media timestamps 
 
 ## Package-size policy
 
-Release Rust builds use LTO, one codegen unit and stripped symbols. Debug previews keep their symbols. HTTP clients share reqwest 0.13 and the AWS-LC rustls provider; the separate `ring` dependency remains for cloud-sync encryption.
+Release Rust builds use LTO, one codegen unit and stripped symbols. Debug previews keep their symbols. HTTP clients, cloud-sync encryption and SHA-256 hashing share AWS-LC; the application no longer directly depends on `ring` or `sha2`. WGPU enables only DX12 on Windows and Metal on macOS, preserving accessibility, fonts, clipboard support and the macOS window resize fix.
 
 Both platforms package replaceable remdia component packs and manifests. Audio
 codecs, resampling, subtitle MP3 encoding and pixel conversion stay in the native

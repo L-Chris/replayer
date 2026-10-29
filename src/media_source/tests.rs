@@ -1,6 +1,5 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use sha2::{Digest, Sha256};
 
 const EKEY: &str = "AQIDBAUGBwg0Wk04/J1L8KaXldnG4EdQS2sMVkKhC+rTp5SGmq1apIGuO4VHCjB4Bt9wRyyCbwAa6lV5AfcbKeeekgfYj07Pz5yAouQXPPV/zAUxuYNf/KfA69CO18uPOXVS0E7jccgaM9IW2nNUcM8w/hrKLGQL4WovxZ1QME079wChZb2XdBrEw/IGWQOdG9en0jEat26weXlK+YqetsvCa2CNqXt0qQzUq4xqWA17xfKfPZ7Z5cf3FM8KV+98G8e0rqacSFX1wqpQGvzBiLxOt0InI+JfNaoTcIDj62mnoD78GsRi1zCXtMURClQHPu9LPgKErmB7/FPSAftf3g3FYG+dwWLTZm+0/Nji3dw=";
 fn key(length: usize) -> Vec<u8> {
@@ -25,7 +24,7 @@ fn independent_qmc2_vectors_and_unaligned_chunks() {
         for (i, chunk) in bytes.chunks_mut(777).enumerate() {
             cipher.apply(chunk, (i * 777) as u64);
         }
-        assert_eq!(format!("{:x}", Sha256::digest(&bytes)), expected);
+        assert_eq!(crate::crypto::sha256_hex(&bytes), expected);
     }
     assert_eq!(qq::unwrap_key(EKEY.as_bytes()).unwrap(), key(256));
 }

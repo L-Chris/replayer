@@ -1,11 +1,12 @@
 //! AES-256-GCM with independent random salt/nonce for every secret revision.
 use anyhow::{Result, ensure};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use ring::{
+use aws_lc_rs::{
     aead, pbkdf2,
     rand::{SecureRandom, SystemRandom},
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
+// Part of the existing v1 envelope; keep unchanged when switching providers.
 const ITERATIONS: u32 = 600_000;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -76,4 +77,39 @@ pub fn open(phrase: &str, identity: &str, sealed: &Sealed) -> Result<Vec<u8>> {
             )
         })?;
     Ok(plain.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_envelope_matches_the_legacy_ring_provider() {
+        // Fixed synthetic vector generated independently with ring 0.17.14,
+        // the provider used before the migration. Do not derive the expected
+        // ciphertext with the implementation under test.
+        let phrase = "legacy-sync-passphrase";
+        let identity = "secret/ai/legacy-v1";
+        let plain = b"legacy-api-key";
+        let legacy = Sealed {
+            version: 1,
+            salt: "AAECAwQFBgcICQoLDA0ODw==".into(),
+            nonce: "EBESExQVFhcYGRob".into(),
+            ciphertext: "lJc6zXhBu+UJmfzkzmblCHrl21Uaezola3KXK4jp".into(),
+        };
+        assert_eq!(open(phrase, identity, &legacy).unwrap(), plain);
+
+        let salt = STANDARD.decode(&legacy.salt).unwrap();
+        let nonce: [u8; 12] = STANDARD.decode(&legacy.nonce).unwrap().try_into().unwrap();
+        let mut encoded = plain.to_vec();
+        key(phrase, &salt)
+            .unwrap()
+            .seal_in_place_append_tag(
+                aead::Nonce::assume_unique_for_key(nonce),
+                aead::Aad::from(identity.as_bytes()),
+                &mut encoded,
+            )
+            .unwrap();
+        assert_eq!(STANDARD.encode(encoded), legacy.ciphertext);
+    }
 }

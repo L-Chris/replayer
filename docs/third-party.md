@@ -2,10 +2,24 @@
 
 Cloud sync XML parsing uses `quick-xml` 0.42.0 (MIT), bundled in
 `licenses/quick-xml-MIT.txt`. Source: https://github.com/tafia/quick-xml .
-Credential encryption and password-based key derivation use `ring` 0.17.14;
-its applicable notices are bundled as `licenses/ring-LICENSE.txt`,
-`licenses/ring-BoringSSL.txt` and `licenses/ring-other-bits.txt`.
-Source: https://github.com/briansmith/ring .
+Credential encryption, password-based key derivation and SHA-256 hashing use
+`aws-lc-rs` 1.18.1 / `aws-lc-sys` 0.45.0, sharing the implementation already used
+by rustls and librqbit. Their notices are bundled as
+`licenses/aws-lc-rs-LICENSE.txt` and `licenses/aws-lc-sys-LICENSE.txt`.
+Sources: https://github.com/aws/aws-lc-rs and https://github.com/aws/aws-lc .
+The application no longer directly depends on ring or sha2; supported Windows
+and macOS dependency graphs do not enable ring. Cargo.lock can still contain
+ring as an optional dependency of upstream packages.
+
+The v1 sync envelope retains PBKDF2-HMAC-SHA256 with 600,000 iterations,
+16-byte salt, AES-256-GCM with a 12-byte nonce, identity as authenticated data,
+and ciphertext followed by its 16-byte tag. SHA-256 strings remain lowercase
+hexadecimal, preserving cache keys, download filenames and installer digests.
+
+GUI rendering uses WGPU with the DX12 backend on Windows and Metal on macOS.
+Vulkan, GLES and web backends are not enabled in these desktop configurations.
+Accessibility, default fonts, links, clipboard support and the macOS window
+resize jitter fix remain enabled.
 
 UI icons use a compile-time subset of Phosphor Regular through `egui-phosphor`
 0.14.0 (MIT OR Apache-2.0). The Phosphor icon artwork is MIT licensed.
