@@ -384,9 +384,6 @@ impl State {
     pub(super) fn detail_open(&self) -> bool {
         self.view == View::Detail
     }
-    pub(super) fn search_tab_open(&self) -> bool {
-        self.view == View::Catalog && self.tab == Tab::Search
-    }
     pub(super) fn search_for(&mut self, keyword: String) {
         self.flush();
         self.view = View::Catalog;

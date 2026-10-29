@@ -14,6 +14,8 @@ Open one or more files or drop them onto the window. **Add Files** or Shift-drop
 
 The app chooses music or video mode from the media tracks. Music shows available title, artist, album, cover art and lyrics. Embedded tags take priority; downloaded-track metadata fills gaps. A matching `.lrc` file can supply timed lyrics.
 
+Click the **Lyrics** icon in the playback bar, then choose **Generate AI lyrics** to transcribe a local song or a fully downloaded online track. **Show lyrics** opens the lyric view. Generation uses the audio-capable model selected under **AI Subtitles**, keeps the song's original language, and displays completed lines while generating. On successful completion, lyrics are automatically saved as a matching `.lrc` file beside the song and loaded next time. **Regenerate lyrics** replaces that file after the new generation succeeds. Cancelling, failed segments, or no recognized lyrics leave the saved file unchanged. Existing lyrics remain visible until new lines are recognized. Instrumental passages can produce no lyrics; recognition and timing depend on the selected model. Generating lyrics sends the song's audio chunks to the configured AI service.
+
 Use the queue sidebar to select, remove or reorder entries. Hold an item's title before dragging to reorder. Favorites and recent activity are available from the media pages and Home. **Play all** on music favorites uses the displayed favorites, including online tracks not downloaded on this device.
 
 | Shortcut | Action |

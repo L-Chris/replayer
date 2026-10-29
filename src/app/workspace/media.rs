@@ -256,10 +256,7 @@ impl App {
         };
         page_heading(ui, title, None);
         if page == Page::Music {
-            let labels = [
-                l.text("收藏音乐", "Favorites"),
-                l.text("在线搜索", "Search"),
-            ];
+            let labels = [l.text("收藏", "Favorites"), l.text("搜索", "Search")];
             design::tabs(ui, &mut self.workspace.music_tab, &labels);
             ui.add_space(12.0);
             if self.workspace.music_tab == 1 {

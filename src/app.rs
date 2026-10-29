@@ -21,6 +21,7 @@ mod comic;
 mod design;
 mod icons;
 mod library;
+mod lyrics;
 mod magnets;
 mod metadata;
 mod music;
@@ -69,6 +70,8 @@ enum Act {
     GenerateSubtitles,
     CancelSubtitles,
     ExportSubtitles,
+    GenerateLyrics,
+    CancelLyrics,
 }
 
 pub struct App {
@@ -92,6 +95,7 @@ pub struct App {
     artwork: Option<egui::TextureHandle>,
     lyrics: crate::lyrics::Lyrics,
     lyrics_follow: bool,
+    lyric_generation: lyrics::State,
     append_dialog: bool,
     settings: Settings,
     settings_open: bool,
@@ -199,6 +203,7 @@ impl App {
             artwork: None,
             lyrics: crate::lyrics::Lyrics::default(),
             lyrics_follow: true,
+            lyric_generation: Default::default(),
             append_dialog: false,
             updater: crate::updater::Updater::new(settings.auto_check_updates, cc.egui_ctx.clone()),
             torrent_job: None,
@@ -423,6 +428,7 @@ impl App {
         }
         self.media_info = None;
         self.artwork = None;
+        self.lyric_generation = Default::default();
         self.subtitle_job = None;
         self.subtitles.clear();
         self.subtitle_status.clear();
@@ -490,6 +496,7 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.comic.poll(ctx, &self.settings);
         self.poll_online_music(ctx);
+        self.poll_lyrics(ctx);
         let mut advance = false;
         let mut online_failure = None;
         if let Some(player) = &self.player {
@@ -1429,6 +1436,16 @@ impl App {
                     self.subtitle_save_tx.clone(),
                     language,
                 );
+            }
+            Act::GenerateLyrics => self.generate_lyrics(),
+            Act::CancelLyrics => {
+                self.lyric_generation.job = None;
+                self.lyric_generation.status = language
+                    .text(
+                        "已取消生成，保留已保存的歌词",
+                        "Cancelled; saved lyrics kept.",
+                    )
+                    .into();
             }
             Act::None => {}
         }

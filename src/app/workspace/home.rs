@@ -81,15 +81,23 @@ impl App {
     fn continue_card(&mut self, ui: &mut Ui, record: Option<&Record>, width: f32, height: f32) {
         let l = self.settings.language;
         let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
-        ui.painter().rect_filled(rect, 12, SURFACE);
-        design::card_hover(ui, &response, 12);
+        ui.painter().rect_filled(rect, 10, SURFACE);
+        design::card_hover(ui, &response, 10);
         if let Some(record) = record {
-            let content = design::card_content(rect);
+            let content = rect;
             self.record_art(ui, content, record);
             let overlay =
                 Rect::from_min_max(pos2(content.min.x, content.max.y - 104.0), content.max);
-            ui.painter()
-                .rect_filled(overlay, 0, Color32::from_black_alpha(205));
+            ui.painter().rect_filled(
+                overlay,
+                CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: 10,
+                    se: 10,
+                },
+                Color32::from_black_alpha(205),
+            );
             let mut text = child(
                 ui,
                 (&record.path, "continue"),
