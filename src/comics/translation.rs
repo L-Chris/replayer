@@ -1,5 +1,7 @@
 //! Image edits, not a vision chat response. Original artwork is never overwritten.
 use super::*;
+#[cfg(test)]
+use crate::pixels::test_support::TestImageOutput;
 use anyhow::{Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::future::BoxFuture;
@@ -23,9 +25,9 @@ pub trait ImageTranslationProvider: Send + Sync {
     fn cache_key(&self, hash: &str, context: &str) -> String;
     fn edit<'a>(
         &'a self,
-        image: image::DynamicImage,
+        image: crate::pixels::Image,
         context: &'a str,
-    ) -> BoxFuture<'a, Result<image::DynamicImage>>;
+    ) -> BoxFuture<'a, Result<crate::pixels::Image>>;
 }
 impl ImageTranslationProvider for Config {
     fn cache_key(&self, hash: &str, context: &str) -> String {
@@ -33,9 +35,9 @@ impl ImageTranslationProvider for Config {
     }
     fn edit<'a>(
         &'a self,
-        image: image::DynamicImage,
+        image: crate::pixels::Image,
         context: &'a str,
-    ) -> BoxFuture<'a, Result<image::DynamicImage>> {
+    ) -> BoxFuture<'a, Result<crate::pixels::Image>> {
         Box::pin(Config::edit(self, image, context))
     }
 }
@@ -95,10 +97,14 @@ impl Config {
             .as_bytes(),
         )
     }
-    async fn edit(&self, image: image::DynamicImage, context: &str) -> Result<image::DynamicImage> {
+    async fn edit(
+        &self,
+        image: crate::pixels::Image,
+        context: &str,
+    ) -> Result<crate::pixels::Image> {
         let original_ratio = image.width() as f32 / image.height() as f32;
         let bytes = cache::background(move || {
-            encode_jpeg(image.resize(1536, 2048, image::imageops::FilterType::Lanczos3))
+            encode_jpeg(crate::pixels::resize(&image, 1536, 2048, true)?)
         })
         .await?;
         let prompt = format!(
@@ -184,13 +190,12 @@ impl Config {
     }
 }
 /// Split tall webtoons at nearby whitespace, with context overlap for balloons.
-pub(super) fn bands(image: &image::DynamicImage) -> Vec<(u32, u32)> {
+pub(super) fn bands(image: &crate::pixels::Image) -> Vec<(u32, u32)> {
     let height = image.height();
     let width = image.width();
     let stride = (width * 2).clamp(512, 1800);
     let mut result = Vec::new();
     let mut start = 0;
-    let rgb = image.to_rgb8();
     while start < height {
         let mut end = (start + stride).min(height);
         if end < height {
@@ -200,8 +205,10 @@ pub(super) fn bands(image: &image::DynamicImage) -> Vec<(u32, u32)> {
                 (0..width)
                     .step_by(4)
                     .filter(|x| {
-                        let p = rgb.get_pixel(*x, *y);
-                        p.0.iter().all(|c| *c > 242)
+                        let row = image.row(*y).expect("validated image row");
+                        row[*x as usize * 4..*x as usize * 4 + 3]
+                            .iter()
+                            .all(|c| *c > 242)
                     })
                     .count()
                     * 100
@@ -235,35 +242,38 @@ pub async fn translate(
         digest(&bytes) == hash,
         "原图已变化，请重新加载 / Original image changed"
     );
-    let image = cache::read_image(&bytes)?;
-    let ranges = bands(&image);
+    let (image, ranges) = cache::background(move || {
+        let image = cache::read_image(&bytes)?;
+        let ranges = bands(&image);
+        Ok((image, ranges))
+    })
+    .await?;
     ensure!(
         ranges.len() <= 32,
         "长图过长，请先分割后翻译 / Image has too many translation segments"
     );
     let result = tokio::time::timeout(Duration::from_secs(600), async {
-        let mut output = image.to_rgba8();
+        let mut output = image.clone();
         for (start, end) in ranges {
             let top = start.saturating_sub(64);
             let bottom = (end + 64).min(image.height());
-            let crop = image.crop_imm(0, top, image.width(), bottom - top);
-            let edited = config
-                .edit(crop, context)
-                .await?
-                .resize_exact(
-                    image.width(),
-                    bottom - top,
-                    image::imageops::FilterType::Lanczos3,
-                )
-                .to_rgba8();
-            let core =
-                image::imageops::crop_imm(&edited, 0, start - top, image.width(), end - start)
-                    .to_image();
-            image::imageops::replace(&mut output, &core, 0, start as i64);
+            let source = image.clone();
+            let crop = cache::background(move || {
+                crate::pixels::crop(&source, 0, top, source.width(), bottom - top)
+            })
+            .await?;
+            let edited = config.edit(crop, context).await?;
+            let width = image.width();
+            output = cache::background(move || {
+                let edited = crate::pixels::resize(&edited, width, bottom - top, false)?;
+                let core = crate::pixels::crop(&edited, 0, start - top, width, end - start)?;
+                crate::pixels::paste(&output, &core, 0, start)
+            })
+            .await?;
             progress.fetch_add(1, Ordering::Relaxed);
         }
         cache::background(move || {
-            let bytes = encode_jpeg(image::DynamicImage::ImageRgba8(output))?;
+            let bytes = encode_jpeg(output)?;
             let target = candidates[0].clone();
             cache::atomic_write(&target, &bytes)?;
             Ok(target)
@@ -280,52 +290,9 @@ pub fn cached_paths(directory: &Path, key: &str) -> [PathBuf; 4] {
     ["jpg", "jpeg", "png", "webp"].map(|extension| directory.join(format!("{key}.{extension}")))
 }
 
-const JPEG_QUALITY: u8 = 95;
-
-/// Use the same JPEG encoding for AI uploads and the assembled translated canvas.
-/// JPEG has no alpha channel: composite transparent pixels onto white paper.
-fn encode_jpeg(image: image::DynamicImage) -> Result<Vec<u8>> {
-    let rgb = if image.color().has_alpha() {
-        let mut rgba = image.into_rgba8();
-        for pixel in rgba.pixels_mut() {
-            let alpha = u16::from(pixel[3]);
-            if alpha != 255 {
-                for channel in &mut pixel.0[..3] {
-                    *channel =
-                        ((u16::from(*channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
-                }
-                pixel[3] = 255;
-            }
-        }
-        image::DynamicImage::ImageRgba8(rgba).into_rgb8()
-    } else {
-        image.into_rgb8()
-    };
-    struct BoundedBytes(Vec<u8>);
-    impl std::io::Write for BoundedBytes {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if bytes.len() > (40 * 1024 * 1024_usize).saturating_sub(self.0.len()) {
-                return Err(std::io::Error::other("JPEG image exceeds 40 MiB"));
-            }
-            self.0.extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut bytes = BoundedBytes(Vec::new());
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, JPEG_QUALITY)
-        .encode(
-            rgb.as_raw(),
-            rgb.width(),
-            rgb.height(),
-            image::ExtendedColorType::Rgb8,
-        )
-        .map_err(|_| {
-            anyhow!("JPEG 编码失败或超过 40 MiB 上限 / Cannot encode JPEG within 40 MiB")
-        })?;
-    Ok(bytes.0)
+/// The shared graph composites JPEG transparency on white and bounds output.
+fn encode_jpeg(image: crate::pixels::Image) -> Result<Vec<u8>> {
+    crate::pixels::jpeg(&image)
 }
 
 #[cfg(test)]
@@ -335,30 +302,27 @@ mod tests {
 
     #[test]
     fn jpeg_cache_flattens_transparency_and_preserves_long_canvas() {
-        let image = image::RgbaImage::from_fn(64, 64, |x, _| {
+        let image = crate::pixels::generated(64, 64, |x, _| {
             if x < 16 {
-                image::Rgba([10, 20, 30, 0])
+                [10, 20, 30, 0]
             } else if x < 32 {
-                image::Rgba([200, 20, 40, 128])
+                [200, 20, 40, 128]
             } else {
-                image::Rgba([20, 40, 60, 255])
+                [20, 40, 60, 255]
             }
         });
-        let bytes = encode_jpeg(image.into()).unwrap();
-        assert_eq!(
-            image::guess_format(&bytes).unwrap(),
-            image::ImageFormat::Jpeg
-        );
-        let decoded = cache::read_image(&bytes).unwrap().to_rgba8();
+        let bytes = encode_jpeg(image).unwrap();
+        assert_eq!(crate::pixels::format(&bytes).unwrap(), "jpeg");
+        let decoded = cache::read_image(&bytes).unwrap();
         assert_eq!(decoded.dimensions(), (64, 64));
         assert!(
-            decoded.get_pixel(8, 8).0[..3]
+            decoded.pixel(8, 8).unwrap()[..3]
                 .iter()
                 .all(|channel| *channel >= 250)
         );
-        assert_eq!(decoded.get_pixel(8, 8)[3], 255);
+        assert_eq!(decoded.pixel(8, 8).unwrap()[3], 255);
         for (position, expected) in [((24, 24), [227_u8, 137, 147]), ((48, 48), [20, 40, 60])] {
-            for (actual, expected) in decoded.get_pixel(position.0, position.1).0[..3]
+            for (actual, expected) in decoded.pixel(position.0, position.1).unwrap()[..3]
                 .iter()
                 .zip(expected)
             {
@@ -368,8 +332,8 @@ mod tests {
                 );
             }
         }
-        let long = image::RgbaImage::from_pixel(2, 17000, image::Rgba([250, 250, 250, 255]));
-        let bytes = encode_jpeg(long.into()).unwrap();
+        let long = crate::pixels::solid(2, 17000, [250, 250, 250, 255]);
+        let bytes = encode_jpeg(long).unwrap();
         let decoded = cache::read_image(&bytes).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (2, 17000));
     }
@@ -383,9 +347,9 @@ mod tests {
             }
             fn edit<'a>(
                 &'a self,
-                _: image::DynamicImage,
+                _: crate::pixels::Image,
                 _: &'a str,
-            ) -> BoxFuture<'a, Result<image::DynamicImage>> {
+            ) -> BoxFuture<'a, Result<crate::pixels::Image>> {
                 panic!("Existing translations must not trigger another paid edit")
             }
         }
@@ -393,7 +357,7 @@ mod tests {
             std::env::temp_dir().join(format!("replayer-legacy-format-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let paths = cached_paths(&directory, "legacy");
-        image::RgbaImage::from_pixel(32, 64, image::Rgba([250, 250, 250, 255]))
+        crate::pixels::solid(32, 64, [250, 250, 250, 255])
             .save(&paths[2])
             .unwrap();
         std::fs::write(&paths[0], b"broken jpeg").unwrap();
@@ -418,16 +382,12 @@ mod tests {
         use std::time::Instant;
         let directory = Path::new("target/comic-format-review");
         let bytes = std::fs::read(directory.join("sample.img")).unwrap();
-        let image = cache::read_image(&bytes).unwrap().to_rgba8();
+        let image = cache::read_image(&bytes).unwrap();
         let mut results = Vec::new();
-        for format in [
-            image::ImageFormat::Png,
-            image::ImageFormat::WebP,
-            image::ImageFormat::Jpeg,
-        ] {
+        for format in ["png", "jpeg"] {
             let started = Instant::now();
-            let encoded = if format == image::ImageFormat::Jpeg {
-                encode_jpeg(image.clone().into()).unwrap()
+            let encoded = if format == "jpeg" {
+                encode_jpeg(image.clone()).unwrap()
             } else {
                 let mut encoded = Cursor::new(Vec::new());
                 image.write_to(&mut encoded, format).unwrap();
@@ -435,10 +395,10 @@ mod tests {
             };
             let encode_ms = started.elapsed().as_secs_f64() * 1000.0;
             let started = Instant::now();
-            let decoded = cache::read_image(&encoded).unwrap().to_rgba8();
+            let decoded = cache::read_image(&encoded).unwrap();
             let decode_ms = started.elapsed().as_secs_f64() * 1000.0;
             let identical = image == decoded;
-            if format != image::ImageFormat::Jpeg {
+            if format != "jpeg" {
                 assert!(identical);
             }
             println!(

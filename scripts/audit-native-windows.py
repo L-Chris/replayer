@@ -10,6 +10,7 @@ p.add_argument('--directory', required=True)
 a = p.parse_args()
 tree = subprocess.check_output(['cargo', 'tree', '--locked', '--target', 'x86_64-pc-windows-msvc', '-e', 'normal', '--prefix', 'none'], text=True)
 assert not re.search(r'^ffmpeg', tree, re.M | re.I), 'Windows dependency tree still contains FFmpeg'
+assert not re.search(r'^(image-webp|symphonia-codec-vorbis|mp3lame-encoder|mp3lame-sys) ', tree, re.M), 'Windows dependency tree contains a removed software codec'
 
 def imports(path):
     data = path.read_bytes()
@@ -41,11 +42,12 @@ def imports(path):
     return result
 
 root = Path(a.directory)
+assert not (root / 'remdia-licenses/Opus-COPYING.txt').exists(), 'Stale SDK license from a cached runtime'
 for path in root.rglob('*'):
-    assert not re.search(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale)', path.name, re.I), path
+    assert not re.search(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale|image[_-]webp|fallback_vorbis|fallback_mp3_lame|LAME-COPYING|mp3lame-encoder-LGPL)', path.name, re.I), path
     if path.suffix.lower() in ('.exe', '.dll'):
         linked = imports(path)
         assert not any(re.search(r'(avcodec|avformat|avutil|swresample|swscale|vcruntime|msvcp|msvcr\d)', item, re.I) for item in linked), (path, linked)
-for name in ('native', 'windows'):
+for name in ('native', 'windows', 'image', 'system_audio', 'system_demux', 'fallback_demux'):
     assert (root / 'plugins' / f'remdia_backend_{name}.dll').is_file(), f'Missing {name} pack'
 print('Windows Cargo dependencies and PE imports are FFmpeg-free; component CRT is static')

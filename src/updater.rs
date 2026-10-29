@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, ensure};
+use aws_lc_rs::digest::{Context as DigestContext, SHA256};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use futures_util::StreamExt;
 use semver::Version;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::{io::Write, path::PathBuf, time::Duration};
 
 pub const REPOSITORY: &str = "https://github.com/L-Chris/replayer";
@@ -324,7 +324,7 @@ async fn download(update: &Update, tx: &Sender<Event>) -> Result<PathBuf> {
             ensure!(size == update.asset.size, "Unexpected download length");
         }
         let mut file = std::fs::File::create(&partial)?;
-        let mut hash = Sha256::new();
+        let mut hash = DigestContext::new(&SHA256);
         let mut size = 0u64;
         let mut last = std::time::Instant::now();
         let mut stream = response.bytes_stream();
@@ -342,7 +342,7 @@ async fn download(update: &Update, tx: &Sender<Event>) -> Result<PathBuf> {
                 last = std::time::Instant::now();
             }
         }
-        verify(update, size, &format!("{:x}", hash.finalize()))?;
+        verify(update, size, &crate::crypto::digest_hex(hash.finish()))?;
         file.sync_all()?;
         drop(file);
         std::fs::rename(&partial, &path)?;
@@ -358,7 +358,7 @@ async fn download(update: &Update, tx: &Sender<Event>) -> Result<PathBuf> {
 fn launch_installer(update: &Update, path: &std::path::Path) -> Result<()> {
     use std::{io::Read, os::windows::process::CommandExt};
     let mut file = std::fs::File::open(path)?;
-    let mut hash = Sha256::new();
+    let mut hash = DigestContext::new(&SHA256);
     let mut size = 0;
     let mut buffer = [0; 65536];
     loop {
@@ -370,7 +370,7 @@ fn launch_installer(update: &Update, path: &std::path::Path) -> Result<()> {
         ensure!(size <= MAX_SIZE, "Installer too large");
         hash.update(&buffer[..n]);
     }
-    verify(update, size, &format!("{:x}", hash.finalize()))?;
+    verify(update, size, &crate::crypto::digest_hex(hash.finish()))?;
     let executable = std::env::current_exe()?;
     let install_dir = executable
         .parent()
@@ -472,7 +472,7 @@ mod tests {
             assets: vec![Asset {
                 name: name.clone(),
                 browser_download_url: format!("{REPOSITORY}/releases/download/v{version}/{name}"),
-                digest: Some(format!("sha256:{:x}", Sha256::digest(data))),
+                digest: Some(format!("sha256:{}", crate::crypto::sha256_hex(data))),
                 size: data.len() as u64,
             }],
         }
@@ -504,9 +504,9 @@ mod tests {
     #[test]
     fn installer_integrity_and_localized_notes() {
         let update = select_release(release("0.2.0"), "0.1.0").unwrap().unwrap();
-        assert!(verify(&update, 9, &format!("{:x}", Sha256::digest(b"installer"))).is_ok());
-        assert!(verify(&update, 9, &format!("{:x}", Sha256::digest(b"tampered!"))).is_err());
-        assert!(verify(&update, 8, &format!("{:x}", Sha256::digest(b"installer"))).is_err());
+        assert!(verify(&update, 9, &crate::crypto::sha256_hex(b"installer")).is_ok());
+        assert!(verify(&update, 9, &crate::crypto::sha256_hex(b"tampered!")).is_err());
+        assert!(verify(&update, 8, &crate::crypto::sha256_hex(b"installer")).is_err());
         let notes = "English\n<details>\n<summary>中文更新说明</summary>\n中文\n</details>";
         assert_eq!(localized_notes(notes, true), "中文");
         assert_eq!(localized_notes(notes, false), "English");

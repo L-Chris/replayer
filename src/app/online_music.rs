@@ -171,7 +171,7 @@ impl App {
                         Ok(Arc::new(crate::media::Artwork {
                             width: tile.width() as usize,
                             height: tile.height() as usize,
-                            rgba: tile.into_raw(),
+                            rgba: tile.bytes().to_vec(),
                         }))
                     });
                 ctx.request_repaint();

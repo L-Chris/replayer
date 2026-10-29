@@ -1,5 +1,7 @@
 //! Share background-prepared pixels across texture eviction and concurrent loads.
 use super::*;
+#[cfg(test)]
+use crate::pixels::test_support::TestImageOutput;
 use anyhow::Result;
 use std::{
     path::Path,
@@ -27,7 +29,7 @@ impl Prepared {
                 .map(|tile| {
                     Arc::new(egui::ColorImage::from_rgba_unmultiplied(
                         [tile.width() as usize, tile.height() as usize],
-                        tile.as_raw(),
+                        tile.bytes(),
                     ))
                 })
                 .collect(),
@@ -227,8 +229,8 @@ mod tests {
                         count.fetch_add(1, Ordering::Relaxed);
                         tokio::time::sleep(Duration::from_millis(40)).await;
                         let mut bytes = std::io::Cursor::new(Vec::new());
-                        image::DynamicImage::new_rgb8(32, 64)
-                            .write_to(&mut bytes, image::ImageFormat::Png)
+                        crate::pixels::black(32, 64)
+                            .write_to(&mut bytes, "png")
                             .unwrap();
                         bytes.into_inner()
                     }

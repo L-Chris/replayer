@@ -6,11 +6,10 @@ mod tests;
 pub mod translation;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 pub fn digest(value: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(value))
+    crate::crypto::sha256_hex(value)
 }
 pub fn root() -> PathBuf {
     crate::settings::Settings::queue_path().with_file_name("comics")

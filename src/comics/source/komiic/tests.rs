@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use crate::pixels::test_support::TestImageOutput;
 use axum::{
     Json, Router,
     extract::State,
@@ -72,11 +74,9 @@ async fn image(State(state): State<Mock>, headers: HeaderMap) -> (StatusCode, He
         2 => StatusCode::PAYMENT_REQUIRED,
         _ => StatusCode::OK,
     };
-    let image = image::DynamicImage::new_rgb8(48, 64);
+    let image = crate::pixels::black(48, 64);
     let mut bytes = Cursor::new(Vec::new());
-    image
-        .write_to(&mut bytes, image::ImageFormat::Jpeg)
-        .unwrap();
+    image.write_to(&mut bytes, "jpeg").unwrap();
     let mut headers = HeaderMap::new();
     headers.insert("content-type", "application/octet-stream".parse().unwrap());
     (code, headers, bytes.into_inner())

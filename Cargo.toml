@@ -5,13 +5,16 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
+# Share the crypto implementation already used by rustls and librqbit.
+aws-lc-rs = { version = "1", default-features = false, features = ["alloc", "non-fips"] }
 bytemuck = "1.25.2"
 cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
-eframe = "0.36"
+# Select native GPU backends below instead of enabling wgpu's default set.
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "links", "wgpu_no_default_features"] }
 egui-phosphor = { version = "0.14", features = ["subset"] }
 # Playback and subtitle export use independent remdia component graphs.
-remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "4a7aee732d672a089512d0ee9efa28bf22fb4fa0" }
+remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "e6847d649b4f32171ae4d8dc78ef5c9b692e82dd" }
 rfd = "0.17.2"
 rtrb = "0.3"
 base64 = "0.22"
@@ -22,11 +25,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "macros", "sync"] }
 unicode-segmentation = "1"
 unicode-width = "0.2"
-sha2 = "0.10"
 rusqlite = { version = "0.40", features = ["bundled"] }
 regex = "1"
 quick-xml = "0.42"
-ring = "0.17"
 semver = "1"
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
 axum = "0.8"
@@ -34,9 +35,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 uuid = { version = "1", features = ["v4"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 tc_tea = { version = "0.2.1", default-features = false }
-replayer-image = { path = "crates/replayer-image" }
 
 [features]
 # Compatibility alias: remdia is now the default on every host.
@@ -44,6 +43,11 @@ remdia-media = []
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "dx12"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "metal"] }
+egui-wgpu = { version = "0.36", default-features = false, features = ["macos-window-resize-jitter-fix"] }
 
 [dev-dependencies]
 dotenvy = "0.15"
@@ -55,29 +59,6 @@ winresource = "0.1.31"
 lto = true
 codegen-units = 1
 strip = "symbols"
-
-# Keep the fixed debug preview responsive when decoding full comic pages.
-# Application code retains normal debug information and fast incremental builds.
-[profile.dev.package.image]
-opt-level = 3
-
-[profile.dev.package.zune-jpeg]
-opt-level = 3
-
-[profile.dev.package.zune-core]
-opt-level = 3
-
-[profile.dev.package.png]
-opt-level = 3
-
-[profile.dev.package.image-webp]
-opt-level = 3
-
-[profile.dev.package.fast_image_resize]
-opt-level = 3
-
-[profile.dev.package.replayer-image]
-opt-level = 3
 
 # Pixel conversion is hot even when the rest of the UI is built for debugging.
 [profile.dev.package.epaint]

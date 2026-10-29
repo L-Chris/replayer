@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use crate::pixels::test_support::TestImageOutput;
 use source::ComicSource;
 use std::sync::{
     Arc,
@@ -13,8 +15,8 @@ fn runtime() -> tokio::runtime::Runtime {
 }
 fn png(width: u32, height: u32) -> Vec<u8> {
     let mut bytes = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_pixel(width, height, image::Rgba([250, 250, 250, 255]))
-        .write_to(&mut bytes, image::ImageFormat::Png)
+    crate::pixels::solid(width, height, [250, 250, 250, 255])
+        .write_to(&mut bytes, "png")
         .unwrap();
     bytes.into_inner()
 }
@@ -221,8 +223,8 @@ fn image_edit_uses_multipart_returns_a_cached_image_and_never_retries_400() {
         assert!(output.exists());
         assert_eq!(output.extension().unwrap(), "jpg");
         assert_eq!(
-            image::guess_format(&std::fs::read(&output).unwrap()).unwrap(),
-            image::ImageFormat::Jpeg
+            crate::pixels::format(&std::fs::read(&output).unwrap()).unwrap(),
+            "jpeg"
         );
         assert_ne!(output, original);
         assert_eq!(std::fs::read(&original).unwrap(), original_bytes);
@@ -306,15 +308,26 @@ fn image_edit_uploads_jpeg_and_normalizes_provider_results_to_jpeg() {
         let hash = digest(&original_bytes);
         // Some compatible gateways ignore output_format. They must still yield
         // a JPEG cache after canvas reconstruction, without a second API call.
-        for (name, format) in [
-            ("webp", image::ImageFormat::WebP),
-            ("jpeg", image::ImageFormat::Jpeg),
-            ("png", image::ImageFormat::Png),
-        ] {
+        for (name, format) in [("webp", "webp"), ("jpeg", "jpeg"), ("png", "png")] {
+            if format == "webp" && !crate::pixels::test_support::webp_supported() {
+                assert!(
+                    crate::pixels::read_image(include_bytes!(
+                        "../../tests/fixtures/images/legacy-white.webp"
+                    ))
+                    .is_err()
+                );
+                continue;
+            }
             let mut response = std::io::Cursor::new(Vec::new());
-            image::DynamicImage::new_rgb8(32, 64)
-                .write_to(&mut response, format)
-                .unwrap();
+            if format == "webp" {
+                response.get_mut().extend_from_slice(include_bytes!(
+                    "../../tests/fixtures/images/legacy-white.webp"
+                ));
+            } else {
+                crate::pixels::black(32, 64)
+                    .write_to(&mut response, format)
+                    .unwrap();
+            }
             let calls = Arc::new(AtomicUsize::new(0));
             let observed = calls.clone();
             let app = axum::Router::new().route(
@@ -373,10 +386,7 @@ fn image_edit_uploads_jpeg_and_normalizes_provider_results_to_jpeg() {
             .unwrap();
             assert_eq!(translated.extension().unwrap(), "jpg");
             let bytes = std::fs::read(&translated).unwrap();
-            assert_eq!(
-                image::guess_format(&bytes).unwrap(),
-                image::ImageFormat::Jpeg
-            );
+            assert_eq!(crate::pixels::format(&bytes).unwrap(), "jpeg");
             let image = cache::read_image(&bytes).unwrap();
             assert_eq!((image.width(), image.height()), (32, 64));
             assert_eq!(
@@ -406,11 +416,7 @@ fn image_negotiation_preserves_original_bytes_and_explicit_provider_headers() {
     runtime().block_on(async {
         let calls = Arc::new(AtomicUsize::new(0));
         let observed = calls.clone();
-        let mut bytes = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::new_rgb8(32, 64)
-            .write_to(&mut bytes, image::ImageFormat::WebP)
-            .unwrap();
-        let bytes = bytes.into_inner();
+        let bytes = png(32, 64);
         let expected = bytes.clone();
         let app = axum::Router::new().route(
             "/image",
@@ -428,7 +434,7 @@ fn image_negotiation_preserves_original_bytes_and_explicit_provider_headers() {
                         assert_eq!(accept, "image/png");
                     }
                     // Deliberately misleading MIME: decoding must inspect the actual bytes.
-                    ([("content-type", "image/png")], bytes)
+                    ([("content-type", "image/jpeg")], bytes)
                 }
             }),
         );
@@ -470,9 +476,9 @@ fn tall_images_are_tiled_and_translation_preserves_canvas_dimensions() {
         }
         fn edit<'a>(
             &'a self,
-            image: image::DynamicImage,
+            image: crate::pixels::Image,
             _: &'a str,
-        ) -> BoxFuture<'a, anyhow::Result<image::DynamicImage>> {
+        ) -> BoxFuture<'a, anyhow::Result<crate::pixels::Image>> {
             self.0.fetch_add(1, Ordering::Relaxed);
             Box::pin(async { Ok(image) })
         }
@@ -607,7 +613,7 @@ fn live_source_image_formats() {
                             ).await {
                                 Ok(image) => {
                                     let bytes = std::fs::read(&image.path)?;
-                                    let format = image::guess_format(&bytes)?;
+                                    let format = crate::pixels::format(&bytes)?;
                                     let sample = json!({"page":index + 1,"format":format!("{format:?}"),"bytes":bytes.len(),"path":image.path});
                                     println!("{} / {} / {} / page {}: {format:?}, {} bytes", provider.name, group.site.name, detail.book.title, index + 1, bytes.len());
                                     row["samples"].as_array_mut().unwrap().push(sample);

@@ -24,7 +24,7 @@ if ($RebuildRuntime -or -not $ready) {
     & (Join-Path $source 'scripts/build-windows.ps1') -Release
     $RuntimeDirectory = Join-Path $source 'dist/remdia'
 }
-foreach ($name in @('native', 'windows')) {
+foreach ($name in @('native', 'windows', 'image', 'system_audio', 'system_demux', 'fallback_demux')) {
     if (-not (Test-Path (Join-Path $RuntimeDirectory "plugins/remdia_backend_$name.dll"))) { throw "Missing remdia $name component DLL." }
     $manifest = Get-Content (Join-Path $RuntimeDirectory "plugins/$name.json") -Raw | ConvertFrom-Json
     if ($manifest.abi_major -ne 2 -or $manifest.os -ne 'windows' -or $manifest.arch -ne 'x86_64') { throw 'Incompatible remdia manifest.' }

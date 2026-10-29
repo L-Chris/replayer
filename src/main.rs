@@ -4,12 +4,14 @@ mod ai;
 mod app;
 mod comics;
 mod credentials;
+mod crypto;
 mod jobs;
 mod lyrics;
 mod media;
 mod media_backend;
 mod media_source;
 mod music_sources;
+mod pixels;
 mod player;
 mod queue;
 #[path = "renderer/native.rs"]
@@ -77,12 +79,17 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("replayer")
             .with_decorations(false)
-            .with_icon(
-                eframe::icon_data::from_png_bytes(include_bytes!(
+            .with_icon({
+                let image = crate::pixels::read_image(include_bytes!(
                     "../assets/branding/replayer-icon-256.png"
                 ))
-                .expect("embedded application icon must be a valid PNG"),
-            )
+                .expect("embedded application icon through remdia");
+                egui::IconData {
+                    rgba: image.bytes().to_vec(),
+                    width: image.width(),
+                    height: image.height(),
+                }
+            })
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([760.0, 540.0]),
         ..Default::default()

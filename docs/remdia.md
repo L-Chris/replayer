@@ -2,7 +2,7 @@
 
 Windows and macOS use the public [remdia SDK](https://github.com/L-Chris/remdia),
 pinned to an exact Git revision in Cargo.toml. The core loads independent media
-components through C ABI v2.1. Neither the executable nor its media plugins links
+components through C ABI v2.2. Neither the executable nor its media plugins links
 FFmpeg. The `remdia-media` feature remains as a compatibility alias; remdia is
 now the default backend.
 
@@ -32,9 +32,9 @@ load their plugins from `Contents/Frameworks/remdia`.
 ## Media graphs
 
 Playback routes compressed packets from the demux component to independent
-audio and video decoders. Audio passes through a sinc resample/mix component to
+audio and video decoders. Audio passes through a system resample/mix component to
 CPAL. Windows Media Foundation and macOS VideoToolbox return retained NV12 planes
-to the WGPU renderer. Thumbnail requests add an RGBA conversion/resize filter.
+to the WGPU renderer. Thumbnail requests connect the video conversion node to image adaptation/scaling nodes.
 Subtitle extraction requests 16 kHz mono PCM; a separate LAME encoder produces
 MP3 upload chunks. Graphs stay on their worker; immutable frames cross threads.
 
@@ -58,13 +58,20 @@ codec parameter changes require reopening from a keyframe.
 
 Remote elementary MPEG audio uses approximate byte/duration seeking to avoid
 scanning a missing download prefix; VBR accuracy is limited by this estimate.
-Local audio and timestamped containers retain precise seek paths. Unsupported
+Local audio and timestamped containers retain precise seek paths. Windows MF
+FLAC currently pre-rolls from the beginning because its native nonzero seeks
+return premature EOF for valid small-block streams; long-file seek latency can
+grow with the target position. Unsupported
 codecs return a clear error rather than using another decoder backend.
 
-Multichannel AAC, AC-3 and E-AC-3 use Windows Media Foundation or macOS
-AudioToolbox. Availability depends on the installed system codecs; no additional
-standalone decoder is bundled or used as a fallback. Other supported audio keeps
-using the existing native audio components.
+Audio decoding and resampling now use Media Foundation / AudioToolbox for MP3,
+AAC, FLAC, ALAC, PCM and Opus; macOS also supplies Vorbis. Dolby availability
+depends on the installed system components. Windows Vorbis has a separate narrow
+fallback. Complete local files use the independent system demux; progressive
+HTTP/Range and unsupported containers use the compatibility demux and the same
+system decoders. The 16 kHz gapless subtitle MP3 contract retains a separate LAME
+fallback. No libopus or Rubato is bundled. See the pinned SDK's capability report
+for the installed machine; unsupported codecs fail explicitly.
 
 ## Validation and packaging
 
@@ -78,6 +85,12 @@ cargo clippy --locked --all-targets -- -D warnings
 
 On macOS, source the generated environment before standalone Cargo commands.
 CI builds and tests native Apple Silicon and Intel packages plus Windows x64.
-Packaging explicitly includes both plugins, manifests, matching revision, notices
+Packaging explicitly includes seven macOS packs or nine Windows packs, their manifests, matching revision, notices
 and codec rebuild instructions. Relocated app tests remove development runtime
 paths and use only the system PATH. See [packaging](releasing.md).
+
+## Image graphs
+
+`src/pixels.rs` submits `MediaRequest::Image` jobs to the same SDK Graph used by playback. The application no longer directly depends on image/fast_image_resize or a local image codec crate. `Image` is a read-only view over the shared MediaBuffer; UI texture uploads consume its dimensions/stride/bytes. Comic previews use decode -> tile, while translation uses crop/scale/compose/alpha/encode nodes. JPEG uploads and caches retain the white-background quality-95 policy. Existing PNG/WebP/JPEG caches remain readable.
+
+Both packages include the system image pack. Windows also includes a separate WebP fallback, selected only when WIC cannot activate and decode a known WebP capability fixture; tagged WebP ICC/EXIF currently needs a system codec. macOS uses ImageIO for WebP decoding. The GUI framework still has its own transitive image/clipboard dependencies; removing the application codecs does not claim those crates disappear from the whole Cargo graph.

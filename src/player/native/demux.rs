@@ -100,6 +100,15 @@ fn run(
     request.hardware = std::env::var_os("REPLAYER_SOFTWARE").is_none();
     let mut session = unsafe { engine.open(request.clone(), s.cancel.clone()) }
         .with_context(|| format!("open media '{path}' through remdia"))?;
+    #[cfg(test)]
+    let trace = crate::media_source::is_qq(std::path::Path::new(path));
+    #[cfg(test)]
+    if trace {
+        eprintln!(
+            "QQ source graph: {}",
+            serde_json::to_string(session.plan())?
+        );
+    }
     let header = Header {
         duration: session.info().duration_us.unwrap_or(0) as f64 / 1e6,
         has_audio: session.info().tracks.iter().any(|t| t.kind == "audio"),
@@ -149,6 +158,15 @@ fn run(
                 continue;
             }
             result.context("seek remdia graph")?;
+            #[cfg(test)]
+            if trace {
+                eprintln!(
+                    "QQ seek epoch={} target={} generation={}",
+                    next.epoch,
+                    next.target,
+                    session.generation()
+                );
+            }
             epoch = next.epoch;
             eof = false;
             if !send(tx, Message::Seeked(epoch), s) {
@@ -170,11 +188,19 @@ fn run(
         }
         match result? {
             Some(frame) => {
+                #[cfg(test)]
+                if trace {
+                    eprintln!("QQ frame epoch={epoch}: {:?}", frame.info());
+                }
                 if !send(tx, Message::Frame(epoch, frame), s) {
                     break;
                 }
             }
             None => {
+                #[cfg(test)]
+                if trace {
+                    eprintln!("QQ EOF epoch={epoch}");
+                }
                 eof = true;
                 if !send(tx, Message::Eof(epoch), s) {
                     break;

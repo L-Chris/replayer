@@ -59,7 +59,7 @@ def embed_libraries(executable, framework_dir, prefix):
     manifests = framework_dir.parent / 'Resources/remdia/plugins'
     manifests.mkdir(parents=True)
     libraries = []
-    for name in ('native', 'macos'):
+    for name in ('native', 'macos', 'image', 'system_audio', 'system_demux', 'fallback_demux', 'fallback_mp3_lame'):
         manifest = plugins / (name + '.json')
         data = json.loads(manifest.read_text())
         library = data['library']
@@ -113,16 +113,15 @@ def verify_bundle(app, expected_arch, expected_version=None):
     executable = contents / 'MacOS/replayer'
     framework_dir = contents / 'Frameworks'
     plugins = framework_dir / 'remdia'
-    expected_files = {'native.json', 'macos.json', 'libremdia_backend_native.dylib',
-                      'libremdia_backend_macos.dylib'}
+    expected_files = {filename for name in ('native', 'macos', 'image', 'system_audio', 'system_demux', 'fallback_demux', 'fallback_mp3_lame') for filename in (name+'.json',f'libremdia_backend_{name}.dylib')}
     assert {p.name for p in plugins.iterdir()} == expected_files, 'Unexpected component pack'
     assert {p.name for p in framework_dir.iterdir()} == {'remdia'}
-    for name in ('native', 'macos'):
+    for name in ('native', 'macos', 'image', 'system_audio', 'system_demux', 'fallback_demux', 'fallback_mp3_lame'):
         link = plugins / (name + '.json')
         assert link.is_symlink() and link.resolve() == notices / 'plugins' / link.name
         manifest = json.loads(link.read_text())
         assert manifest['id'] == name and manifest['os'] == 'macos'
-        assert manifest['abi_major'] == 2 and manifest.get('abi_minor', 0) <= 1
+        assert manifest['abi_major'] == 2 and manifest.get('abi_minor', 0) == 2
         assert manifest['arch'] == ('aarch64' if expected_arch == 'arm64' else expected_arch)
         assert manifest['library'] == f'libremdia_backend_{name}.dylib'
     forbidden = re.compile(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale)', re.I)

@@ -8,7 +8,7 @@ use std::{
 #[cfg(test)]
 mod tests;
 
-pub use replayer_image::{Bitmap, decode, read_image};
+pub use crate::pixels::{Bitmap, decode, read_image};
 pub struct CachedImage {
     pub path: PathBuf,
     pub hash: String,

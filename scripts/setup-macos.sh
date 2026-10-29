@@ -41,9 +41,9 @@ python3 - "$runtime" "$arch" "$revision" <<'VERIFY'
 import json, pathlib, subprocess, sys
 root, arch, revision = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 assert (root/'REVISION').read_text().strip() == revision
-for name in ('native','macos'):
+for name in ('native', 'macos', 'image', 'system_audio', 'system_demux', 'fallback_demux', 'fallback_mp3_lame'):
     manifest=json.loads((root/'plugins'/f'{name}.json').read_text())
-    assert manifest['abi_major']==2 and manifest.get('abi_minor',0)<=1
+    assert manifest['abi_major']==2 and manifest.get('abi_minor',0)==2
     assert manifest['os']=='macos' and manifest['arch']==arch
     library=root/'plugins'/manifest['library']
     expected='arm64' if arch=='aarch64' else arch
