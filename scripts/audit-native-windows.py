@@ -48,6 +48,6 @@ for path in root.rglob('*'):
     if path.suffix.lower() in ('.exe', '.dll'):
         linked = imports(path)
         assert not any(re.search(r'(avcodec|avformat|avutil|swresample|swscale|vcruntime|msvcp|msvcr\d)', item, re.I) for item in linked), (path, linked)
-for name in ('native', 'windows', 'image', 'system_audio', 'system_demux', 'fallback_demux'):
-    assert (root / 'plugins' / f'remdia_backend_{name}.dll').is_file(), f'Missing {name} pack'
-print('Windows Cargo dependencies and PE imports are FFmpeg-free; component CRT is static')
+assert not list(root.rglob('remdia_backend_*.dll')), 'Built-in media components must not be shipped again as DLLs'
+assert not list(root.rglob('remdia_sdk.dll')), 'replayer statically includes the SDK'
+print('Windows media components are built in; no duplicate SDK DLLs or FFmpeg imports')

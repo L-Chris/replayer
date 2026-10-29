@@ -1,8 +1,8 @@
 # remdia integration
 
 Windows and macOS use the public [remdia SDK](https://github.com/L-Chris/remdia),
-pinned to an exact Git revision in Cargo.toml. The core loads independent media
-components through C ABI v2.2. Neither the executable nor its media plugins links
+pinned to an exact Git revision in Cargo.toml. Built-in factories are statically
+registered in replayer; optional external extensions retain C ABI v2.2. Neither the executable nor its media plugins links
 FFmpeg. The `remdia-media` feature remains as a compatibility alias; remdia is
 now the default backend.
 
@@ -24,7 +24,7 @@ source .deps/macos-aarch64/env.sh  # macos-x86_64 on Intel
 ```
 
 Setup builds the pinned SDK into `.deps/remdia-source`, validates its revision,
-architecture and ABI, then stages matching plugins beside the fixed preview
+architecture and ABI, then stages the macOS LAME extension beside the fixed preview
 executable. `REMDIA_RUNTIME_DIR` can select a prebuilt matching SDK runtime;
 `REMDIA_PLUGIN_DIR` overrides plugin discovery during development. macOS bundles
 load their plugins from `Contents/Frameworks/remdia`.
@@ -35,8 +35,9 @@ Playback routes compressed packets from the demux component to independent
 audio and video decoders. Audio passes through a system resample/mix component to
 CPAL. Windows Media Foundation and macOS VideoToolbox return retained NV12 planes
 to the WGPU renderer. Thumbnail requests connect the video conversion node to image adaptation/scaling nodes.
-Subtitle extraction requests 16 kHz mono PCM; a separate LAME encoder produces
-MP3 upload chunks. Graphs stay on their worker; immutable frames cross threads.
+Subtitle extraction requests 16 kHz mono PCM; Windows uses the system MP3 encoder
+with the gapless mux, while macOS uses the separate LAME extension. Graphs stay
+on their worker; immutable frames cross threads.
 
 The host retains asynchronous open, pause, seek generations, bounded queues,
 progressive HTTP buffering, cancellation, EOF/replay and audio-device recovery.

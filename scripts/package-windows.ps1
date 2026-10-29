@@ -28,17 +28,10 @@ try {
     New-Item -ItemType Directory -Path $iconDirectory -Force | Out-Null
     Copy-Item -LiteralPath 'assets/branding/replayer.ico' -Destination (Join-Path $iconDirectory $iconName)
     if (-not $RuntimeDirectory) { $RuntimeDirectory = Join-Path $root '.deps/remdia-source/dist/remdia' }
-    if (-not (Test-Path (Join-Path $RuntimeDirectory 'plugins/native.json'))) { throw 'Run setup-windows.ps1 to build remdia components first.' }
+    if (-not (Test-Path (Join-Path $RuntimeDirectory 'BUNDLED.json'))) { throw 'Run setup-windows.ps1 to prepare the bundled remdia SDK first.' }
     $cargo = Get-Content (Join-Path $root 'Cargo.toml') -Raw
     if ($cargo -notmatch '(?m)^remdia\s*=\s*\{[^}]*rev\s*=\s*"([a-f0-9]{40})"') { throw 'Missing pinned remdia revision.' }
     if ((Get-Content (Join-Path $RuntimeDirectory 'REVISION') -Raw).Trim() -cne $Matches[1]) { throw 'Runtime revision does not match Cargo.toml.' }
-    $plugins = Join-Path $stage 'plugins'
-    New-Item -ItemType Directory -Force $plugins | Out-Null
-    foreach ($name in @('native', 'windows', 'image', 'system_audio', 'system_demux', 'fallback_demux')) {
-        foreach ($filename in @("$name.json", "remdia_backend_$name.dll")) {
-            Copy-Item -LiteralPath (Join-Path $RuntimeDirectory "plugins/$filename") -Destination $plugins
-        }
-    }
     if (Test-Path (Join-Path $RuntimeDirectory 'licenses')) {
         Copy-Item -LiteralPath (Join-Path $RuntimeDirectory 'licenses') -Destination (Join-Path $stage 'remdia-licenses') -Recurse
     }

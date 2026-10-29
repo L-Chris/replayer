@@ -18,6 +18,13 @@ $unrelatedLink = Join-Path $pinnedDirectory "unrelated-icon-test-$fixtureID.lnk"
 $desktopLink = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'replayer.lnk'
 $startLink = Join-Path ([Environment]::GetFolderPath('Programs')) 'replayer/replayer.lnk'
 $retiredCodecFiles = @('plugins/image_webp.json', 'plugins/remdia_backend_image_webp.dll',
+    'plugins/native.json', 'plugins/remdia_backend_native.dll',
+    'plugins/windows.json', 'plugins/remdia_backend_windows.dll',
+    'plugins/image.json', 'plugins/remdia_backend_image.dll',
+    'plugins/system_audio.json', 'plugins/remdia_backend_system_audio.dll',
+    'plugins/system_demux.json', 'plugins/remdia_backend_system_demux.dll',
+    'plugins/fallback_demux.json', 'plugins/remdia_backend_fallback_demux.dll',
+    'plugins/sdk.json', 'plugins/remdia_sdk.dll',
     'remdia-licenses/image-webp-MIT.txt', 'remdia-licenses/image-webp-Apache-2.0.txt',
     'plugins/fallback_vorbis.json', 'plugins/remdia_backend_fallback_vorbis.dll',
     'plugins/fallback_mp3_lame.json', 'plugins/remdia_backend_fallback_mp3_lame.dll',

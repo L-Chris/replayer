@@ -19,9 +19,9 @@ pub fn engine() -> Result<remdia::Engine> {
             parent.parent().unwrap_or(parent).join("plugins")
         }
     };
-    remdia::Engine::discover(&directory, 256 * 1024 * 1024).with_context(|| {
+    remdia::Engine::bundled_with_plugins(&directory, 256 * 1024 * 1024).with_context(|| {
         format!(
-            "load remdia component manifests from {}",
+            "register built-in media components and trusted extensions from {}",
             directory.display()
         )
     })

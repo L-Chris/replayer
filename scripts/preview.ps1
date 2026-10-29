@@ -28,7 +28,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Preview build failed; no executable was launched.' }
     $plugins = Join-Path (Split-Path -Parent $previewExe) 'plugins'
     New-Item -ItemType Directory -Force $plugins | Out-Null
-    Copy-Item "$env:REMDIA_PLUGIN_DIR/*" $plugins -Force
+    # Media components are linked into the executable. Retire owned old files,
+    # keeping unrelated externally installed extensions.
+    foreach ($name in @('native','windows','image','system_audio','system_demux','fallback_demux')) {
+        Remove-Item -LiteralPath (Join-Path $plugins "$name.json") -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $plugins "remdia_backend_$name.dll") -Force -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath (Join-Path $plugins 'sdk.json') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $plugins 'remdia_sdk.dll') -Force -ErrorAction SilentlyContinue
     if (-not $NoLaunch) {
         # UseShellExecute detaches the child from this shell's pipe handles;
         # otherwise the launched app keeps stdout open and callers block forever.

@@ -35,8 +35,9 @@ Comic library storage uses `rusqlite` 0.40.2 (MIT), which embeds SQLite through
 The rusqlite license is bundled in `licenses/rusqlite-MIT.txt`.
 Sources: https://github.com/rusqlite/rusqlite and https://sqlite.org/copyright.html .
 
-Windows and macOS source builds use remdia's independently loaded native and
-platform video and system image plugins (Media Foundation / VideoToolbox / WIC / ImageIO). The executable and component packs do not link
+Windows and macOS source builds statically register remdia's utility, platform
+media and system image factories (Media Foundation / VideoToolbox / WIC / ImageIO).
+macOS LAME remains a separately loaded extension. The executable and extension do not link
 to FFmpeg. `Cargo.toml` pins the SDK source revision; `scripts/setup-windows.ps1`
 and `scripts/setup-macos.sh` build that revision and packaging includes its `REVISION`, `THIRD_PARTY.md`
 and license texts. Published releases built before this migration retain their
@@ -48,9 +49,9 @@ AudioToolbox, VideoToolbox, ImageIO and CoreGraphics on macOS. These operating
 system binaries are not redistributed. Codec availability depends on the installed
 system components.
 
-Narrow replaceable compatibility packs contain Symphonia (MPL-2.0) for unsupported
-container/progressive HTTP demux, and LAME / mp3lame-encoder (LGPL) on macOS
-for MP3 export. Windows uses the system MP3 encoder with a separate owned gapless
+The compatibility demux uses Symphonia (MPL-2.0) for unsupported
+containers and progressive HTTP sources. The separate macOS extension uses
+LAME / mp3lame-encoder (LGPL) for MP3 export. Windows uses the system MP3 encoder with a separate owned gapless
 mux. Software Vorbis/WebP decoders are not bundled; those formats require an
 installed system decoder. System availability is queried before selecting the relevant graph node.
 Symphonia's upstream ADTS/MPA/FLAC reader crates also contain codec code, but the
