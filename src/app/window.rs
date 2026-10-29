@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) const CONTROLS_WIDTH: f32 = 138.0;
-const CAPTION_HEIGHT: f32 = 44.0;
+pub(super) const CAPTION_HEIGHT: f32 = 44.0;
 
 #[derive(Clone, Default)]
 struct FullscreenState {

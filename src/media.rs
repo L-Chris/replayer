@@ -32,7 +32,10 @@ fn read_bounded(path: &Path, limit: u64) -> Option<Vec<u8>> {
 }
 pub fn write_companion(path: &Path, suffix: &str, bytes: &[u8]) -> anyhow::Result<()> {
     let target = companion_path(path, suffix);
-    let temporary = companion_path(&target, &format!(".{}.tmp", uuid::Uuid::new_v4()));
+    write_atomic(&target, bytes)
+}
+pub fn write_atomic(target: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let temporary = companion_path(target, &format!(".{}.tmp", uuid::Uuid::new_v4()));
     let result =
         std::fs::write(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, target));
     if result.is_err() {

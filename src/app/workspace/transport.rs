@@ -5,7 +5,6 @@ pub(super) const MUSIC_BAR_HEIGHT: f32 = 100.0;
 impl App {
     pub(super) fn mini_transport(&mut self, root: &mut Ui, screen: Rect, act: &mut Act) {
         let l = self.settings.language;
-        let wide = screen.width() >= 1100.0;
         let bar = Rect::from_min_max(
             pos2(screen.min.x, screen.max.y - MUSIC_BAR_HEIGHT),
             screen.max,
@@ -206,24 +205,18 @@ impl App {
             Stroke::new(1.0, LINE),
         );
         self.volume_control(root, screen, pos2(bar.max.x - 90.0, cy), 1.0, act);
-        if wide {
-            root.painter().line_segment(
-                [
-                    pos2(bar.max.x - 118.0, cy - 14.0),
-                    pos2(bar.max.x - 118.0, cy + 14.0),
-                ],
-                Stroke::new(1.0, LINE),
-            );
-            let mut lyrics = control_slot(root, "mini-lyrics", pos2(bar.max.x - 146.0, cy), 28.0);
-            if icon_button(&mut lyrics, 28.0, 1.0, draw_subtitles)
-                .on_hover_text(l.text("\u{5c55}\u{5f00}\u{6b4c}\u{8bcd}", "Show lyrics"))
-                .clicked()
-                && self.is_music()
-            {
-                self.workspace.listening_tab = 0;
-                self.workspace.page = Page::Listening;
-            }
+        root.painter().line_segment(
+            [
+                pos2(bar.max.x - 118.0, cy - 14.0),
+                pos2(bar.max.x - 118.0, cy + 14.0),
+            ],
+            Stroke::new(1.0, LINE),
+        );
+        let mut lyrics = control_slot(root, "mini-lyrics", pos2(bar.max.x - 146.0, cy), 28.0);
+        if !self.is_music() {
+            lyrics.disable();
         }
+        self.lyrics_menu(&mut lyrics, act);
     }
 
     pub(in crate::app) fn video_transport(

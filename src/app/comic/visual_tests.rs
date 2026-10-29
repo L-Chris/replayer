@@ -1224,6 +1224,41 @@ fn media_update_visuals() {
         |ui| eframe::App::ui(&mut app, ui, &mut frame),
     );
     app.queue_open = false;
+    for (label, name) in [
+        ("搜索", "music-search-header.png"),
+        ("收藏", "music-favorites-header.png"),
+    ] {
+        let output = app_frame(&ctx, &mut app, vec2(1280.0, 800.0), vec![]);
+        let point = settings_text(&output, label).expect("music tab is visible");
+        for pressed in [true, false] {
+            app_frame(
+                &ctx,
+                &mut app,
+                vec2(1280.0, 800.0),
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        capture.save(&ctx, [1280, 800], &directory.join(name), |ui| {
+            eframe::App::ui(&mut app, ui, &mut frame)
+        });
+    }
+    for (page, name) in [
+        (workspace::Page::Video, "video-header.png"),
+        (workspace::Page::Comic, "comic-header.png"),
+    ] {
+        app.workspace.page = page;
+        capture.save(&ctx, [1280, 800], &directory.join(name), |ui| {
+            eframe::App::ui(&mut app, ui, &mut frame)
+        });
+    }
     app.library.records.clear();
     app.queue = Default::default();
     app.workspace.page = workspace::Page::Listening;
@@ -1243,6 +1278,41 @@ fn media_update_visuals() {
         &directory.join("home-favorite-comics.png"),
         |ui| eframe::App::ui(&mut app, ui, &mut frame),
     );
+    let resume = crate::app::library::Record {
+        path: "fixture-resume.mp3".into(),
+        title: "落雨".into(),
+        artist: "地磁卡".into(),
+        music: true,
+        played: 100,
+        position: 92.0,
+        duration: 160.0,
+        ..Default::default()
+    };
+    app.metadata_cache.complete(
+        resume.path.clone(),
+        Some(Arc::new(crate::media::Info {
+            kind: crate::media::Kind::Music,
+            title: Some(resume.title.clone()),
+            artist: Some(resume.artist.clone()),
+            album: None,
+            artwork: Some(Arc::new(crate::media::Artwork {
+                width: 2,
+                height: 2,
+                rgba: vec![
+                    24, 45, 40, 255, 55, 90, 75, 255, 4, 10, 8, 255, 12, 30, 20, 255,
+                ],
+            })),
+        })),
+    );
+    app.library.records.push(resume);
+    for width in [800, 1280] {
+        capture.save(
+            &ctx,
+            [width, 800],
+            &directory.join(format!("home-resume-no-inset-{width}.png")),
+            |ui| eframe::App::ui(&mut app, ui, &mut frame),
+        );
+    }
 }
 
 #[test]
@@ -1268,6 +1338,8 @@ fn populated_lyrics_never_cover_tabs_and_info_remains_clickable_at_every_scale()
                 output = app_frame(&ctx, &mut app, size, vec![]);
             }
             let info = settings_text(&output, "信息").expect("Info tab remains visible");
+            assert!(settings_text(&output, "AI 歌词").is_none());
+            let ai_lyrics = pos2(size.x - 146.0, size.y - 50.0);
             let lyric_background = output
                 .shapes
                 .iter()
@@ -1298,6 +1370,42 @@ fn populated_lyrics_never_cover_tabs_and_info_remains_clickable_at_every_scale()
                 );
             }
             assert_eq!(app.workspace.listening_tab, 1);
+            for pressed in [true, false] {
+                app_frame(
+                    &ctx,
+                    &mut app,
+                    size,
+                    vec![
+                        egui::Event::PointerMoved(ai_lyrics),
+                        egui::Event::PointerButton {
+                            pos: ai_lyrics,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            let output = app_frame(&ctx, &mut app, size, vec![]);
+            let regenerate =
+                settings_text(&output, "重新生成歌词").expect("Playback bar opens the lyric menu");
+            assert!(regenerate.y < ai_lyrics.y);
+            assert!(settings_text(&output, "显示歌词").is_some());
+            assert!(settings_text(&output, "保存 LRC…").is_none());
+            app_frame(
+                &ctx,
+                &mut app,
+                size,
+                vec![egui::Event::Key {
+                    key: Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert!(!egui::Popup::is_any_open(&ctx));
+            assert!(app.workspace.page == workspace::Page::Listening);
         }
     }
 }
@@ -1814,8 +1922,8 @@ fn comic_catalog_visuals() {
         Some(pos2(50.0, 20.0)),
         |ui| {
             ui.horizontal(|ui| {
-                design::selectable_value(ui, &mut selected, 0, "本地音乐");
-                design::selectable_value(ui, &mut selected, 1, "在线搜索");
+                design::selectable_value(ui, &mut selected, 0, "收藏");
+                design::selectable_value(ui, &mut selected, 1, "搜索");
             });
             ui.horizontal(|ui| {
                 design::control(
@@ -1871,7 +1979,7 @@ fn navigation_has_only_home_media_and_settings_and_favorites_use_collection_orde
     for _ in 0..2 {
         output = app_frame(&ctx, &mut app, vec2(1280.0, 900.0), vec![]);
     }
-    for removed in ["我的资料库", "最近播放", "下载", "收藏"] {
+    for removed in ["我的资料库", "最近播放", "下载"] {
         assert!(
             settings_text(&output, removed).is_none(),
             "removed navigation: {removed}"
@@ -1879,6 +1987,9 @@ fn navigation_has_only_home_media_and_settings_and_favorites_use_collection_orde
     }
     for page in ["首页", "音乐", "视频", "漫画", "设置"] {
         assert!(settings_text(&output, page).is_some());
+    }
+    for tab in ["收藏", "搜索"] {
+        assert!(settings_text(&output, tab).is_some());
     }
     // The old song still leads the listening history cards; the table below
     // must independently put the newly favorited song first.

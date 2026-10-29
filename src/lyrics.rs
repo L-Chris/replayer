@@ -19,6 +19,50 @@ fn parse_time(tag: &str) -> Option<f64> {
         .then_some(minutes * 60.0 + seconds)
 }
 impl Lyrics {
+    pub fn save_for(&self, source: &Path) -> anyhow::Result<std::path::PathBuf> {
+        anyhow::ensure!(!self.lines.is_empty(), "No lyrics to save");
+        let path = source.with_extension("lrc");
+        crate::media::write_atomic(&path, self.to_lrc().as_bytes())?;
+        Ok(path)
+    }
+
+    pub fn from_cues(cues: &[crate::subtitles::Cue]) -> Self {
+        let mut lines: Vec<_> = cues
+            .iter()
+            .filter(|cue| cue.start.is_finite() && cue.start >= 0.0)
+            .filter_map(|cue| {
+                let text = cue.text.split_whitespace().collect::<Vec<_>>().join(" ");
+                (!text.is_empty()).then_some(LyricLine {
+                    time: cue.start,
+                    text,
+                })
+            })
+            .collect();
+        lines.sort_by(|a, b| a.time.total_cmp(&b.time));
+        Self {
+            synced: !lines.is_empty(),
+            lines,
+        }
+    }
+
+    pub fn to_lrc(&self) -> String {
+        let mut output = String::new();
+        for line in &self.lines {
+            let centis = (line.time.max(0.0) * 100.0).round() as u64;
+            let text = line.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            // LRC treats leading bracketed timestamps as timing instructions.
+            let text = text.replace('[', "［").replace(']', "］");
+            output.push_str(&format!(
+                "[{:02}:{:02}.{:02}]{}\n",
+                centis / 6000,
+                centis / 100 % 60,
+                centis % 100,
+                text
+            ));
+        }
+        output
+    }
+
     pub fn parse(text: &str) -> Self {
         let mut timed = Vec::new();
         let mut plain = Vec::new();
@@ -91,6 +135,51 @@ impl Lyrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_lyrics_keep_original_words_repetitions_and_lrc_timing() {
+        let cues = vec![
+            crate::subtitles::Cue {
+                start: 3600.125,
+                end: 3610.0,
+                text: "君の声が聞こえる".into(),
+                source: None,
+            },
+            crate::subtitles::Cue {
+                start: 1.25,
+                end: 1.5,
+                text: "Hello,\n世界！".into(),
+                source: None,
+            },
+            crate::subtitles::Cue {
+                start: 15.0,
+                end: 24.0,
+                text: "Hello, 世界！".into(),
+                source: None,
+            },
+        ];
+        let lyrics = Lyrics::from_cues(&cues);
+        let lrc = lyrics.to_lrc();
+        assert_eq!(
+            lrc,
+            "[00:01.25]Hello, 世界！\n[00:15.00]Hello, 世界！\n[60:00.13]君の声が聞こえる\n"
+        );
+        let loaded = Lyrics::parse(&lrc);
+        assert!(loaded.synced);
+        assert_eq!(loaded.lines.len(), 3);
+        assert_eq!(loaded.current_index(15.1), Some(1));
+        assert_eq!(loaded.lines[2].text, "君の声が聞こえる");
+        assert!((loaded.lines[2].time - 3600.13).abs() < 0.0001);
+        let bracket = Lyrics::from_cues(&[crate::subtitles::Cue {
+            start: 1.0,
+            end: 2.0,
+            text: "[00:02.00]Sing".into(),
+            source: None,
+        }]);
+        let bracket = Lyrics::parse(&bracket.to_lrc());
+        assert_eq!(bracket.lines.len(), 1);
+        assert_eq!(bracket.lines[0].text, "［00:02.00］Sing");
+    }
 
     #[test]
     fn parses_timestamps_multiple_stamps_and_skips_tags() {

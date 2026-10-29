@@ -222,8 +222,8 @@ pub(super) fn run_with_cache(
                         ensure!(!cancel.load(Ordering::Acquire), "字幕生成已取消");
                         if chunk.samples.iter().any(|s| s.abs() >= 0.0001) {
                             let limit = chunk.start + chunk.duration();
-                            match client.transcribe(&chunk, &task_cancel, options.language).await {
-                                Ok(result) => cues.extend(style::prepare(result, options.language, limit)),
+                            match client.transcribe(&chunk, &task_cancel, options.language, options.mode).await {
+                                Ok(result) => cues.extend(options.mode.prepare(result, options.language, limit)),
                                 Err(error) => {
                                     ensure!(!cancel.load(Ordering::Acquire) && !task_cancel.load(Ordering::Acquire), "字幕生成已取消");
                                     skipped.push((chunk.start, limit, error.to_string()));

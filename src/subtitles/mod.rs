@@ -12,6 +12,7 @@ use std::time::Instant;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
+    pub mode: Mode,
     pub language: Language,
     pub concurrency: usize,
     pub start: f64,
@@ -20,10 +21,28 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            mode: Mode::Subtitles,
             language: Language::Chinese,
             concurrency: 2,
             start: 0.0,
             end: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Subtitles,
+    Lyrics,
+}
+impl Mode {
+    fn prepare(self, cues: Vec<Cue>, language: Language, boundary: f64) -> Vec<Cue> {
+        match self {
+            Self::Subtitles => style::prepare(cues, language, boundary),
+            // Preserve the original wording and vocal timing. Subtitle reading
+            // speed, translation and duration rules do not apply to songs.
+            Self::Lyrics => cues,
         }
     }
 }
@@ -74,6 +93,24 @@ pub struct Job {
     priority: Arc<std::sync::atomic::AtomicU64>,
 }
 impl Job {
+    #[cfg(test)]
+    pub(crate) fn test_events(events: impl IntoIterator<Item = Event>) -> (Self, Arc<AtomicBool>) {
+        let (tx, rx) = unbounded();
+        for event in events {
+            tx.send(event).unwrap();
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        (
+            Self {
+                events: rx,
+                cancel: cancel.clone(),
+                thread: None,
+                priority: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            },
+            cancel,
+        )
+    }
+
     pub fn start_with_cache(
         path: PathBuf,
         options: Options,
@@ -224,7 +261,9 @@ fn generate_with_client(
                     let result = if chunk.samples.iter().all(|s| s.abs() < 0.0001) {
                         Ok(Vec::new())
                     } else {
-                        client.transcribe(&chunk, cancel, options.language).await
+                        client
+                            .transcribe(&chunk, cancel, options.language, options.mode)
+                            .await
                     };
                     ensure!(!cancel.load(Ordering::Acquire), "字幕生成已取消");
                     Ok::<_, anyhow::Error>((chunk.start, end, result))
@@ -235,7 +274,7 @@ fn generate_with_client(
         while let Some(result) = jobs.next().await {
             let (start, end, result) = result?;
             let cues = match result {
-                Ok(cues) => style::prepare(cues, options.language, end),
+                Ok(cues) => options.mode.prepare(cues, options.language, end),
                 Err(error) => {
                     report(Event::Skipped {
                         start,
@@ -468,6 +507,32 @@ pub fn export_dialog(
 mod tests {
     use super::*;
     #[test]
+    fn lyrics_preserve_vocal_timing_and_original_punctuation() {
+        let cues = vec![
+            Cue {
+                start: 0.0,
+                end: 0.2,
+                text: "Hello, 世界！".into(),
+                source: None,
+            },
+            Cue {
+                start: 1.0,
+                end: 12.0,
+                text: "君の声が聞こえる。".into(),
+                source: None,
+            },
+        ];
+        assert_eq!(
+            Mode::Lyrics.prepare(cues.clone(), Language::Chinese, 12.0),
+            cues
+        );
+        assert_ne!(
+            Mode::Subtitles.prepare(cues.clone(), Language::Chinese, 12.0),
+            cues
+        );
+    }
+
+    #[test]
     fn compact_protocol_is_strict_and_bilingual_is_opt_in() {
         let mono =
             parse_cues_mode(r#"{"c":[{"s":0.25,"e":1.5,"t":"你好"}]}"#, 60.0, 2.0, false).unwrap();
@@ -525,7 +590,12 @@ mod tests {
     }
     fn check_failed_segment_is_skipped(error_status: u16, failed_attempts: usize) {
         use std::io::{Read, Write};
-        for prioritized in [false, true] {
+        for (prioritized, mode) in [
+            (false, Mode::Subtitles),
+            (true, Mode::Subtitles),
+            (false, Mode::Lyrics),
+            (true, Mode::Lyrics),
+        ] {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             listener.set_nonblocking(true).unwrap();
             let address = listener.local_addr().unwrap();
@@ -602,6 +672,7 @@ mod tests {
             .unwrap();
             let cancel = Arc::new(AtomicBool::new(false));
             let options = Options {
+                mode,
                 concurrency: 1,
                 ..Default::default()
             };

@@ -65,7 +65,7 @@ impl App {
             if window::fullscreen(&ctx) {
                 self.fullscreen = false;
                 window::set_fullscreen(&ctx, false);
-            } else if self.workspace.page == Page::Settings && egui::Popup::is_any_open(&ctx) {
+            } else if egui::Popup::is_any_open(&ctx) {
                 egui::Popup::close_all(&ctx);
             } else if self.volume_open {
                 self.volume_open = false;
@@ -122,6 +122,13 @@ impl App {
             pos2(screen.min.x + nav_w, screen.min.y),
             pos2(screen.max.x - queue_w, screen.max.y - footer_h),
         );
+        let page_action_width = match self.workspace.page {
+            Page::Video => design::CONTROL_HEIGHT * 2.0 + 8.0,
+            Page::Home | Page::Music => design::CONTROL_HEIGHT,
+            _ => 0.0,
+        };
+        let caption_actions_right = screen.max.x - window::controls_width(&ctx) - 8.0;
+        let header_right = (caption_actions_right - page_action_width - 8.0).min(content.max.x);
         if nav_w > 0.0 {
             self.navigation(
                 root,
@@ -171,50 +178,28 @@ impl App {
             design::segmented(&mut tabs, &mut self.workspace.listening_tab, &labels);
             self.music_view(root, screen, content, &mut act);
         } else {
-            let settings_page = self.workspace.page == Page::Settings;
-            let inline_search = (self.workspace.page == Page::Music
-                && self.workspace.music_tab == 1)
-                || (self.workspace.page == Page::Comic && self.comic.search_tab_open());
-            let show_header_search = !settings_page && !inline_search;
+            let show_header_search = self.workspace.page == Page::Home;
             if show_header_search {
                 let mut top = child(
                     root,
                     "workspace-header",
                     Rect::from_min_size(
                         content.min + vec2(28.0, 13.0),
-                        vec2(
-                            (content
-                                .max
-                                .x
-                                .min(screen.max.x - window::controls_width(&ctx) - 12.0)
-                                - content.min.x
-                                - 56.0)
-                                .max(120.0),
-                            38.0,
-                        ),
+                        vec2((header_right - content.min.x - 56.0).max(120.0), 38.0),
                     ),
                 );
                 top.set_clip_rect(Rect::from_min_max(
                     content.min + vec2(24.0, 4.0),
-                    pos2(
-                        (screen.max.x - window::controls_width(&ctx) - 8.0).min(content.max.x),
-                        content.min.y + 60.0,
-                    ),
+                    pos2(header_right, content.min.y + 60.0),
                 ));
                 top.horizontal(|ui| {
                     let width = ui.available_width().clamp(100.0, 460.0);
-                    let input = design::search_field(
+                    design::search_field(
                         ui,
                         &mut self.workspace.query,
                         width,
                         language.text("搜索媒体、音乐或漫画", "Search your media"),
                     );
-                    if input.lost_focus()
-                        && ui.input(|i| i.key_pressed(Key::Enter))
-                        && self.workspace.page == Page::Comic
-                    {
-                        self.comic.search_for(self.workspace.query.clone());
-                    }
                 });
                 root.painter().line_segment(
                     [
@@ -247,19 +232,17 @@ impl App {
                 Page::Music | Page::Video => self.media_library(&mut ui),
                 _ => {}
             }
-            if matches!(self.workspace.page, Page::Home | Page::Music | Page::Video) {
+            if page_action_width > 0.0 {
                 let video_page = self.workspace.page == Page::Video;
-                let width = if video_page {
-                    design::CONTROL_HEIGHT * 2.0 + 8.0
-                } else {
-                    design::CONTROL_HEIGHT
-                };
                 let mut actions = child(
                     root,
                     "page-open-action",
                     Rect::from_min_size(
-                        pos2(body.max.x - width, body.min.y),
-                        vec2(width, design::CONTROL_HEIGHT),
+                        pos2(
+                            caption_actions_right - page_action_width,
+                            screen.min.y + (window::CAPTION_HEIGHT - design::CONTROL_HEIGHT) * 0.5,
+                        ),
+                        vec2(page_action_width, design::CONTROL_HEIGHT),
                     ),
                 );
                 actions.with_layout(Layout::right_to_left(Align::Center), |ui| {
