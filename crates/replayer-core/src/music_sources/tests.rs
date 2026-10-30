@@ -258,8 +258,26 @@ fn invalid_download_is_not_published_and_partial_is_cleaned() {
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
     std::fs::remove_dir_all(dir).unwrap();
 }
+fn live_settings() -> Settings {
+    let mut settings = Settings::default();
+    settings.api_key = std::env::var("CHKSZ_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            let path = std::env::var_os("REPLAYER_ENV_FILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.env"));
+            dotenvy::from_path_iter(&path).ok().and_then(|entries| {
+                entries.filter_map(Result::ok).find_map(|(name, value)| {
+                    (name == "CHKSZ_API_KEY" && !value.trim().is_empty()).then_some(value)
+                })
+            })
+        })
+        .unwrap_or_default();
+    settings
+}
 fn live_chksz(index: usize) {
-    let settings = crate::test_config::settings().unwrap().music;
+    let settings = live_settings();
     let key = settings.key().unwrap();
     assert!(!key.is_empty(), "CHKSZ_API_KEY is missing");
     runtime().block_on(async {

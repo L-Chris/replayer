@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-pub(super) const MAX_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_BYTES: u64 = 512 * 1024 * 1024;
 struct Partial {
     file: Option<File>,
     path: PathBuf,
@@ -22,7 +22,7 @@ impl Drop for Partial {
         let _ = std::fs::remove_file(&self.path);
     }
 }
-pub(super) fn filename(song: &Song, quality: &str, extension: &str) -> String {
+pub fn filename(song: &Song, quality: &str, extension: &str) -> String {
     let text = format!("{} - {}", song.artist, song.title);
     let safe: String = text
         .chars()
@@ -44,7 +44,7 @@ pub(super) fn filename(song: &Song, quality: &str, extension: &str) -> String {
         extension
     )
 }
-pub(super) fn validate(path: &Path) -> Result<()> {
+pub fn validate(path: &Path) -> Result<()> {
     let mut request = remdia::Request::playback(path.to_string_lossy());
     request.task = remdia::Task::Probe;
     let engine = crate::media_backend::engine()?;
@@ -56,7 +56,7 @@ pub(super) fn validate(path: &Path) -> Result<()> {
     );
     Ok(())
 }
-pub(super) async fn enrich(path: &Path, track: &ResolvedTrack) -> Result<()> {
+pub async fn enrich(path: &Path, track: &ResolvedTrack) -> Result<()> {
     track
         .metadata
         .save(path)
@@ -191,7 +191,7 @@ pub async fn download(
     Ok(target)
 }
 
-pub(super) async fn resolve_track(
+pub async fn resolve_track(
     source: &dyn MusicSource,
     song: &Song,
     quality: &str,

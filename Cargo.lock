@@ -4528,6 +4528,7 @@ dependencies = [
  "quick-xml 0.42.0",
  "regex",
  "remdia",
+ "replayer-core",
  "reqwest",
  "rfd",
  "rtrb",
@@ -4546,6 +4547,27 @@ dependencies = [
  "wgpu",
  "windows-sys 0.61.2",
  "winresource",
+]
+
+[[package]]
+name = "replayer-core"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "aws-lc-rs",
+ "axum",
+ "base64 0.22.1",
+ "crossbeam-channel",
+ "dotenvy",
+ "futures-util",
+ "regex",
+ "remdia",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

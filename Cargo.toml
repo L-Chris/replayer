@@ -3,7 +3,12 @@ name = "replayer"
 version = "0.5.0"
 edition = "2024"
 
+[workspace]
+members = ["crates/replayer-core"]
+default-members = [".", "crates/replayer-core"]
+
 [dependencies]
+replayer-core = { path = "crates/replayer-core", version = "0.5.0" }
 anyhow = "1"
 # Share the crypto implementation already used by rustls and librqbit.
 aws-lc-rs = { version = "1", default-features = false, features = ["alloc", "non-fips"] }
@@ -51,6 +56,8 @@ egui-wgpu = { version = "0.36", default-features = false, features = ["macos-win
 
 [dev-dependencies]
 dotenvy = "0.15"
+# Test builds expose the core's pixels test helpers to desktop unit tests.
+replayer-core = { path = "crates/replayer-core", features = ["test-support"] }
 
 [build-dependencies]
 winresource = "0.1.31"

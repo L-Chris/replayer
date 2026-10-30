@@ -1,7 +1,14 @@
-use super::*;
-#[cfg(test)]
+//! Desktop decode benchmark: compares remdia tiled decode against a full
+//! decode + scale and measures the egui color conversion cost.
+#![cfg(test)]
+use crate::comics::cache::*;
 use crate::pixels::test_support::TestImageOutput;
-use std::{io::Cursor, time::Instant};
+use anyhow::Result;
+use std::{
+    io::Cursor,
+    path::Path,
+    time::Instant,
+};
 
 fn full_decode_then_scale(bytes: &[u8], max_width: u32) -> Result<Bitmap> {
     let mut image = read_image(bytes)?;
@@ -28,45 +35,6 @@ fn full_decode_then_scale(bytes: &[u8], max_width: u32) -> Result<Bitmap> {
     })
 }
 
-#[test]
-fn preview_resize_preserves_alpha_dimensions_and_tile_rows() {
-    let mut bytes = Cursor::new(Vec::new());
-    let image = std::convert::identity(crate::pixels::generated(8, 8, |x, _| {
-        if x < 4 {
-            [255, 0, 0, 0]
-        } else {
-            [0, 0, 255, 255]
-        }
-    }));
-    image.write_to(&mut bytes, "png").unwrap();
-    let resized = decode(bytes.get_ref(), 4).unwrap();
-    assert_eq!((resized.width, resized.height), (4, 4));
-    for pixel in resized.tiles[0].pixels() {
-        if pixel[3] > 0 {
-            assert_eq!(pixel[0], 0, "transparent RGB leaked into a visible edge");
-        }
-    }
-    let mut bytes = Cursor::new(Vec::new());
-    std::convert::identity(crate::pixels::generated(4, 4100, |_, y| {
-        [(y % 251) as u8, 0, 0, 255]
-    }))
-    .write_to(&mut bytes, "png")
-    .unwrap();
-    let bitmap = decode(bytes.get_ref(), 1800).unwrap();
-    assert_eq!(
-        bitmap.tiles.iter().map(|t| t.height()).collect::<Vec<_>>(),
-        vec![2048, 2048, 4]
-    );
-    for (i, pixel) in bitmap
-        .tiles
-        .iter()
-        .flat_map(|t| t.bytes().chunks(t.info().stride).map(|row| row[0]))
-        .enumerate()
-    {
-        assert_eq!(pixel, (i % 251) as u8);
-    }
-}
-
 fn samples() -> Vec<(String, Vec<u8>)> {
     let mut samples = Vec::new();
     if let Ok(files) = std::fs::read_dir("target/komiic-research/live-cache") {
@@ -85,7 +53,7 @@ fn samples() -> Vec<(String, Vec<u8>)> {
             }
             samples.push((
                 name.into(),
-                include_bytes!("../../../tests/fixtures/images/comic.webp").to_vec(),
+                include_bytes!("../../tests/fixtures/images/comic.webp").to_vec(),
             ));
             continue;
         }

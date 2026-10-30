@@ -163,7 +163,7 @@ impl App {
             match event {
                 subtitles::Event::Cues(cues) => {
                     state.cues.extend(cues);
-                    self.lyrics = crate::lyrics::Lyrics::from_cues(&state.cues);
+                    self.lyrics = crate::lyrics::from_cues(&state.cues);
                 }
                 subtitles::Event::Progress { through, total } => {
                     state.status = if total > 0.0 {
@@ -264,7 +264,7 @@ impl App {
         let Some(source) = state.source.clone() else {
             return;
         };
-        let lyrics = crate::lyrics::Lyrics::from_cues(&state.cues);
+        let lyrics = crate::lyrics::from_cues(&state.cues);
         let language = self.settings.language;
         let (tx, rx) = unbounded();
         state.saving = Some(rx);
@@ -343,7 +343,7 @@ mod tests {
         assert!(cancelled.load(std::sync::atomic::Ordering::Acquire));
         assert!(app.lyric_generation.job.is_none());
         assert_eq!(
-            crate::lyrics::Lyrics::from_cues(&app.lyric_generation.cues).to_lrc(),
+            crate::lyrics::from_cues(&app.lyric_generation.cues).to_lrc(),
             "[00:01.00]Hello, 世界！\n[00:15.00]君の声\n"
         );
 
