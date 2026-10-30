@@ -260,6 +260,9 @@ struct TranslationJob {
 pub(super) struct State {
     library: Option<Library>,
     source: Option<Arc<Sources>>,
+    auth_configured: Option<domain::source::KomiicAccount>,
+    auth_job: Option<Job<domain::source::KomiicAuthStatus>>,
+    auth_error: Option<String>,
     sites: Vec<domain::Site>,
     site_job: Option<Job<Vec<domain::Site>>>,
     init_error: Option<String>,
@@ -498,6 +501,9 @@ impl State {
             site_job,
             library: library.ok(),
             source: source.ok(),
+            auth_configured: None,
+            auth_job: None,
+            auth_error: None,
             init_error,
             tab: Tab::Shelf,
             view: View::Catalog,
@@ -587,6 +593,27 @@ impl State {
         }
     }
     pub fn poll(&mut self, ctx: &egui::Context, settings: &crate::settings::Settings) {
+        if self.auth_configured.as_ref() != Some(&settings.comics.komiic) {
+            self.auth_job = None;
+            self.auth_error = self
+                .source
+                .as_ref()
+                .and_then(|source| {
+                    source
+                        .komiic()
+                        .configure_account(settings.comics.komiic.clone())
+                        .err()
+                })
+                .map(|e| e.to_string());
+            self.auth_configured = Some(settings.comics.komiic.clone());
+        }
+        if let Some(result) = self.auth_job.as_ref().and_then(Job::poll) {
+            self.auth_job = None;
+            self.auth_error = result.err().map(|e| e.to_string());
+        }
+        if self.auth_job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         if let Some(result) = self.site_job.as_ref().and_then(Job::poll) {
             self.site_job = None;
             if let Ok(sites) = result {

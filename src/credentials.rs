@@ -1,5 +1,5 @@
-//! API keys live in the OS vault, never in settings JSON or diagnostics.
-use anyhow::{Context, Result, bail};
+//! Secrets live in the OS vault, never in settings JSON or diagnostics.
+use anyhow::{Context, Result};
 
 pub trait Vault {
     fn get(&self, target: &str) -> Result<Option<String>>;
@@ -64,7 +64,7 @@ impl Vault for SystemVault {
                 if error == ERROR_NOT_FOUND {
                     return Ok(None);
                 }
-                bail!("无法读取已保存的密钥 / Cannot read saved API key: {error}");
+                anyhow::bail!("无法读取已保存的密钥 / Cannot read saved API key: {error}");
             }
             let blob = &*credential;
             let result = if blob.CredentialBlobSize == 0 {
@@ -104,12 +104,12 @@ impl Vault for SystemVault {
                     ..std::mem::zeroed()
                 };
                 if CredWriteW(&credential, 0) == 0 {
-                    bail!("无法保存密钥 / Cannot save API key: {}", GetLastError());
+                    anyhow::bail!("无法保存密钥 / Cannot save API key: {}", GetLastError());
                 }
             } else if CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) == 0 {
                 let error = GetLastError();
                 if error != ERROR_NOT_FOUND {
-                    bail!("无法清除密钥 / Cannot clear API key: {error}");
+                    anyhow::bail!("无法清除密钥 / Cannot clear API key: {error}");
                 }
             }
         }
@@ -117,14 +117,54 @@ impl Vault for SystemVault {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::*;
+    use security_framework::passwords::{self, PasswordOptions};
+    // Security.framework's errSecItemNotFound.
+    const ITEM_NOT_FOUND: i32 = -25300;
+
+    fn options(target: &str) -> PasswordOptions {
+        let mut options = PasswordOptions::new_generic_password("dev.replayer.credentials", target);
+        options.set_access_synchronized(Some(false));
+        options
+    }
+    impl Vault for SystemVault {
+        fn get(&self, target: &str) -> Result<Option<String>> {
+            match passwords::generic_password(options(target)) {
+                Ok(bytes) => String::from_utf8(bytes)
+                    .map(Some)
+                    .context("已保存的凭据格式无效 / Invalid saved credential"),
+                Err(error) if error.code() == ITEM_NOT_FOUND => Ok(None),
+                Err(error) => Err(error).context("无法读取钥匙串 / Cannot read Keychain"),
+            }
+        }
+        fn set(&self, target: &str, value: Option<&str>) -> Result<()> {
+            let result = match value {
+                Some(value) => {
+                    passwords::set_generic_password_options(value.as_bytes(), options(target))
+                }
+                None => passwords::delete_generic_password_options(options(target)),
+            };
+            match result {
+                Ok(()) => Ok(()),
+                Err(error) if value.is_none() && error.code() == ITEM_NOT_FOUND => Ok(()),
+                Err(error) => Err(error).context("无法更新钥匙串 / Cannot update Keychain"),
+            }
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 impl Vault for SystemVault {
     fn get(&self, _target: &str) -> Result<Option<String>> {
         Ok(None)
     }
     fn set(&self, _target: &str, value: Option<&str>) -> Result<()> {
         if value.is_some() {
-            bail!("此平台暂不支持保存密钥 / Credential storage is not supported on this platform");
+            anyhow::bail!(
+                "此平台暂不支持保存密钥 / Credential storage is not supported on this platform"
+            );
         }
         Ok(())
     }

@@ -1,1 +1,4 @@
 [env]
+# The comic library uses ordinary tables and WAL, not FTS, R-tree or dbstat.
+# Keep SQLite's core SQL, transactions and on-disk format unchanged.
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB"

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mint play glyph on a dark plate; matches the desktop accent. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#14181B"
+        android:pathData="M0,0h108v108h-108z" />
+    <path
+        android:fillColor="#7EDBB0"
+        android:pathData="M40,30 L82,54 L40,78 Z" />
+</vector>

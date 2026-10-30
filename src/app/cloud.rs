@@ -100,35 +100,11 @@ impl App {
                 .as_ref()
                 .is_some_and(|j| j.document.entries.contains_key(key))
         };
-        for entry in self.comic.entries() {
-            let prefix = format!("comic/{}", entry.book.key());
-            if !entry.favorite && !tracked(&format!("{prefix}/favorite")) {
-                continue;
-            }
-            data.insert(
-                format!("{prefix}/book"),
-                json!({"book":entry.book,"chapters":entry.chapters}),
-            );
-            data.insert(format!("{prefix}/favorite"), json!(entry.favorite));
-            data.insert(format!("{prefix}/favorited_at"), json!(entry.favorited_at));
-            if let Some(progress) = &entry.progress {
-                data.insert(
-                    format!("{prefix}/progress"),
-                    json!({"position":progress,"read_at":entry.last_read}),
-                );
-            }
-            for (set, values) in [("read", &entry.read), ("unread", &entry.new_unread)] {
-                for chapter in values {
-                    data.insert(
-                        format!(
-                            "{prefix}/{set}/{}",
-                            crate::comics::digest(chapter.as_bytes())
-                        ),
-                        json!(chapter),
-                    );
-                }
-            }
-        }
+        sync::portable::capture_comics(
+            &mut data,
+            self.comic.entries(),
+            self.cloud.journal.as_ref(),
+        );
         for record in &self.library.records {
             let Some(song) = &record.online else { continue };
             let prefix = format!("song/{}", song.key());
@@ -308,13 +284,11 @@ impl App {
         self.cloud.status = self.settings.language.text("正在同步…", "Syncing…").into();
         let ctx = ctx.clone();
         self.cloud.job = Some(crate::jobs::Job::spawn(move |_| async move {
-            let result = tokio::time::timeout(
-                Duration::from_secs(120),
+            let result = sync::bounded(
                 sync::webdav::run(settings, journal, keys),
+                Duration::from_secs(120),
             )
-            .await
-            .map_err(|_| anyhow::anyhow!("同步超时 / Sync timed out"))
-            .and_then(|r| r);
+            .await;
             ctx.request_repaint();
             result
         }));
@@ -416,56 +390,12 @@ impl App {
 
     fn apply_cloud_library(&mut self, values: &Snapshot) -> anyhow::Result<()> {
         let previous_records = self.library.records.clone();
-        for (key, value) in values
-            .iter()
-            .filter(|(k, _)| k.starts_with("comic/") && k.ends_with("/book"))
-        {
-            let prefix = key.trim_end_matches("/book");
-            let book: crate::comics::Book = serde_json::from_value(value["book"].clone())?;
-            anyhow::ensure!(
-                prefix == format!("comic/{}", book.key()),
-                "Invalid synced comic identity"
-            );
-            let mut entry = self
-                .comic
-                .entries()
-                .iter()
-                .find(|e| e.book.key() == book.key())
-                .cloned()
-                .unwrap_or_default();
-            entry.book = book;
-            entry.chapters = serde_json::from_value(value["chapters"].clone())?;
-            entry.favorite = values
-                .get(&format!("{prefix}/favorite"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            entry.favorited_at = values
-                .get(&format!("{prefix}/favorited_at"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            if let Some(progress) = values.get(&format!("{prefix}/progress")) {
-                entry.progress = Some(serde_json::from_value(progress["position"].clone())?);
-                entry.last_read = progress["read_at"].as_u64().unwrap_or(0);
-            }
-            entry.read = values
-                .iter()
-                .filter(|(k, _)| k.starts_with(&format!("{prefix}/read/")))
-                .filter_map(|(_, v)| v.as_str().map(str::to_owned))
-                .collect();
-            entry.new_unread = values
-                .iter()
-                .filter(|(k, _)| k.starts_with(&format!("{prefix}/unread/")))
-                .filter_map(|(_, v)| v.as_str().map(str::to_owned))
-                .filter(|id| !entry.read.contains(id))
-                .collect();
-            entry
-                .known
-                .extend(entry.chapters.iter().map(|c| c.key().to_owned()));
+        for entry in sync::portable::apply_comics(values, self.comic.entries())? {
             let unchanged = self
                 .comic
                 .entries()
                 .iter()
-                .find(|e| e.book.key() == entry.book.key())
+                .find(|old| old.book.key() == entry.book.key())
                 .is_some_and(|old| {
                     serde_json::to_value(old).ok() == serde_json::to_value(&entry).ok()
                 });
@@ -792,6 +722,14 @@ mod tests {
         app.settings.sync.password = "private-webdav-password".into();
         app.settings.sync.passphrase = "private-sync-passphrase".into();
         app.settings.music.api_key = "private-music-key".into();
+        app.settings.comics.komiic = crate::comics::source::KomiicAccount {
+            email: "private-reader@example.test".into(),
+            password: "private-komiic-password".into(),
+            auto_login: true,
+        };
+        let keys = serde_json::to_string(&secrets(&app.settings)).unwrap();
+        assert!(!keys.contains("komiic"));
+        assert!(!keys.contains("private-reader"));
         app.library.records.push(library::Record {
             path: "F:/private/local.flac".into(),
             title: "LocalOnlyUnique".into(),
@@ -818,6 +756,8 @@ mod tests {
             "private-webdav-password",
             "private-sync-passphrase",
             "private-music-key",
+            "private-reader@example.test",
+            "private-komiic-password",
             "not-a-real-key",
         ] {
             assert!(!text.contains(excluded), "{excluded} leaked into sync data");

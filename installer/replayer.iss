@@ -40,6 +40,21 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
+; System media components are now statically registered in replayer.exe.
+Type: files; Name: "{app}\plugins\native.json"
+Type: files; Name: "{app}\plugins\remdia_backend_native.dll"
+Type: files; Name: "{app}\plugins\windows.json"
+Type: files; Name: "{app}\plugins\remdia_backend_windows.dll"
+Type: files; Name: "{app}\plugins\image.json"
+Type: files; Name: "{app}\plugins\remdia_backend_image.dll"
+Type: files; Name: "{app}\plugins\system_audio.json"
+Type: files; Name: "{app}\plugins\remdia_backend_system_audio.dll"
+Type: files; Name: "{app}\plugins\system_demux.json"
+Type: files; Name: "{app}\plugins\remdia_backend_system_demux.dll"
+Type: files; Name: "{app}\plugins\fallback_demux.json"
+Type: files; Name: "{app}\plugins\remdia_backend_fallback_demux.dll"
+Type: files; Name: "{app}\plugins\sdk.json"
+Type: files; Name: "{app}\plugins\remdia_sdk.dll"
 ; Remove the retired third-party WebP pack from earlier test installations.
 Type: files; Name: "{app}\plugins\image_webp.json"
 Type: files; Name: "{app}\plugins\remdia_backend_image_webp.dll"

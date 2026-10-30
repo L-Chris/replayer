@@ -82,6 +82,9 @@ fn fixture(ctx: &egui::Context) -> State {
         })
         .collect();
     State {
+        auth_configured: None,
+        auth_job: None,
+        auth_error: None,
         library: Some(library),
         source: None,
         sites: vec![domain::Site {

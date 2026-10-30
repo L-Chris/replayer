@@ -64,7 +64,8 @@ def main():
             'Install Rust stable, CMake and Apple command-line tools. On matching macOS 15+ hardware:\n'
             f'git clone https://github.com/L-Chris/remdia.git\ncd remdia\ngit checkout {revision}\n'
             f'./scripts/build-macos.sh --release --target {rust_arch}-apple-darwin\n'
-            'Cargo.lock fixes the exact source distributions and checksums, including vendored LAME/Opus.\n'
+            'Built-in remdia system components are linked into the application.\n'
+            'Cargo.lock fixes the exact source distributions and checksums, including the separate LAME extension.\n'
             'Replace the matching dylib in Contents/Frameworks/remdia with an ABI-compatible rebuild,\n'
             'then codesign --force --sign - LIBRARY and codesign --force --sign - replayer.app.\n',
             encoding='utf-8')

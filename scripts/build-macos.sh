@@ -28,8 +28,14 @@ if sys.argv[2]: build/=sys.argv[2]
 plugins=build/sys.argv[1]/'plugins'
 plugins.mkdir(parents=True,exist_ok=True)
 for path in pathlib.Path(os.environ['REMDIA_PLUGIN_DIR']).iterdir():
-    if path.suffix in ('.json','.dylib'):
+    if path.name in ('fallback_mp3_lame.json','libremdia_backend_fallback_mp3_lame.dylib'):
         destination=plugins/path.name
         destination.unlink(missing_ok=True)
         shutil.copy2(path,destination)
+# Retire only SDK-owned libraries; preserve unrelated user extensions.
+for name in ('native','macos','image','system_audio','system_demux','fallback_demux'):
+    for filename in (name+'.json',f'libremdia_backend_{name}.dylib'):
+        (plugins/filename).unlink(missing_ok=True)
+for filename in ('sdk.json','libremdia_sdk.dylib'):
+    (plugins/filename).unlink(missing_ok=True)
 STAGE

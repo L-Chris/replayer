@@ -24,11 +24,8 @@ if ($RebuildRuntime -or -not $ready) {
     & (Join-Path $source 'scripts/build-windows.ps1') -Release
     $RuntimeDirectory = Join-Path $source 'dist/remdia'
 }
-foreach ($name in @('native', 'windows', 'image', 'system_audio', 'system_demux', 'fallback_demux')) {
-    if (-not (Test-Path (Join-Path $RuntimeDirectory "plugins/remdia_backend_$name.dll"))) { throw "Missing remdia $name component DLL." }
-    $manifest = Get-Content (Join-Path $RuntimeDirectory "plugins/$name.json") -Raw | ConvertFrom-Json
-    if ($manifest.abi_major -ne 2 -or $manifest.os -ne 'windows' -or $manifest.arch -ne 'x86_64') { throw 'Incompatible remdia manifest.' }
-}
+$layout = Get-Content (Join-Path $RuntimeDirectory 'BUNDLED.json') -Raw | ConvertFrom-Json
+if ($layout.layout -ne 'unified' -or $layout.abi_major -ne 2 -or $layout.os -ne 'windows' -or $layout.arch -ne 'x86_64') { throw 'Incompatible bundled remdia runtime.' }
 $env:REMDIA_RUNTIME_DIR = (Resolve-Path $RuntimeDirectory).Path
 $env:REMDIA_PLUGIN_DIR = Join-Path $env:REMDIA_RUNTIME_DIR 'plugins'
 if ($env:GITHUB_ENV) {
