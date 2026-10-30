@@ -285,7 +285,14 @@ def device_info(env: Env, serial: str) -> dict[str, str]:
     info: dict[str, str] = {"serial": serial}
     for key, prop in props.items():
         info[key] = adb(env, ["shell", "getprop", prop], serial).stdout.strip()
-    info["page_size"] = adb(env, ["shell", "getconf", "PAGE_SIZE"], serial).stdout.strip()
+    page_size = adb(env, ["shell", "getconf", "PAGE_SIZE"], serial).stdout.strip()
+    if not page_size.isdigit():
+        # API 28 images ship without getconf; the kernel page size of any
+        # mapping in smaps is the same value (4096 on all 4 KB images).
+        smaps = adb(env, ["shell", "cat", "/proc/self/smaps"], serial).stdout
+        match = re.search(r"KernelPageSize:\s+(\d+) kB", smaps)
+        page_size = str(int(match.group(1)) * 1024) if match else "unknown"
+    info["page_size"] = page_size
     return info
 
 
@@ -389,7 +396,9 @@ def newest_source_mtime() -> float:
             newest = max(newest, root.stat().st_mtime)
             continue
         for path in root.rglob("*"):
-            if path.is_file() and "build" not in path.parts:
+            # jniLibs holds build-android.sh's staged output, not source; a
+            # release stage must not mark the debug APK stale (and vice versa).
+            if path.is_file() and "build" not in path.parts and "jniLibs" not in path.parts:
                 newest = max(newest, path.stat().st_mtime)
     return newest
 
@@ -653,7 +662,7 @@ def wait_for_activity(env: Env, serial: str, timeout: int) -> str:
     resumed = ""
     while time.time() < deadline:
         dump = adb(env, ["shell", "dumpsys", "activity", "activities"], serial).stdout
-        match = re.search(r"(?:topResumedActivity|mResumedActivity)=ActivityRecord\{[^}]*?\s([\w.]+/[\w.$]+)", dump)
+        match = re.search(r"(?:topResumedActivity|mResumedActivity)[:=]\s*ActivityRecord\{[^}]*?\s([\w.]+/[\w.$]+)", dump)
         if match:
             resumed = match.group(1)
             if resumed == ACTIVITY or PACKAGE in resumed:
@@ -685,7 +694,13 @@ def read_init_gate(env: Env, serial: str) -> str:
 def collect_crash_lines(env: Env, serial: str) -> list[str]:
     crash = adb(env, ["logcat", "-d", "-b", "crash"], serial).stdout
     native = adb(env, ["logcat", "-d", "-s", "replayer-native:E", "AndroidRuntime:E", "DEBUG:F"], serial).stdout
-    lines = [line for line in (crash + native).splitlines() if line.strip()]
+    # "--------- beginning of ..." banners are logcat metadata, not events; on
+    # freshly cleared buffers they can be the only output (seen on API 28).
+    lines = [
+        line
+        for line in (crash + native).splitlines()
+        if line.strip() and not line.startswith("--------- beginning of")
+    ]
     return lines
 
 
@@ -1126,11 +1141,146 @@ def command_audit(args: argparse.Namespace, env: Env) -> int:
 
 
 def command_measure(args: argparse.Namespace, env: Env) -> int:
-    raise ToolError(
-        "measure is not implemented yet; it is scheduled for P1 (release baseline, R8, "
-        "cold/hot build time, APK/AAB and native/DEX/resource sizes, PSS/RSS sampling). "
-        "Use `audit` for size data that exists today."
+    """Release baseline: build time, APK size buckets, R8 DEX keeps, memory.
+
+    Fails loudly when the build fails, when the R8-kept JNI classes disappear
+    from the DEX, or when the app does not start on the sampling device. Memory
+    sampling is skipped (with a printed reason) when no device is attached.
+    """
+    profile = args.profile
+    stamp = now()
+    if args.cold:
+        # Gradle caches and this crate's cargo artifacts dominate rebuild time;
+        # removing them approximates a CI cold build without touching the
+        # dependency crates (a full `cargo clean` would take tens of minutes).
+        for path in (ROOT / "android" / "build", ROOT / "android" / "app" / "build", ROOT / "android" / ".gradle"):
+            shutil.rmtree(path, ignore_errors=True)
+        run(
+            ["cargo", "clean", "-p", "replayer-android", "--target", "aarch64-linux-android"],
+            env=cross_env(env),
+            check=False,
+            quiet=True,
+        )
+        print("cold start: removed Gradle build dirs and replayer-android cargo artifacts")
+
+    command = [str(ROOT / "scripts" / "build-android.sh"), "--assemble"]
+    if profile == "release":
+        command.append("--release")
+    log = ROOT / "target" / "android-audit" / f"measure-build-{profile}-{stamp}.log"
+    print(f"building {profile} (log: {log})")
+    started = time.time()
+    result = run(command, env={"ANDROID_HOME": str(env.sdk), "JAVA_HOME": str(env.jdk)}, log=log, check=False)
+    build_seconds = time.time() - started
+    if result.returncode != 0:
+        raise ToolError(f"build failed; nothing measured (log: {log})")
+    data = artifact(env, profile)
+    apk = Path(data["path"])
+    print(f"built {apk.name} in {build_seconds:.1f}s ({'cold' if args.cold else 'hot'} caches)")
+
+    # Size buckets, compressed and uncompressed (audit reports uncompressed only).
+    buckets: dict[str, dict[str, int]] = {}
+    with zipfile.ZipFile(apk) as archive:
+        entries = archive.infolist()
+        for entry in entries:
+            key = (
+                "native"
+                if entry.filename.endswith(".so")
+                else "dex"
+                if entry.filename.endswith(".dex")
+                else "resources"
+                if entry.filename.startswith("res/") or entry.filename in {"resources.arsc", "AndroidManifest.xml"}
+                else "other"
+            )
+            bucket = buckets.setdefault(key, {"files": 0, "compressed": 0, "uncompressed": 0})
+            bucket["files"] += 1
+            bucket["compressed"] += entry.compress_size
+            bucket["uncompressed"] += entry.file_size
+    sizes = {key: buckets[key] for key in sorted(buckets)}
+    print("  size buckets: " + ", ".join(f"{key} {human(value['compressed'])}" for key, value in sizes.items()))
+
+    # R8 outcome: class count plus the JNI-referenced keeps that must survive.
+    dexdump = run([str(env.tool("dexdump")), str(apk)], quiet=True, check=False, timeout=1800).stdout
+    classes = set(re.findall(r"Class descriptor\s*:\s*'L([^']+);'", dexdump))
+    keep_targets = (
+        "dev/remdia/Bridge",
+        "dev/replayer/Native",
+        "org/rustls/platformverifier/CertificateVerifier",
     )
+    missing_keeps = sorted(name for name in keep_targets if name not in classes)
+    print(f"  dex classes: {len(classes)}" + (f", MISSING keeps {missing_keeps}" if missing_keeps else ", JNI keeps present"))
+    if missing_keeps:
+        raise ToolError(f"R8 stripped JNI-referenced classes: {', '.join(missing_keeps)}")
+
+    # Memory sampling on a device; the baseline is a cold start at rest.
+    memory: dict | None = None
+    try:
+        serial = require_device(env, args.serial)
+    except ToolError as error:
+        serial = ""
+        print(f"  memory sampling skipped: {error}")
+    if serial:
+        info = device_info(env, serial)
+        for problem in check_device_capabilities(info):
+            raise ToolError(problem)
+        installed = adb(env, ["install", "--no-incremental", "-r", str(apk)], serial, timeout=900)
+        if installed.returncode != 0 or "Success" not in installed.stdout:
+            raise ToolError(f"install failed: {installed.stdout.strip()}")
+        grant_permissions(env, serial, info)
+        adb(env, ["shell", "am", "force-stop", PACKAGE], serial)
+        launch = adb(env, ["shell", "am", "start", "-n", ACTIVITY], serial)
+        if launch.returncode != 0:
+            raise ToolError(f"am start failed: {launch.stdout.strip()}")
+        pid = wait_for_process(env, serial, args.timeout)
+        if not pid:
+            raise ToolError("app process did not appear; cannot sample memory")
+        time.sleep(5)
+        samples = []
+        for index in range(args.samples):
+            dump = adb(env, ["shell", "dumpsys", "meminfo", PACKAGE], serial).stdout
+            sample = {
+                "totalPssKb": _first_int(dump, r"TOTAL PSS:\s+(\d+)", r"^\s*TOTAL\s+(\d+)", flags=re.MULTILINE),
+                "totalRssKb": _first_int(dump, r"TOTAL RSS:\s+(\d+)"),
+                "nativeHeapKb": _first_int(dump, r"Native Heap:\s+(\d+)", r"^\s*Native Heap\s+(\d+)", flags=re.MULTILINE),
+                "javaHeapKb": _first_int(dump, r"Java Heap:\s+(\d+)", r"^\s*(?:Dalvik Heap|Java Heap)\s+(\d+)", flags=re.MULTILINE),
+            }
+            samples.append(sample)
+            print(
+                f"  sample {index + 1}: PSS {sample['totalPssKb']} KB"
+                f" (native {sample['nativeHeapKb']} KB, java {sample['javaHeapKb']} KB)"
+            )
+            if index + 1 < args.samples:
+                time.sleep(3)
+        memory = {"device": info, "pid": pid, "samples": samples}
+        adb(env, ["shell", "am", "force-stop", PACKAGE], serial)
+
+    report = {
+        "profile": profile,
+        "cold": bool(args.cold),
+        "buildSeconds": round(build_seconds, 1),
+        "apk": str(apk),
+        "sha256": data["sha256"],
+        "bytes": int(data["bytes"]),
+        "sizeBuckets": sizes,
+        "dexClasses": len(classes),
+        "memory": memory,
+        "measuredAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    out = ROOT / "target" / "android-audit" / f"measure-{profile}-{now()}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"\nreport   {out}")
+    print(f"sha256   {data['sha256']}")
+    print(f"measure: {profile} APK {human(int(data['bytes']))}, build {build_seconds:.1f}s, {len(classes)} dex classes")
+    return 0
+
+
+def _first_int(text: str, *patterns: str, flags: int = 0) -> int | None:
+    """First matching group as int across alternative dumpsys output formats."""
+    for pattern in patterns:
+        match = re.search(pattern, text, flags)
+        if match:
+            return int(match.group(1))
+    return None
 
 
 COMMANDS = {
@@ -1148,7 +1298,7 @@ COMMANDS = {
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=sorted(COMMANDS))
-    parser.add_argument("--profile", choices=("debug", "release"), default="debug")
+    parser.add_argument("--profile", choices=("debug", "release"), default=None, help="build profile (measure defaults to release)")
     parser.add_argument("--sdk", default=str(ROOT.parent / "remdia" / ".deps" / "android-sdk"))
     parser.add_argument("--ndk", default=None)
     parser.add_argument("--jdk", default=None)
@@ -1166,7 +1316,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--test", default=None, help="smoke: instrumentation class or class#method filter")
     parser.add_argument("--apk", default=None, help="audit: inspect a specific APK instead of the published artifact")
     parser.add_argument("--allow-stale", action="store_true", help="run/smoke: install an APK older than the sources")
+    parser.add_argument("--cold", action="store_true", help="measure: drop Gradle and replayer-android cargo caches before building")
+    parser.add_argument("--samples", type=int, default=3, help="measure: dumpsys meminfo samples after launch")
     args = parser.parse_args(argv)
+    if args.profile is None:
+        args.profile = "release" if args.command == "measure" else "debug"
 
     try:
         env = resolve_env(args)

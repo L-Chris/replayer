@@ -9,8 +9,6 @@ import android.os.HandlerThread
 import android.os.SystemClock
 import dev.replayer.Container
 import dev.replayer.Native
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -41,7 +39,7 @@ class AudioEngine(private val listener: Listener) {
     @Volatile private var rate = 48_000
     @Volatile private var channels = 2
     @Volatile private var baseUs = 0L
-    @Volatile private var writtenFrames = 0L
+    @Volatile private var writtenSamples = 0L
     @Volatile var durationUs = 0L
         private set
 
@@ -49,8 +47,17 @@ class AudioEngine(private val listener: Listener) {
     val positionUs: Long
         get() {
             val audio = track ?: return baseUs
-            return baseUs + audio.playbackHeadPosition.toLong() * 1_000_000L / rate
+            return baseUs + headFrames(audio) * 1_000_000L / rate
         }
+
+    /**
+     * AudioTrack's playback head is an unsigned 32-bit frame count; sign
+     * extension would flip it negative after 2^31 frames. Accumulating full
+     * 2^32 wraps is unnecessary: seeks flush the track (head, baseUs and
+     * writtenSamples reset together) and the EOF drain window is one buffer.
+     */
+    private fun headFrames(audio: AudioTrack): Long =
+        audio.playbackHeadPosition.toLong() and 0xFFFFFFFFL
 
     fun open(path: String) {
         running = true
@@ -61,7 +68,12 @@ class AudioEngine(private val listener: Listener) {
                 val info = MediaInfo.parse(org.json.JSONObject(Native.nativeMediaInfo(handle)))
                 durationUs = info.durationUs
                 listener.onPrepared(info)
-                val art = Native.nativeMediaArtwork(handle)?.let { Container(it).bitmap() }
+                // Artwork is auxiliary: a decode or protocol failure here must
+                // not surface as a whole-track error.
+                val art =
+                    runCatching {
+                        Native.nativeMediaArtwork(handle)?.let { Container(it).bitmap() }
+                    }.getOrNull()
                 listener.onArtwork(art)
                 val first = Native.nativeMediaRead(handle)
                 if (first == null) {
@@ -95,6 +107,9 @@ class AudioEngine(private val listener: Listener) {
     fun close() {
         if (!closed.compareAndSet(false, true)) return
         running = false
+        // Pause first so a WRITE_BLOCKING write on the worker returns promptly
+        // instead of draining the whole buffer before release() can run.
+        runCatching { track?.pause() }
         handler.post { release() }
     }
 
@@ -109,7 +124,7 @@ class AudioEngine(private val listener: Listener) {
             channelMask,
             AudioFormat.ENCODING_PCM_FLOAT,
         )
-        val buffer = maxOf(minBuffer * 2, first.payload.size * 2, 64 * 1024)
+        val buffer = maxOf(minBuffer * 2, first.payloadSize * 2, 64 * 1024)
         val audio = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -130,7 +145,7 @@ class AudioEngine(private val listener: Listener) {
         track = audio
         audio.play()
         var pending: Container? = first
-        writtenFrames = 0
+        writtenSamples = 0
         baseUs = 0
         while (running && !closed.get()) {
             val seek = seekTarget.getAndSet(-1)
@@ -139,7 +154,7 @@ class AudioEngine(private val listener: Listener) {
                 audio.flush()
                 Native.nativeMediaSeek(handle, seek)
                 baseUs = seek
-                writtenFrames = 0
+                writtenSamples = 0
                 pending = null
                 if (!paused) audio.play()
             }
@@ -150,9 +165,11 @@ class AudioEngine(private val listener: Listener) {
             val frame = pending ?: Native.nativeMediaRead(handle)?.let { Container(it) }
             pending = null
             if (frame == null) {
-                // Drain the device buffer before reporting completion.
+                // Drain the device buffer before reporting completion. The head
+                // counts frames while writtenSamples counts floats, i.e. frames
+                // times channels.
                 while (running && !closed.get() &&
-                    audio.playbackHeadPosition.toLong() < writtenFrames
+                    headFrames(audio) * channels < writtenSamples
                 ) {
                     SystemClock.sleep(20)
                 }
@@ -164,8 +181,8 @@ class AudioEngine(private val listener: Listener) {
     }
 
     private fun writeFrame(audio: AudioTrack, frame: Container) {
-        val floats = FloatArray(frame.payload.size / 4)
-        ByteBuffer.wrap(frame.payload).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(floats)
+        val floats = FloatArray(frame.payloadSize / 4)
+        frame.floatBuffer().get(floats)
         var offset = 0
         while (offset < floats.size && running && !closed.get() && seekTarget.get() < 0) {
             val written = audio.write(
@@ -176,7 +193,9 @@ class AudioEngine(private val listener: Listener) {
             )
             if (written <= 0) break
             offset += written
-            writtenFrames += written
+            // AudioTrack.write(float[]) returns the number of floats written
+            // (frames * channels), not frames.
+            writtenSamples += written
         }
     }
 

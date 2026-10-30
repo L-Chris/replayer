@@ -108,6 +108,8 @@ pub extern "system" fn Java_dev_replayer_Native_nativeMediaInfo(
 }
 
 /// Embedded or sidecar artwork as an image container, null when absent.
+/// Artwork is a single decoded image, emitted as one full-cover tile so the
+/// Kotlin side reassembles it through the same tiles protocol as comic pages.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_replayer_Native_nativeMediaArtwork(
     mut env: JNIEnv<'_>,
@@ -118,7 +120,15 @@ pub extern "system" fn Java_dev_replayer_Native_nativeMediaArtwork(
         with_player(handle, |player| match &player.info.artwork {
             Some(artwork) => container(
                 &mut env,
-                &json!({"width": artwork.width, "height": artwork.height}),
+                &json!({
+                    "width": artwork.width,
+                    "height": artwork.height,
+                    "tiles": [{
+                        "width": artwork.width,
+                        "height": artwork.height,
+                        "offset": 0,
+                    }],
+                }),
                 &artwork.rgba,
             ),
             None => Ok(std::ptr::null_mut()),

@@ -154,6 +154,55 @@ P0 验收于 2026-10-30 在 emulator-5554（API 35）全部通过，APK
 - 桌面回归：`cargo fmt --all -- --check` 通过；`cargo test --locked` exit=0
   （122 + 26 passed，0 failed；日志 `target/android-audit/desktop-test-*.log`）。
 
-尚未验证（P1 范围）：API 28 与 16 KB 页 AVD 实测、release/R8 体积与构建
-时长、播放 EOF/封面协议/长图内存。历史报告见 `target/android-review/`、
+P1 于同日完成：播放修复（AudioTrack 帧单位、封面 tiles 协议、长图内存
+range view）在 API 35 离线 smoke 验证（11 passed / 2 gated skip，
+smoke-20261030T085747Z），并在 API 28 与 16 KB 页 AVD 复验通过。
+
+release/R8 基线（`measure` 子命令，报告 measure-release-20261030T100057Z，
+APK `8ad3065cc1bcd34fb4df662aeefe890d8bd916a24a0ad66c274c45a74336c5f1`）：
+
+- `build.gradle.kts` release 开启 `isMinifyEnabled` + `isShrinkResources`；
+  尚无正式 keystore，测量期 release 使用 debug 签名（仅可安装于开发设备）。
+- APK 9.0 MB（debug 167.9 MB）：dex 2.1 MB / 2942 类（debug 52.7 MB /
+  24180 类），native .so 6.7 MB（debug 114.7 MB），资源收缩后 97.9 KB。
+  构建时长：首次 release 80.4s，`measure --cold`（清 Gradle 构建目录 +
+  `cargo clean -p replayer-android`）33.2s，热缓存 4.6s。
+- 常驻内存（启动静置，dumpsys meminfo 3 采样）：API 35/4K PSS 29–34 MB
+  （native ~12.4 MB），API 35/16K PSS 38–44 MB。
+- `audit --profile release` 14/14 PASS（apk-audit-release-20261030T100311Z，
+  对应上述 8ad3065c APK）：
+  R8 后 `dev/remdia/Bridge`、`dev/replayer/Native`、
+  `org/rustls/platformverifier/CertificateVerifier` 均保留，JNI 导出 24/24。
+- 资源收缩器把 companion 的 `res/xml/network_security_config.xml` 重命名为
+  `res/8G.xml`，但清单引用（`@0x7f0b0000`）与内容（cleartext 基础配置 +
+  CRL 主机放行表）完整，已用 aapt2 核实——release 的 CRL 抓取路径不受影响。
+- release `run`：API 35（run-release-20261030T091907Z）、API 28
+  （run-release-20261030T094642Z）、16 KB 页（run-release-20261030T095437Z）
+  均启动、MainActivity resumed、无 init gate、无崩溃。
+
+API 28 实测发现平台缺陷并已规避（remdia-api28 AVD）：
+
+- **已证实**：`Bitmap.copyPixelsFromBuffer` 收到带非零 base offset 的堆
+  ByteBuffer 时，AOSP `nio_releasePointer`（android-9.0.0_r35
+  `core/jni/android_nio_utils.cpp`）以 `elements + offset` 释放
+  `GetPrimitiveArrayCritical` 指针，CheckJNI 中止进程（SIGABRT，
+  `invalid element pointer 0x12d0554a, array elements are 0x12d05504`，
+  差值 0x46 恰为容器 payload 偏移）。API 35 无此路径，同一代码通过。
+- 修复：`Container.bitmap()` 改用 `directSlice()`（direct ByteBuffer，
+  走 `getBasePointer` 路径），代价是每 tile 一次有界拷贝（tile 高度受
+  core 限制）。修复后 api28 离线 smoke 11 passed / 2 gated skip
+  （smoke-20261030T094625Z）；16 KB 页 AVD（sdk_gphone16k_arm64，
+  page_size 16384）同样 11/2（smoke-20261030T095421Z）。
+- `android-dev.py` 同步修复的 API 28 兼容问题：`dumpsys activity` 的
+  `mResumedActivity:` 冒号格式、无 `getconf` 时经 `/proc/self/smaps`
+  读取页大小、crash 判定过滤 logcat `--------- beginning of` 横幅、
+  新鲜度判定排除 `jniLibs`（release 暂存 .so 不再把 debug APK 标脏）。
+
+另观察：`cargo clean -p replayer-android` 后重建，debug .so 从约 275 MB
+降至 120 MB（增量链接的调试段膨胀），debug APK 相应从 281.7 MB 降至
+167.9 MB；体积异常时可先清理该 crate 再判断。
+
+尚未验证：release 构建上的在线 HTTPS 全流程（仪器化测试仅挂 debug
+变体；release 的 companion 类与 network security config 已由 audit/aapt2
+静态证实，`run` 证实 nativeInit 成功）。历史报告见 `target/android-review/`、
 `target/android-audit/` 中的 JSON。

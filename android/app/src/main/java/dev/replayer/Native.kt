@@ -124,14 +124,46 @@ object Native {
 /** Binary JNI container: metadata JSON plus a raw payload. */
 class Container(bytes: ByteArray) {
     val meta: JSONObject
-    val payload: ByteArray
+    val payloadSize: Int
+
+    // Range view into the original JNI array: copying the payload would double
+    // peak memory for long pages (RGBA payloads reach tens of megabytes).
+    private val payloadBytes: ByteArray
+    private val payloadOffset: Int
 
     init {
         require(bytes.size >= 4) { "truncated container" }
         val length = ByteBuffer.wrap(bytes, 0, 4).order(ByteOrder.BIG_ENDIAN).int
         require(length in 0..bytes.size - 4) { "bad container metadata length" }
         meta = JSONObject(String(bytes, 4, length, Charsets.UTF_8))
-        payload = bytes.copyOfRange(4 + length, bytes.size)
+        payloadBytes = bytes
+        payloadOffset = 4 + length
+        payloadSize = bytes.size - payloadOffset
+    }
+
+    /** Payload as a little-endian float view, without copying the array. */
+    fun floatBuffer(): java.nio.FloatBuffer =
+        ByteBuffer.wrap(payloadBytes, payloadOffset, payloadSize)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .asFloatBuffer()
+
+    /**
+     * `Bitmap.copyPixelsFromBuffer` must never receive a heap buffer with a
+     * nonzero offset on API 28: AOSP's `nio_releasePointer`
+     * (core/jni/android_nio_utils.cpp, android-9.0.0_r35) releases the array
+     * critical section at `elements + arrayOffset` instead of `elements`,
+     * which CheckJNI aborts on ("invalid element pointer"; observed on
+     * remdia-api28, offset matched the container's payload offset exactly).
+     * Later platform releases do not take this path (API 35 passed with heap
+     * buffers). Direct buffers go through `getBasePointer` on every API, at
+     * the cost of one tile-sized copy — tiles are height-capped by the core,
+     * so the transient stays bounded.
+     */
+    private fun directSlice(offset: Int, size: Int): ByteBuffer {
+        val direct = ByteBuffer.allocateDirect(size)
+        direct.put(payloadBytes, payloadOffset + offset, size)
+        direct.rewind()
+        return direct
     }
 
     /** Assemble RGBA tiles into one bitmap; tiles are full-width strips. */
@@ -139,6 +171,19 @@ class Container(bytes: ByteArray) {
         val width = meta.getInt("width")
         val height = meta.getInt("height")
         val tiles = meta.getJSONArray("tiles")
+        // Common case (artwork, pages at most one tile tall): the single tile
+        // already is the full image, so decode it without a canvas roundtrip.
+        if (tiles.length() == 1) {
+            val only = tiles.getJSONObject(0)
+            if (only.getInt("width") == width &&
+                only.getInt("height") == height &&
+                only.getInt("offset") == 0
+            ) {
+                val single = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                single.copyPixelsFromBuffer(directSlice(0, payloadSize))
+                return single
+            }
+        }
         val full = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(full)
         var y = 0
@@ -148,8 +193,7 @@ class Container(bytes: ByteArray) {
             val th = tile.getInt("height")
             val offset = tile.getInt("offset")
             val strip = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
-            val buffer = ByteBuffer.wrap(payload, offset, tw * th * 4)
-            strip.copyPixelsFromBuffer(buffer)
+            strip.copyPixelsFromBuffer(directSlice(offset, tw * th * 4))
             canvas.drawBitmap(strip, 0f, y.toFloat(), null)
             strip.recycle()
             y += th

@@ -36,8 +36,16 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 shrinking is part of the measured release baseline (size and
+            // build time via `scripts/android-dev.py measure`). The audit's DEX
+            // keep checks (dev.remdia, dev.replayer.Native, the rustls
+            // companion) must pass on the minified APK.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Measurement builds only: no release keystore exists yet, and an
+            // unsigned APK cannot be installed for the memory/boot checks.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
