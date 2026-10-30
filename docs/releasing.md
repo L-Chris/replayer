@@ -67,6 +67,27 @@ the app's MSVC runtime and tests the installed package with build paths removed.
 
 The installer is per-user, defaults to `%LOCALAPPDATA%/Programs/replayer` and does not replace user settings or downloaded media. Installed-update smoke tests also check shortcut/icon behavior.
 
+## Android APK
+
+The unified release workflow builds the pinned remdia AAR and the tagged
+application for arm64-v8a, signs the APK with the persistent release key, and
+audits its JNI exports and 16 KB alignment. Android 9+ is required.
+`scripts/package-android.py` verifies the pinned certificate, v2/v3 signatures,
+manifest and unchanged application payloads before producing the APK and
+`SHA256SUMS-android-arm64-v8a.txt`. The final release checksum file includes it.
+
+Configure the four Android signing repository secrets documented in
+[Android signing](android.md#正式签名与发布). Never commit keystores or passwords.
+Local release builds read the ignored `.deps/android-signing/keystore.properties`
+or signing environment variables. Debug-key measurement builds require an
+explicit opt-in and cannot pass release packaging verification.
+
+To add Android to an existing release tag without moving it, dispatch the
+workflow from `main` with `release_tag=vX.Y.Z`. Application binaries come from
+that tag; release tooling and the Windows installer smoke harness come from the
+workflow commit. A failed tag build therefore can be repaired when only its
+test harness or packaging/signing configuration needs an update.
+
 ## Update behavior
 
 Windows update discovery uses GitHub's latest stable release. A newer installer must have the expected versioned filename, trusted URL, valid size and GitHub SHA-256 asset digest. The helper verifies the hash again, waits for the app to exit, installs to the current application directory and restarts it. Checks do not silently install an update. Logs are in the user's `replayer/updates/VERSION/` directory.

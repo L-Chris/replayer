@@ -51,6 +51,54 @@ release 安装启动通过。没有单独复测 release 变体的在线登录（
 挂 debug 变体）。测试结束删除设备凭据缓存并关闭临时 API 28 AVD，保留
 原有 emulator-5554 运行最终 release。代码和构建产物尚未推送或发布。
 
+## 正式签名与发布
+
+正式下载包为 `replayer-VERSION-android-arm64-v8a.apk`，支持 Android 9+
+arm64 设备。首版提供音乐、漫画和 WebDAV 云同步，尚无桌面端的视频、AI
+字幕和漫画翻译界面。签名证书的 SHA-256 固定在
+`android/release-certificate.sha256`，后续 APK 使用同一密钥覆盖更新。
+
+此前开发/测量包使用测试签名，不能直接升级为正式签名。已安装测试包的用户
+请先同步或备份数据，再卸载测试版、安装正式版；同一正式签名的后续版本
+可以直接更新。
+
+- 本机密钥和配置位于被 Git 忽略的 `.deps/android-signing/`，目录权限 0700，
+  JKS 和 `keystore.properties` 权限 0600；含密钥及口令的恢复副本保存在
+  macOS Keychain（`dev.replayer.credentials` 服务下的
+  `replayer/android/signing/v1` 项目），不参与 iCloud 同步。
+- CI 使用 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、
+  `ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 四个 GitHub Secrets，
+  临时 JKS 仅用于签名，结束即删除，不写日志、缓存或发布附件。
+- Gradle `release` 不再默认使用 debug 密钥。环境变量
+  `ANDROID_KEYSTORE_FILE` 及上述三个口令/别名变量优先于本机配置；没有
+  正式密钥时拒绝 release 构建。仅本地测量可显式设置
+  `REPLAYER_ANDROID_TEST_SIGNING=1`，该签名无法通过正式打包证书校验。
+- `scripts/package-android.py` 检查包名、版本、最低系统、ABI 和非调试属性，
+  先 zipalign 再签名，分别验证 v2/v3 签名及固定证书，确认所有应用负载未变。
+  APK、校验和与公开签名报告是唯一输出，私钥及口令不进入输出目录。
+- 统一发布 workflow 同时验证 Windows、macOS 和 Android，全部通过后才
+  创建 Release。`workflow_dispatch` 的 `release_tag` 可补发已有标签：
+  应用仍从不可变标签构建，打包工具和安装测试来自 workflow 提交。
+  v0.5.1 不移动标签；仅安装测试脚本补建旧组件的模拟目录，未修改应用代码。
+
+本机构建与打包：
+
+```sh
+python3 scripts/android-dev.py build --profile release
+JAVA_HOME=/path/to/jdk ANDROID_HOME=/path/to/sdk python3 scripts/package-android.py \
+  --apk target/android/release/replayer-release.apk --tag v0.5.1
+```
+
+签名私钥和口令仅有本机/密钥库/CI 副本，请保留这些恢复途径，避免后续无法
+为已安装应用签发兼容更新。证书指纹属于公开信息，私钥不能从指纹恢复。
+
+正式签名验证（2026-10-30）：APK **11,492,740 bytes / 10.96 MiB**，
+SHA-256 `3ad50bbec1844fe42c4b248d1ac0e6c17027a57ab52b912ea17a374fb1ec3cbe`。
+打包、v2/v3 独立签名验证、证书固定、应用负载一致性和 13 项 APK 审计全部
+通过；8 项开发/打包工具测试及 actionlint 通过。在独立的 Android 9/API 28
+模拟器上先安装正式签名构建，再用最终发布 APK 覆盖，UID 和首次安装身份
+不变，两次均原生初始化成功、无崩溃。原有预览模拟器和数据未改动。
+
 ## 云同步
 
 入口：音乐或漫画页右上角“云同步”。选择与桌面相同的 WebDAV 提供商，填写
@@ -245,7 +293,7 @@ release/R8 基线（`measure` 子命令，报告 measure-release-20261030T100057
 APK `8ad3065cc1bcd34fb4df662aeefe890d8bd916a24a0ad66c274c45a74336c5f1`）：
 
 - `build.gradle.kts` release 开启 `isMinifyEnabled` + `isShrinkResources`；
-  尚无正式 keystore，测量期 release 使用 debug 签名（仅可安装于开发设备）。
+  当时尚无正式 keystore，测量期 release 使用 debug 签名（仅可安装于开发设备）。
 - APK 9.0 MB（debug 167.9 MB）：dex 2.1 MB / 2942 类（debug 52.7 MB /
   24180 类），native .so 6.7 MB（debug 114.7 MB），资源收缩后 97.9 KB。
   构建时长：首次 release 80.4s，`measure --cold`（清 Gradle 构建目录 +

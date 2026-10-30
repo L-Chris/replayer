@@ -6,7 +6,7 @@ Get the package for your platform from [Releases](https://github.com/L-Chris/rep
 
 Windows updates can be checked, downloaded and installed from **Settings → About**. On macOS, use the Releases link. Export generated subtitles before restarting.
 
-Service credentials are currently saved through Windows Credential Manager. macOS credential storage is not implemented, so features requiring saved keys or passwords are limited on that platform. Local playback and comic reading do not require an AI account.
+Service credentials are saved through Windows Credential Manager or macOS Keychain; Android protects its local credentials with Android KeyStore. Local playback and comic reading do not require an AI account.
 
 ## Music and video
 
