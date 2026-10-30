@@ -22,6 +22,24 @@ class NavigationUiTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
     @Test
+    fun komiicAccountSettingsAreReachable() {
+        compose.onNodeWithTag("nav-comics").performClick()
+        compose.onNodeWithTag("nav-comic-source").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("komiic-login").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("komiic-email").assertIsDisplayed()
+        compose.onNodeWithTag("komiic-password").assertIsDisplayed()
+        compose.onNodeWithTag("komiic-status").assertExists()
+    }
+
+    @Test
+    fun cloudSettingsAreReachable() {
+        compose.onNodeWithTag("nav-cloud").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("sync-save").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("sync-enabled").assertIsDisplayed()
+        compose.onNodeWithTag("sync-status").assertExists()
+    }
+
+    @Test
     fun startsReadyWithoutTheInitializationGate() {
         assertTrue(Native.initError ?: "bridge not ready", Native.ready)
         compose.onNodeWithTag("init-error-title").assertDoesNotExist()

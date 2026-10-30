@@ -1,6 +1,6 @@
 [package]
 name = "replayer"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 
 [workspace]
@@ -10,7 +10,7 @@ members = ["crates/replayer-core", "crates/replayer-android"]
 default-members = [".", "crates/replayer-core"]
 
 [dependencies]
-replayer-core = { path = "crates/replayer-core", version = "0.5.0" }
+replayer-core = { path = "crates/replayer-core", version = "0.5.1" }
 anyhow = "1"
 # Share the crypto implementation already used by rustls and librqbit.
 aws-lc-rs = { version = "1", default-features = false, features = ["alloc", "non-fips"] }
@@ -36,7 +36,6 @@ unicode-segmentation = "1"
 unicode-width = "0.2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 regex = "1"
-quick-xml = "0.42"
 semver = "1"
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
 axum = "0.8"
@@ -55,6 +54,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "dx12"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3.7", default-features = false }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "metal"] }
 egui-wgpu = { version = "0.36", default-features = false, features = ["macos-window-resize-jitter-fix"] }
 

@@ -58,6 +58,7 @@ object Native {
             // (MediaCodec/MediaExtractor, content URIs) need the app context.
             dev.remdia.RemdiaBootstrap.initialize(app)
             nativeInit(app.filesDir.absolutePath, app)
+            dev.replayer.comic.KomiicAccount.initialize(app)
             ready = true
         } catch (error: Throwable) {
             initError =
@@ -88,9 +89,14 @@ object Native {
 
     external fun nativeComicFetchCover(book: String, width: Int): ByteArray
 
+    external fun nativeKomiicConfigure(config: String): String
+    external fun nativeKomiicStatus(): String
+    external fun nativeKomiicLogin(): String
+    external fun nativeKomiicLogout(): String
+
     // ---- bookshelf library ----
     external fun nativeLibraryEntries(): String
-    external fun nativeLibrarySave(entry: String)
+    external fun nativeLibraryUpdate(book: String, changes: String)
     external fun nativeLibraryRefresh(book: String, chapters: String)
     external fun nativeLibraryRoot(): String
 
@@ -117,6 +123,12 @@ object Native {
     external fun nativeMediaRead(handle: Long): ByteArray?
     external fun nativeMediaSeek(handle: Long, targetUs: Long): Long
     external fun nativeMediaClose(handle: Long)
+
+    // Shared desktop WebDAV protocol; credentials exist only in call-local JSON.
+    external fun nativeSyncProviders(): String
+    external fun nativeSyncValidate(config: String): String
+    external fun nativeSyncExchange(request: String): String
+    external fun nativeSyncFinish(request: String): String
 
     private external fun nativeInit(root: String, context: Context)
 }

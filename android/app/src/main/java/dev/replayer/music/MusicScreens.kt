@@ -1,5 +1,8 @@
 package dev.replayer.music
 
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.testTag
+import dev.replayer.R
 import android.content.Context
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
@@ -21,15 +24,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -139,7 +139,7 @@ object DownloadManager {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MusicHome(onOpenPlayer: () -> Unit) {
+fun MusicHome(onOpenPlayer: () -> Unit, onOpenSync: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
@@ -148,6 +148,7 @@ fun MusicHome(onOpenPlayer: () -> Unit) {
             TopAppBar(
                 title = { Text("音乐") },
                 actions = {
+                    TextButton(onClick = onOpenSync, modifier = Modifier.testTag("nav-cloud")) { Text("云同步") }
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Filled.Settings, "设置")
                     }
@@ -157,19 +158,44 @@ fun MusicHome(onOpenPlayer: () -> Unit) {
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             TabRow(selectedTabIndex = tab) {
-                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("音乐库") })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("在线") })
-                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("下载") })
+                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("收藏") })
+                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("音乐库") })
+                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("搜索") })
+                Tab(selected = tab == 3, onClick = { tab = 3 }, text = { Text("下载") })
             }
             when (tab) {
-                0 -> LibraryTab(onOpenPlayer)
-                1 -> OnlineTab(onOpenSettings = { showSettings = true })
-                2 -> DownloadsTab(onOpenPlayer)
+                0 -> FavoritesTab(onOpenPlayer)
+                1 -> LibraryTab(onOpenPlayer)
+                2 -> OnlineTab(onOpenSettings = { showSettings = true })
+                3 -> DownloadsTab(onOpenPlayer)
             }
         }
     }
     if (showSettings) {
         MusicSettingsDialog(onDismiss = { showSettings = false })
+    }
+}
+
+@Composable
+private fun FavoritesTab(onOpenPlayer: () -> Unit) {
+    val context = LocalContext.current
+    val revision by dev.replayer.sync.CloudSync.revision.collectAsStateWithLifecycle()
+    var songs by remember { mutableStateOf<List<OnlineSong>>(emptyList()) }
+    var downloads by remember { mutableStateOf<List<Track>>(emptyList()) }
+    LaunchedEffect(revision) {
+        withContext(Dispatchers.IO) {
+            songs = MusicRepository.favorites(context)
+            downloads = MusicRepository.downloadedTracks(context)
+        }
+    }
+    if (songs.isEmpty()) Text("还没有收藏。在搜索结果中收藏歌曲，也可以从云端同步桌面收藏。", Modifier.padding(24.dp))
+    else LazyColumn(Modifier.fillMaxSize()) {
+        itemsIndexed(songs, key = { _, song -> song.key }) { _, song ->
+            val local = downloads.firstOrNull { it.songJson?.let { raw -> OnlineSong.parse(org.json.JSONObject(raw)).key } == song.key }
+            OnlineSongRow(song, MusicRepository.quality(context), onPlay = local?.let { track -> {
+                Playback.play(context, listOf(track), 0); onOpenPlayer()
+            } })
+        }
     }
 }
 
@@ -307,7 +333,7 @@ private fun TrackCover(track: Track, size: Int) {
             )
         } else {
             Icon(
-                Icons.Filled.MusicNote,
+                painterResource(R.drawable.ic_music_note),
                 null,
                 Modifier.size((size / 2).dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -440,12 +466,16 @@ private fun OnlineTab(onOpenSettings: () -> Unit) {
 }
 
 @Composable
-private fun OnlineSongRow(song: OnlineSong, quality: String) {
+private fun OnlineSongRow(song: OnlineSong, quality: String, onPlay: (() -> Unit)? = null) {
     val context = LocalContext.current
     val download by DownloadManager.items.collectAsState()
+    val revision by dev.replayer.sync.CloudSync.revision.collectAsStateWithLifecycle()
+    val favorite = remember(song.key, revision) { MusicRepository.isFavorite(context, song) }
+    val scope = rememberCoroutineScope()
     val active = download.firstOrNull { it.song.source == song.source && it.song.id == song.id }
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().then(if (onPlay != null) Modifier.clickable(onClick = onPlay) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         OnlineCover(url = song.cover, size = 44)
@@ -460,13 +490,19 @@ private fun OnlineSongRow(song: OnlineSong, quality: String) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        IconButton(onClick = {
+            scope.launch {
+                runCatching { withContext(Dispatchers.IO) { MusicRepository.setFavorite(context, song, !favorite) } }
+                    .onFailure { android.widget.Toast.makeText(context, it.message, android.widget.Toast.LENGTH_SHORT).show() }
+            }
+        }) { Icon(if (favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, if (favorite) "取消收藏" else "收藏") }
         when (val status = active?.status) {
             is DownloadManager.Status.Running -> CircularProgressIndicator(
                 Modifier.size(22.dp),
                 strokeWidth = 2.dp,
             )
             is DownloadManager.Status.Done -> Icon(
-                Icons.Filled.Download,
+                painterResource(R.drawable.ic_download),
                 "已下载",
                 tint = MaterialTheme.colorScheme.primary,
             )
@@ -476,7 +512,7 @@ private fun OnlineSongRow(song: OnlineSong, quality: String) {
                 modifier = Modifier.clickable { DownloadManager.start(context, song, quality) },
             )
             null -> IconButton(onClick = { DownloadManager.start(context, song, quality) }) {
-                Icon(Icons.Filled.Download, "下载")
+                Icon(painterResource(R.drawable.ic_download), "下载")
             }
         }
     }
@@ -509,7 +545,7 @@ private fun OnlineCover(url: String?, size: Int) {
             )
         } else {
             Icon(
-                Icons.Filled.MusicNote,
+                painterResource(R.drawable.ic_music_note),
                 null,
                 Modifier.size((size / 2).dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -614,7 +650,7 @@ private fun MusicSettingsDialog(onDismiss: () -> Unit) {
                     singleLine = true,
                 )
                 Text(
-                    "密钥仅保存在本机，用于 chksz 在线音源的搜索与下载。",
+                    "密钥受系统密钥库保护，用于搜索与下载；可在云同步中选择加密同步。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
@@ -670,7 +706,7 @@ fun MiniPlayer(onOpen: () -> Unit) {
                         contentScale = ContentScale.Crop,
                     )
                 } else {
-                    Icon(Icons.Filled.MusicNote, null, Modifier.size(20.dp))
+                    Icon(painterResource(R.drawable.ic_music_note), null, Modifier.size(20.dp))
                 }
             }
             Spacer(Modifier.width(10.dp))
@@ -687,12 +723,12 @@ fun MiniPlayer(onOpen: () -> Unit) {
                 if (state.status == PlayStatus.Playing) controller.pause() else controller.resume()
             }) {
                 Icon(
-                    if (state.status == PlayStatus.Playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    if (state.status == PlayStatus.Playing) painterResource(R.drawable.ic_pause) else painterResource(R.drawable.ic_play_arrow),
                     if (state.status == PlayStatus.Playing) "暂停" else "播放",
                 )
             }
             IconButton(onClick = { Playback.controller?.next() }) {
-                Icon(Icons.Filled.SkipNext, "下一首")
+                Icon(painterResource(R.drawable.ic_skip_next), "下一首")
             }
         }
     }

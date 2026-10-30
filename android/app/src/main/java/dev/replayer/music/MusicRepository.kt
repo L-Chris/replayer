@@ -5,6 +5,12 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.provider.MediaStore
 import dev.replayer.Native
+import dev.replayer.sync.CloudSync
+import dev.replayer.sync.SecretStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.File
 
@@ -25,6 +31,11 @@ data class OnlineSong(
     val album: String,
     val cover: String?,
 ) {
+    val key: String get() {
+        val platform = when (source) { "chksz-163" -> "netease"; "chksz-qq" -> "qq"; "chksz-kugou" -> "kugou"; else -> source }
+        return CloudSync.sha256(platform + "\u0000" + id)
+    }
+
     fun toJson(): String = JSONObject()
         .put("source", source)
         .put("id", id)
@@ -52,7 +63,7 @@ data class OnlineSong(
             title = json.optString("title"),
             artist = json.optString("artist"),
             album = json.optString("album"),
-            cover = json.optString("cover").ifEmpty { null },
+            cover = if (json.isNull("cover")) null else json.optString("cover").ifEmpty { null },
         )
     }
 }
@@ -65,8 +76,8 @@ sealed interface DownloadPoll {
 
 /**
  * Music discovery, downloads and local collections. The chksz API key lives
- * only in app preferences; native calls receive it per request and never
- * persist it.
+ * in the OS-keystore-protected vault; native calls receive it per request.
+ * Optional encrypted cloud sharing uses the desktop v1 protocol.
  */
 object MusicRepository {
     private const val PREFS = "music"
@@ -77,19 +88,82 @@ object MusicRepository {
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun apiKey(context: Context): String = prefs(context).getString("api_key", "") ?: ""
+    fun apiKey(context: Context): String = synchronized(CloudSync.localLock) {
+        val saved = SecretStore.get(context, "music/api_key")
+        val legacy = prefs(context).getString("api_key", "").orEmpty()
+        if (saved.isEmpty() && legacy.isNotEmpty()) {
+            SecretStore.put(context, mapOf("music/api_key" to legacy))
+            check(prefs(context).edit().remove("api_key").commit())
+            legacy
+        } else saved
+    }
 
-    fun setApiKey(context: Context, key: String) =
-        prefs(context).edit().putString("api_key", key).apply()
-    fun sourceId(context: Context): String =
-        prefs(context).getString("source_id", "") ?: ""
-    fun quality(context: Context): String = prefs(context).getString("quality", "") ?: ""
+    fun setApiKey(context: Context, key: String) {
+        synchronized(CloudSync.localLock) {
+            SecretStore.put(context, mapOf("music/api_key" to key))
+            check(prefs(context).edit().remove("api_key").commit())
+        }
+        CloudSync.changed()
+    }
+    fun sourceId(context: Context): String = prefs(context).getString("source_id", "chksz-163")!!
+    fun quality(context: Context): String = prefs(context).getString("quality", "lossless")!!
 
-    fun setSource(context: Context, id: String) =
-        prefs(context).edit().putString("source_id", id).apply()
+    fun setSource(context: Context, id: String) {
+        synchronized(CloudSync.localLock) { prefs(context).edit().putString("source_id", id).apply() }
+        CloudSync.changed()
+    }
+    fun setQuality(context: Context, id: String) {
+        synchronized(CloudSync.localLock) { prefs(context).edit().putString("quality", id).apply() }
+        CloudSync.changed()
+    }
 
-    fun setQuality(context: Context, id: String) =
-        prefs(context).edit().putString("quality", id).apply()
+    private fun records(context: Context): JSONObject = JSONObject(prefs(context).getString("cloud_records", "{}")!!)
+
+    fun isFavorite(context: Context, song: OnlineSong): Boolean = records(context).optBoolean("song/${song.key}/favorite")
+
+    fun setFavorite(context: Context, song: OnlineSong, favorite: Boolean) {
+        synchronized(CloudSync.localLock) {
+            val data = records(context)
+            val prefix = "song/${song.key}"
+            data.put("$prefix/song", JSONObject(song.toJson())).put("$prefix/favorite", favorite)
+            if (favorite) data.put("$prefix/favorited_at", maxOf(System.currentTimeMillis(), data.optLong("$prefix/favorited_at") + 1))
+            check(prefs(context).edit().putString("cloud_records", data.toString()).commit())
+        }
+        CloudSync.changed()
+    }
+
+    fun favorites(context: Context): List<OnlineSong> {
+        val data = records(context)
+        return data.keys().asSequence().filter { it.endsWith("/song") && data.optBoolean(it.removeSuffix("/song") + "/favorite") }
+            .sortedByDescending { data.optLong(it.removeSuffix("/song") + "/favorited_at") }
+            .map { OnlineSong.parse(data.getJSONObject(it)) }.toList()
+    }
+
+    fun resumePosition(context: Context, track: Track): Long {
+        val song = track.songJson?.let { OnlineSong.parse(JSONObject(it)) } ?: return 0
+        return (records(context).optJSONObject("song/${song.key}/progress")?.optDouble("position", 0.0)?.times(1_000_000))?.toLong() ?: 0
+    }
+
+    private val progressScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+    fun savePlayback(context: Context, track: Track?, positionUs: Long, durationUs: Long) {
+        val json = track?.songJson ?: return
+        val app = context.applicationContext
+        val played = System.currentTimeMillis() / 1000
+        progressScope.launch {
+            runCatching {
+                val song = OnlineSong.parse(JSONObject(json))
+                synchronized(CloudSync.localLock) {
+                    val data = records(app)
+                    val prefix = "song/${song.key}"
+                    if (!data.has("$prefix/favorite")) return@synchronized
+                    data.put("$prefix/progress", JSONObject().put("position", positionUs.coerceAtLeast(0) / 1_000_000.0)
+                        .put("duration", durationUs.coerceAtLeast(0) / 1_000_000.0).put("played", played))
+                    check(prefs(app).edit().putString("cloud_records", data.toString()).commit())
+                }
+                CloudSync.changed(progressOnly = true)
+            }.onFailure { android.util.Log.e("replayer", "Cannot save playback progress", it) }
+        }
+    }
 
     fun sources(context: Context): List<SourceDescriptor> {
         val raw = Native.parse(Native.nativeMusicSources(apiKey(context))) as? org.json.JSONArray

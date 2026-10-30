@@ -30,6 +30,12 @@ class ProxyTestRunner : AndroidJUnitRunner() {
             for (name in listOf("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")) {
                 runCatching { Os.setenv(name, proxy, true) }
             }
+            // External-source tests use the host proxy; isolated DAV fixtures
+            // must stay in this device's loopback namespace.
+            val bypass = listOf(Os.getenv("NO_PROXY").orEmpty(), "localhost", "127.0.0.1", "::1")
+                .filter { it.isNotEmpty() }.joinToString(",")
+            Os.setenv("NO_PROXY", bypass, true)
+            Os.setenv("no_proxy", bypass, true)
             // Diagnostics: confirm the env actually changed in this process, so a
             // silent setenv failure cannot masquerade as a network outage.
             android.util.Log.i(

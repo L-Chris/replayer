@@ -13,5 +13,6 @@ class ReplayerApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Native.initialize(this)
+        dev.replayer.sync.CloudSync.initialize(this)
     }
 }

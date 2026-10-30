@@ -36,7 +36,8 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 import zipfile
-from dataclasses import dataclass, field
+from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -47,17 +48,10 @@ TEST_RUNNER = "dev.replayer.ProxyTestRunner"
 TARGET_ABI = "arm64-v8a"
 MIN_API = 28
 PAGE_SIZE_16K = 16384
-# Permission dialogs are system UI: select their buttons through UI Automator
-# dumps instead of tapping fixed coordinates.
-GRANT_LABELS = (
-    "while using the app",
-    "only this time",
-    "allow all the time",
-    "仅在使用该应用时允许",
-    "仅限这一次",
-    "始终允许",
-    "允许",
-    "allow",
+JNI_CLASSES = (
+    "org/rustls/platformverifier/CertificateVerifier",
+    "dev/remdia/Bridge",
+    "dev/replayer/Native",
 )
 
 
@@ -93,7 +87,15 @@ class Env:
     ndk: Path
     jdk: Path
     adb: Path
-    variables: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def build_env(self) -> dict[str, str]:
+        return {
+            "ANDROID_HOME": str(self.sdk),
+            "ANDROID_SDK_ROOT": str(self.sdk),
+            "ANDROID_NDK_HOME": str(self.ndk),
+            "JAVA_HOME": str(self.jdk),
+        }
 
     @property
     def build_tools(self) -> Path:
@@ -133,7 +135,7 @@ def run(
     quiet: bool = False,
     timeout: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a command, optionally teeing combined output into ``log``."""
+    """Run a command, optionally recording combined output in ``log``."""
     argv = shlex.split(command) if isinstance(command, str) else [str(part) for part in command]
     if not quiet:
         print(f"$ {' '.join(shlex.quote(part) for part in argv)}", flush=True)
@@ -142,37 +144,29 @@ def run(
         merged.update(env)
     if log is not None:
         log.parent.mkdir(parents=True, exist_ok=True)
-    handle = log.open("w", encoding="utf-8") if log else subprocess.DEVNULL
     try:
-        with (handle if log else open(os.devnull, "w")) as sink:
-            process = subprocess.Popen(
+        # Let the child write logs directly: they remain readable during long
+        # builds, without a blocking readline loop defeating the deadline.
+        with (log.open("w", encoding="utf-8") if log else nullcontext(subprocess.PIPE)) as output:
+            result = subprocess.run(
                 argv,
                 cwd=str(cwd or ROOT),
                 env=merged,
-                stdout=subprocess.PIPE,
+                stdout=output,
                 stderr=subprocess.STDOUT,
                 text=True,
-                # Tools like dexdump emit non-UTF-8 bytes (lone surrogates in
-                # string tables); replace rather than crash the audit.
                 encoding="utf-8",
                 errors="replace",
-                bufsize=1,
+                timeout=timeout,
             )
-            captured: list[str] = []
-            assert process.stdout is not None
-            for line in process.stdout:
-                captured.append(line)
-                if not quiet:
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
-                if log:
-                    sink.write(line)
-                    sink.flush()
-            code = process.wait(timeout=timeout)
-    finally:
-        if log:
-            handle.close()
-    result = subprocess.CompletedProcess(argv, code, "".join(captured), "")
+    except subprocess.TimeoutExpired as error:
+        hint = f" (partial log: {log})" if log else ""
+        raise ToolError(f"command timed out after {timeout}s{hint}: {shlex.join(argv)}") from error
+    if log:
+        result.stdout = log.read_text(encoding="utf-8", errors="replace")
+    if not quiet:
+        print(result.stdout, end="", flush=True)
+    code = result.returncode
     if check and code != 0:
         hint = f" (log: {log})" if log else ""
         raise ToolError(f"command failed with exit {code}{hint}: {' '.join(argv)}")
@@ -234,7 +228,7 @@ def cross_env(env: Env) -> dict[str, str]:
     script = ROOT / "scripts" / "build-android.sh"
     if not script.exists():
         raise ToolError(f"missing {script}")
-    result = run([str(script), "--print-env"], env={"ANDROID_HOME": str(env.sdk), "JAVA_HOME": str(env.jdk)}, quiet=True)
+    result = run([str(script), "--print-env"], env=env.build_env, quiet=True)
     if result.returncode != 0:
         raise ToolError(f"{script.name} --print-env failed:\n{result.stdout}")
     variables: dict[str, str] = {}
@@ -323,42 +317,6 @@ def check_device_capabilities(info: dict[str, str]) -> list[str]:
     return problems
 
 
-def dismiss_permission_dialogs(env: Env, serial: str, rounds: int = 3) -> int:
-    """Tap permission grants found through a UI Automator dump (system UI)."""
-    dismissed = 0
-    for _ in range(rounds):
-        adb(env, ["shell", "uiautomator", "dump", "/sdcard/replayer-ui.xml"], serial)
-        pulled = adb(env, ["exec-out", "cat", "/sdcard/replayer-ui.xml"], serial)
-        if pulled.returncode != 0 or "<hierarchy" not in pulled.stdout:
-            break
-        target = find_grant_button(pulled.stdout)
-        if target is None:
-            break
-        adb(env, ["shell", "input", "tap", str(target[0]), str(target[1])], serial)
-        dismissed += 1
-        time.sleep(1.0)
-    return dismissed
-
-
-def find_grant_button(hierarchy: str) -> tuple[int, int] | None:
-    try:
-        root = ET.fromstring(hierarchy)
-    except ET.ParseError:
-        return None
-    for node in root.iter("node"):
-        text = (node.get("text") or "").strip().lower()
-        if not text or node.get("clickable") != "true":
-            continue
-        if not any(text.startswith(label) for label in GRANT_LABELS):
-            continue
-        match = re.match(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]", node.get("bounds") or "")
-        if not match:
-            continue
-        left, top, right, bottom = (int(group) for group in match.groups())
-        return ((left + right) // 2, (top + bottom) // 2)
-    return None
-
-
 # --------------------------------------------------------------------------- #
 # artifacts
 
@@ -371,6 +329,8 @@ def artifact(env: Env, profile: str) -> dict:
     apk = ROOT / data["apk"] if not Path(data["apk"]).is_absolute() else Path(data["apk"])
     if not apk.exists():
         raise ToolError(f"artifact.json points at a missing APK: {apk}")
+    if apk.stat().st_size != int(data["bytes"]) or sha256(apk) != data["sha256"]:
+        raise ToolError(f"published APK does not match artifact.json: {apk}; rebuild before installing")
     data["path"] = apk
     return data
 
@@ -383,6 +343,10 @@ def newest_source_mtime() -> float:
     must not mark the already-correct app APK stale.
     """
     roots = [
+        ROOT / "Cargo.toml",
+        ROOT / "Cargo.lock",
+        ROOT / "scripts" / "build-android.sh",
+        ROOT / "android" / "app" / "libs",
         ROOT / "crates",
         ROOT / "android" / "app" / "src" / "main",
         ROOT / "android" / "app" / "build.gradle.kts",
@@ -398,7 +362,8 @@ def newest_source_mtime() -> float:
         for path in root.rglob("*"):
             # jniLibs holds build-android.sh's staged output, not source; a
             # release stage must not mark the debug APK stale (and vice versa).
-            if path.is_file() and "build" not in path.parts and "jniLibs" not in path.parts:
+            if (path.is_file() and "build" not in path.parts and "jniLibs" not in path.parts
+                    and path.name != "rustls-companion.properties"):
                 newest = max(newest, path.stat().st_mtime)
     return newest
 
@@ -531,6 +496,8 @@ def command_check(args: argparse.Namespace, env: Env) -> int:
         "--target",
         "aarch64-linux-android",
     ]
+    if args.profile == "release":
+        command.append("--release")
     if args.clippy:
         command += ["--", "-W", "clippy::all"]
     print(f"android {tool} (log: {log})")
@@ -552,7 +519,7 @@ def command_build(args: argparse.Namespace, env: Env) -> int:
     stamp = now()
     log = ROOT / "target" / "android-audit" / f"build-{args.profile}-{stamp}.log"
     print(f"building {args.profile} (log: {log})")
-    result = run(command, env={"ANDROID_HOME": str(env.sdk), "JAVA_HOME": str(env.jdk)}, log=log, check=False)
+    result = run(command, env=env.build_env, log=log, check=False)
     elapsed = time.time() - started
     if result.returncode != 0:
         print("build FAILED; no APK was published and no device install may proceed", file=sys.stderr)
@@ -634,7 +601,7 @@ def command_run(args: argparse.Namespace, env: Env) -> int:
 
 
 def grant_permissions(env: Env, serial: str, info: dict[str, str]) -> None:
-    wanted = ["android.permission.POST_NOTIFICATIONS"]
+    wanted = ["android.permission.POST_NOTIFICATIONS"] if int(info.get("api") or 0) >= 33 else []
     wanted.append(
         "android.permission.READ_MEDIA_AUDIO"
         if int(info.get("api") or 0) >= 33
@@ -644,7 +611,6 @@ def grant_permissions(env: Env, serial: str, info: dict[str, str]) -> None:
         result = adb(env, ["shell", "pm", "grant", PACKAGE, permission], serial)
         status = "granted" if result.returncode == 0 else "skipped"
         print(f"  {status:<8} {permission}")
-    dismiss_permission_dialogs(env, serial, rounds=1)
 
 
 def wait_for_process(env: Env, serial: str, timeout: int) -> str:
@@ -750,6 +716,8 @@ def command_logs(args: argparse.Namespace, env: Env) -> int:
 
 
 def command_smoke(args: argparse.Namespace, env: Env) -> int:
+    if args.profile != "debug":
+        raise ToolError("smoke supports the debug instrumentation variant only; use run/audit for release")
     serial = require_device(env, args.serial)
     info = device_info(env, serial)
     for problem in check_device_capabilities(info):
@@ -758,7 +726,7 @@ def command_smoke(args: argparse.Namespace, env: Env) -> int:
     reject_stale_apk(data, args.allow_stale)
 
     stamp = now()
-    gradle_env = {"JAVA_HOME": str(env.jdk), "ANDROID_HOME": str(env.sdk), "ANDROID_SDK_ROOT": str(env.sdk)}
+    gradle_env = env.build_env
     build_log = ROOT / "target" / "android-audit" / f"androidtest-{stamp}.log"
     print("assembling the instrumentation APK")
     run(
@@ -794,16 +762,21 @@ def command_smoke(args: argparse.Namespace, env: Env) -> int:
     if args.online and args.proxy:
         mode += f", proxy {args.proxy}"
     print(f"running instrumentation ({mode})")
-    result = adb(
-        env,
-        ["shell", "am", "instrument", "-w", "-r", *arguments, f"{PACKAGE}.test/{TEST_RUNNER}"],
-        serial,
-        timeout=args.timeout * 60,
-    )
+    raw = ROOT / "target" / "android-review" / f"smoke-{stamp}.log"
+    try:
+        result = adb(
+            env,
+            ["shell", "am", "instrument", "-w", "-r", *arguments, f"{PACKAGE}.test/{TEST_RUNNER}"],
+            serial,
+            log=raw,
+            timeout=args.timeout,
+        )
+    except ToolError:
+        # Killing the adb client alone leaves instrumentation alive on-device.
+        adb(env, ["shell", "am", "force-stop", PACKAGE], serial, timeout=10)
+        raise
     after = capture_screenshot(env, serial, ROOT / "target" / "android-review" / f"smoke-after-{stamp}.png")
 
-    raw = ROOT / "target" / "android-review" / f"smoke-{stamp}.log"
-    raw.write_text(result.stdout, encoding="utf-8")
     summary = parse_instrumentation(result.stdout)
     summary["device"] = info
     summary["app"] = {"sha256": data["sha256"], "apk": str(data["path"])}
@@ -814,11 +787,10 @@ def command_smoke(args: argparse.Namespace, env: Env) -> int:
     report = ROOT / "target" / "android-review" / f"smoke-{stamp}.json"
     report.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print(f"\n{'case':<64} {'result':<12} seconds")
+    print(f"\n{'case':<64} result")
     for case in summary["cases"]:
         label = f"{case['class'].rsplit('.', 1)[-1]}.{case['test']}"
-        seconds = "-" if case["seconds"] is None else f"{case['seconds']:.2f}"
-        print(f"{label:<64} {case['status']:<12} {seconds}")
+        print(f"{label:<64} {case['status']}")
     print(
         f"\ntotal {summary['total']}  passed {summary['passed']}  failed {summary['failed']}  "
         f"assumption-skipped {summary['skipped']}  ignored {summary['ignored']}"
@@ -922,7 +894,6 @@ def parse_instrumentation(output: str) -> dict:
                         "test": name[1],
                         "status": STATUS_LABELS[code],
                         "seconds": None,
-                        "_started": time.monotonic(),
                     }
                     by_key[name] = case
                     cases.append(case)
@@ -937,8 +908,8 @@ def parse_instrumentation(output: str) -> dict:
                 by_key[name] = case
                 cases.append(case)
             case["status"] = STATUS_LABELS.get(code, str(code))
-            started = case.pop("_started", None)
-            case["seconds"] = round(time.monotonic() - started, 2) if started else None
+            # Buffered instrumentation text has no per-case timestamps; parsing
+            # speed is not test duration. Keep seconds unknown rather than 0.00.
             if case["status"] == "failed":
                 failures.append(
                     {
@@ -948,7 +919,7 @@ def parse_instrumentation(output: str) -> dict:
                 )
         elif line.startswith("INSTRUMENTATION_CODE: "):
             close()
-            finished = True
+            finished = line.partition(": ")[2].strip() == "-1"
         elif line.startswith(("INSTRUMENTATION_FAILED", "INSTRUMENTATION_ABORTED", "INSTRUMENTATION_CRASHED")):
             close()
             terminal.append(line.strip())
@@ -975,7 +946,8 @@ def parse_instrumentation(output: str) -> dict:
         "skipped": counted["skipped"],
         "ignored": counted["ignored"],
         "expected": expected or None,
-        "complete": finished and not terminal and not incomplete,
+        "complete": finished and not terminal and not incomplete and settled > 0
+        and (not expected or expected == settled),
         "terminal": terminal,
         "incomplete": incomplete,
         "cases": cases,
@@ -986,9 +958,30 @@ def parse_instrumentation(output: str) -> dict:
     }
 
 
+def apk_size_buckets(entries: list[zipfile.ZipInfo]) -> dict[str, dict[str, int]]:
+    buckets: dict[str, dict[str, int]] = {}
+    for entry in entries:
+        key = (
+            "native" if entry.filename.endswith(".so")
+            else "dex" if entry.filename.endswith(".dex")
+            else "resources" if entry.filename.startswith("res/")
+            or entry.filename in {"resources.arsc", "AndroidManifest.xml"}
+            else "other"
+        )
+        bucket = buckets.setdefault(key, {"files": 0, "compressed": 0, "uncompressed": 0})
+        bucket["files"] += 1
+        bucket["compressed"] += entry.compress_size
+        bucket["uncompressed"] += entry.file_size
+    return dict(sorted(buckets.items()))
+
+
+def dex_classes(env: Env, apk: Path) -> set[str]:
+    output = run([str(env.tool("dexdump")), str(apk)], quiet=True, timeout=900).stdout
+    return set(re.findall(r"Class descriptor\s*:\s*'L([^']+);'", output))
+
+
 def command_audit(args: argparse.Namespace, env: Env) -> int:
-    data = artifact(env, args.profile)
-    apk = Path(args.apk) if args.apk else Path(data["path"])
+    apk = Path(args.apk) if args.apk else Path(artifact(env, args.profile)["path"])
     if not apk.exists():
         raise ToolError(f"APK not found: {apk}")
     print(f"auditing {apk} ({human(apk.stat().st_size)})")
@@ -1005,16 +998,9 @@ def command_audit(args: argparse.Namespace, env: Env) -> int:
         so_names = [name for name in names if name.endswith(".so")]
 
         # 1. The two Java components that JNI resolves by name.
-        classes = set()
-        dexdump = run([str(env.tool("dexdump")), str(apk)], quiet=True, check=False, timeout=900).stdout
-        for match in re.finditer(r"Class descriptor\s*:\s*'L([^']+);'", dexdump):
-            classes.add(match.group(1))
+        classes = dex_classes(env, apk)
         record("DEX indexed", bool(classes), f"{len(dex_names)} dex file(s), {len(classes)} classes")
-        for required in (
-            "org/rustls/platformverifier/CertificateVerifier",
-            "dev/remdia/Bridge",
-            "dev/replayer/Native",
-        ):
+        for required in JNI_CLASSES:
             record(f"dex contains {required}", required in classes, f"{len(classes)} classes indexed")
 
         # 2. Native payload: the single business library, no remdia SDK library.
@@ -1033,28 +1019,7 @@ def command_audit(args: argparse.Namespace, env: Env) -> int:
             ", ".join(sorted({Path(name).name for name in other})) or "none",
         )
 
-        # 3. ZIP alignment for uncompressed libraries (16 KB page devices).
-        # The on-disk data starts at header_offset + 30 + local filename length +
-        # local extra length. zipalign pads the LOCAL extra field, but Python's
-        # ZipInfo.extra is the CENTRAL-directory copy and can differ, so the
-        # local file header is the only reliable source (the naive central-based
-        # computation reports false misalignment).
-        misaligned = []
-        with apk.open("rb") as raw:
-            for entry in entries:
-                if not entry.filename.endswith(".so") or entry.compress_type != zipfile.ZIP_STORED:
-                    continue
-                raw.seek(entry.header_offset)
-                local = raw.read(30)
-                if len(local) < 30 or local[:4] != b"PK\x03\x04":
-                    misaligned.append(f"{entry.filename} (bad local header)")
-                    continue
-                name_len = int.from_bytes(local[26:28], "little")
-                extra_len = int.from_bytes(local[28:30], "little")
-                data_offset = entry.header_offset + 30 + name_len + extra_len
-                if data_offset % PAGE_SIZE_16K:
-                    misaligned.append(f"{entry.filename} (data@{data_offset})")
-        record("stored .so entries are 16 KB aligned in the ZIP", not misaligned, ", ".join(misaligned) or "aligned")
+        # 3. Use the SDK validator for ZIP alignment, including 16 KB libraries.
         zipalign = run(
             [str(env.tool("zipalign")), "-c", "-P", "16", "-v", "4", str(apk)], quiet=True, check=False, timeout=600
         )
@@ -1065,25 +1030,14 @@ def command_audit(args: argparse.Namespace, env: Env) -> int:
         )
 
         # 4. Sizes by category.
-        buckets: dict[str, list[int]] = {}
-        for entry in entries:
-            key = (
-                "native"
-                if entry.filename.endswith(".so")
-                else "dex"
-                if entry.filename.endswith(".dex")
-                else "resources"
-                if entry.filename.startswith("res/") or entry.filename in {"resources.arsc", "AndroidManifest.xml"}
-                else "other"
-            )
-            buckets.setdefault(key, []).append(entry.file_size)
-        sizes = {key: sum(values) for key, values in sorted(buckets.items())}
+        sizes = {key: bucket["uncompressed"] for key, bucket in apk_size_buckets(entries).items()}
         print("  sizes (uncompressed): " + ", ".join(f"{key} {human(value)}" for key, value in sizes.items()))
 
     # 5. ELF alignment of the business library.
     with zipfile.ZipFile(apk) as archive:
         member = f"lib/{TARGET_ABI}/libreplayer_android.so"
         extracted = ROOT / "target" / "android-audit" / f"libreplayer_android-{args.profile}.so"
+        extracted.parent.mkdir(parents=True, exist_ok=True)
         extracted.write_bytes(archive.read(member))
     readelf = run([env.llvm("llvm-readelf"), "-l", str(extracted)], quiet=True, check=False).stdout
     alignments = [int(value, 16) for value in re.findall(r"LOAD\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+0x[0-9a-f]+\s+\S+\s+\S+\s+(0x[0-9a-f]+)", readelf)]
@@ -1151,8 +1105,8 @@ def command_measure(args: argparse.Namespace, env: Env) -> int:
     stamp = now()
     if args.cold:
         # Gradle caches and this crate's cargo artifacts dominate rebuild time;
-        # removing them approximates a CI cold build without touching the
-        # dependency crates (a full `cargo clean` would take tens of minutes).
+        # this measures a partial rebuild, deliberately retaining the
+        # dependency crates; it is not a clean-machine/CI cold build.
         for path in (ROOT / "android" / "build", ROOT / "android" / "app" / "build", ROOT / "android" / ".gradle"):
             shutil.rmtree(path, ignore_errors=True)
         run(
@@ -1161,7 +1115,7 @@ def command_measure(args: argparse.Namespace, env: Env) -> int:
             check=False,
             quiet=True,
         )
-        print("cold start: removed Gradle build dirs and replayer-android cargo artifacts")
+        print("partial rebuild: removed Gradle build dirs and replayer-android artifacts; dependencies cached")
 
     command = [str(ROOT / "scripts" / "build-android.sh"), "--assemble"]
     if profile == "release":
@@ -1169,7 +1123,7 @@ def command_measure(args: argparse.Namespace, env: Env) -> int:
     log = ROOT / "target" / "android-audit" / f"measure-build-{profile}-{stamp}.log"
     print(f"building {profile} (log: {log})")
     started = time.time()
-    result = run(command, env={"ANDROID_HOME": str(env.sdk), "JAVA_HOME": str(env.jdk)}, log=log, check=False)
+    result = run(command, env=env.build_env, log=log, check=False)
     build_seconds = time.time() - started
     if result.returncode != 0:
         raise ToolError(f"build failed; nothing measured (log: {log})")
@@ -1178,35 +1132,13 @@ def command_measure(args: argparse.Namespace, env: Env) -> int:
     print(f"built {apk.name} in {build_seconds:.1f}s ({'cold' if args.cold else 'hot'} caches)")
 
     # Size buckets, compressed and uncompressed (audit reports uncompressed only).
-    buckets: dict[str, dict[str, int]] = {}
     with zipfile.ZipFile(apk) as archive:
-        entries = archive.infolist()
-        for entry in entries:
-            key = (
-                "native"
-                if entry.filename.endswith(".so")
-                else "dex"
-                if entry.filename.endswith(".dex")
-                else "resources"
-                if entry.filename.startswith("res/") or entry.filename in {"resources.arsc", "AndroidManifest.xml"}
-                else "other"
-            )
-            bucket = buckets.setdefault(key, {"files": 0, "compressed": 0, "uncompressed": 0})
-            bucket["files"] += 1
-            bucket["compressed"] += entry.compress_size
-            bucket["uncompressed"] += entry.file_size
-    sizes = {key: buckets[key] for key in sorted(buckets)}
+        sizes = apk_size_buckets(archive.infolist())
     print("  size buckets: " + ", ".join(f"{key} {human(value['compressed'])}" for key, value in sizes.items()))
 
     # R8 outcome: class count plus the JNI-referenced keeps that must survive.
-    dexdump = run([str(env.tool("dexdump")), str(apk)], quiet=True, check=False, timeout=1800).stdout
-    classes = set(re.findall(r"Class descriptor\s*:\s*'L([^']+);'", dexdump))
-    keep_targets = (
-        "dev/remdia/Bridge",
-        "dev/replayer/Native",
-        "org/rustls/platformverifier/CertificateVerifier",
-    )
-    missing_keeps = sorted(name for name in keep_targets if name not in classes)
+    classes = dex_classes(env, apk)
+    missing_keeps = sorted(set(JNI_CLASSES) - classes)
     print(f"  dex classes: {len(classes)}" + (f", MISSING keeps {missing_keeps}" if missing_keeps else ", JNI keeps present"))
     if missing_keeps:
         raise ToolError(f"R8 stripped JNI-referenced classes: {', '.join(missing_keeps)}")
@@ -1304,7 +1236,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jdk", default=None)
     parser.add_argument("--adb", default=None, help="adb binary; the bundled 36.0.2 avoids ADB 37 host crashes")
     parser.add_argument("--serial", default=None)
-    parser.add_argument("--timeout", type=int, default=120, help="seconds to wait for launch (run) or minutes (smoke)")
+    parser.add_argument("--timeout", type=int, default=120, help="deadline in seconds for launch (run) or instrumentation (smoke)")
     parser.add_argument("--clippy", action="store_true", help="check: run clippy for the Android target")
     parser.add_argument("--online", action="store_true", help="smoke: also run external-network cases")
     parser.add_argument(

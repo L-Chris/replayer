@@ -45,8 +45,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
@@ -58,10 +61,12 @@ import java.util.concurrent.ConcurrentHashMap
  * bounds parallel fetches and [ImagePolicy.ahead] drives prefetching from the
  * first visible index.
  */
-private class PageFetcher(
-    cacheBytes: Int,
-    private val scope: CoroutineScope,
-) {
+internal class PageFetcher(cacheBytes: Int, concurrency: Int) {
+    // JNI loads block synchronously, so one dispatcher view is sufficient to
+    // cap concurrent fetches. A second resizable semaphore is unnecessary.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO.limitedParallelism(concurrency.coerceAtLeast(1)),
+    )
     val bitmaps = MutableStateFlow<Map<String, Bitmap>>(emptyMap())
     val failures = MutableStateFlow<Set<String>>(emptySet())
     private val cache = object : LruCache<String, Bitmap>(cacheBytes) {
@@ -76,39 +81,30 @@ private class PageFetcher(
         }
     }
     private val inFlight = ConcurrentHashMap.newKeySet<String>()
-    private val permits = java.util.concurrent.atomic.AtomicInteger(1)
-    private val gate = Semaphore(1)
-
-    /** Apply the book's ImagePolicy; only concurrency affects the gate. */
-    fun setConcurrency(value: Int) {
-        val target = value.coerceAtLeast(1)
-        val delta = target - permits.getAndSet(target)
-        repeat(delta.coerceAtLeast(0)) { gate.release() }
-    }
 
     private fun publish() {
-        bitmaps.value = HashMap(cache.snapshot())
+        bitmaps.value = cache.snapshot()
     }
 
     /** Idempotent: repeats for cached or in-flight pages are no-ops. */
     fun fetch(key: String, load: () -> Bitmap) {
         if (cache.get(key) != null || !inFlight.add(key)) return
         scope.launch {
-            gate.acquire()
             try {
                 val bitmap = load()
+                ensureActive()
                 cache.put(key, bitmap)
                 publish()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
-                failures.value = failures.value + key
-            } finally {
-                gate.release()
+                failures.update { it + key }
             }
         }.invokeOnCompletion { inFlight.remove(key) }
     }
 
     fun retry(key: String, load: () -> Bitmap) {
-        failures.value = failures.value - key
+        failures.update { it - key }
         cache.remove(key)
         fetch(key, load)
     }
@@ -119,7 +115,7 @@ private class PageFetcher(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, kotlinx.coroutines.FlowPreview::class)
 @Composable
 fun ReaderScreen(onBack: () -> Unit) {
     val bookJson = AppNav.bookJson
@@ -135,11 +131,11 @@ fun ReaderScreen(onBack: () -> Unit) {
 
     // Fetcher lifetime spans recompositions; the cache budget follows the
     // process memory class like a full-screen image viewer would.
-    val fetcher = remember(bookJson, chapterJson) {
+    val fetcher = remember(bookJson, chapterJson, policy.concurrency) {
         val maxBytes = (Runtime.getRuntime().maxMemory() / 6).toInt()
         PageFetcher(
             cacheBytes = maxBytes,
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(4)),
+            concurrency = policy.concurrency,
         )
     }
     DisposableEffect(fetcher) {
@@ -150,8 +146,8 @@ fun ReaderScreen(onBack: () -> Unit) {
     val bitmaps by fetcher.bitmaps.collectAsStateWithLifecycle()
     val failures by fetcher.failures.collectAsStateWithLifecycle()
 
-    // Load the page list once; the entry is marked opened so shelf refreshes
-    // stop counting the chapter as new.
+    // Loading a chapter does not mark it read; completion requires its last
+    // decoded page to reach the bottom of the viewport, as on desktop.
     LaunchedEffect(bookJson, chapterJson) {
         val loadedBook = book ?: return@LaunchedEffect
         val loadedChapter = chapter ?: return@LaunchedEffect
@@ -159,55 +155,51 @@ fun ReaderScreen(onBack: () -> Unit) {
             withContext(Dispatchers.IO) {
                 val list = ComicRepository.pages(loadedBook, loadedChapter)
                 policy = ComicRepository.imagePolicy(loadedBook)
-                fetcher.setConcurrency(policy.concurrency)
-                if (entry != null) {
-                    entry.markOpened(loadedChapter.key)
-                    entry.save()
-                }
                 list
             }
         }
         result.onSuccess { pages = it }.onFailure { loadError = it.message }
     }
 
-    // Save progress whenever the visible page settles, and once more on exit.
+    // The wire fraction is within the current page, matching the desktop reader.
     val current = pages
-    DisposableEffect(current, entry, chapter) {
+    val loadedLast = current?.lastOrNull()?.let { bitmaps.containsKey(pageKey(current.lastIndex, it)) } == true
+    fun position(): Triple<Int, Float, Boolean> {
+        val layout = listState.layoutInfo
+        val index = listState.firstVisibleItemIndex
+        val first = layout.visibleItemsInfo.firstOrNull { it.index == index }
+        val fraction = if (first != null && first.size > 0) listState.firstVisibleItemScrollOffset.toFloat() / first.size else 0f
+        val tail = layout.visibleItemsInfo.lastOrNull()
+        val complete = loadedLast && tail != null && tail.index == current?.lastIndex && tail.offset + tail.size <= layout.viewportEndOffset + 2
+        return Triple(index, fraction.coerceIn(0f, 1f), complete)
+    }
+    DisposableEffect(current, entry, chapter, loadedLast) {
         onDispose {
-            val loaded = current ?: return@onDispose
+            val loaded = current?.takeIf { it.isNotEmpty() } ?: return@onDispose
             val shelf = entry ?: return@onDispose
             val loadedChapter = chapter ?: return@onDispose
-            val index = listState.firstVisibleItemIndex.coerceIn(0, loaded.size - 1)
-            runCatching {
-                ComicRepository.saveProgress(
-                    shelf,
-                    loadedChapter,
-                    index,
-                    (index + 1f) / loaded.size,
-                    loaded.size,
-                )
+            val (index, fraction, complete) = position()
+            runCatching { ComicRepository.saveProgress(shelf, loadedChapter, index.coerceIn(loaded.indices), fraction, loaded.size, complete) }
+        }
+    }
+    LaunchedEffect(listState, current, loadedLast) {
+        if (current.isNullOrEmpty()) return@LaunchedEffect
+        snapshotFlow { position() }.distinctUntilChanged().debounce(500).collect { (index, fraction, complete) ->
+            val shelf = entry ?: return@collect
+            val loadedChapter = chapter ?: return@collect
+            withContext(Dispatchers.IO) {
+                runCatching { ComicRepository.saveProgress(shelf, loadedChapter, index.coerceIn(current.indices), fraction, current.size, complete) }
             }
         }
     }
-    LaunchedEffect(listState, current) {
-        if (current == null) return@LaunchedEffect
-        snapshotFlow { listState.firstVisibleItemIndex }
-            .distinctUntilChanged()
-            .collect { index ->
-                val shelf = entry ?: return@collect
-                val loadedChapter = chapter ?: return@collect
-                withContext(Dispatchers.IO) {
-                    runCatching {
-                        ComicRepository.saveProgress(
-                            shelf,
-                            loadedChapter,
-                            index,
-                            (index + 1f) / current.size,
-                            current.size,
-                        )
-                    }
-                }
-            }
+    var restored by remember(bookJson, chapterJson) { mutableStateOf(false) }
+    val initial = current?.getOrNull(AppNav.initialPage)?.let { bitmaps[pageKey(AppNav.initialPage, it)] }
+    LaunchedEffect(initial) {
+        if (!restored && initial != null) {
+            restored = true
+            val height = initial.height.toLong() * listState.layoutInfo.viewportSize.width / initial.width
+            listState.scrollToItem(AppNav.initialPage, (height * AppNav.initialFraction.coerceIn(0f, 1f)).toInt())
+        }
     }
 
     // Prefetch the window ahead of the reader.
@@ -321,7 +313,7 @@ private fun PageSlot(
     Box(
         Modifier
             .fillMaxWidth()
-            .aspectRatio(if (bitmap != null) bitmap.height.toFloat() / bitmap.width else 1.4f)
+            .aspectRatio(if (bitmap != null) bitmap.width.toFloat() / bitmap.height else 1.4f)
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
     ) {

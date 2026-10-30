@@ -1,5 +1,7 @@
 package dev.replayer.comic
 
+import androidx.compose.ui.res.painterResource
+import dev.replayer.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,7 +29,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Badge
@@ -65,6 +66,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.replayer.AppNav
+import dev.replayer.sync.CloudSync
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,9 +75,12 @@ import org.json.JSONObject
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ComicHome(onOpenDetail: () -> Unit, onOpenReader: () -> Unit) {
+fun ComicHome(onOpenDetail: () -> Unit, onOpenReader: () -> Unit, onOpenSync: () -> Unit, onOpenSourceSettings: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    Scaffold(topBar = { TopAppBar(title = { Text("漫画") }) }) { padding ->
+    Scaffold(topBar = { TopAppBar(title = { Text("漫画") }, actions = {
+        TextButton(onClick = onOpenSourceSettings, modifier = Modifier.testTag("nav-comic-source")) { Text("源设置") }
+        TextButton(onClick = onOpenSync, modifier = Modifier.testTag("nav-cloud")) { Text("云同步") }
+    }) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             TabRow(selectedTabIndex = tab) {
                 Tab(
@@ -105,7 +111,8 @@ private fun BookshelfTab(onOpenDetail: () -> Unit, onOpenReader: () -> Unit) {
     var reload by remember { mutableIntStateOf(0) }
     var menuEntry by remember { mutableStateOf<LibraryEntry?>(null) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(reload) {
+    val syncRevision by CloudSync.revision.collectAsStateWithLifecycle()
+    LaunchedEffect(reload, syncRevision) {
         loading = true
         entries = withContext(Dispatchers.IO) {
             runCatching { ComicRepository.entries() }.getOrElse { emptyList() }
@@ -175,6 +182,7 @@ private fun openEntry(entry: LibraryEntry, onOpenDetail: () -> Unit, onOpenReade
         AppNav.chapterJson = chapter.raw.toString()
         AppNav.entryJson = entry.raw.toString()
         AppNav.initialPage = progress?.page ?: 0
+        AppNav.initialFraction = progress?.fraction ?: 0f
         onOpenReader()
     } else {
         AppNav.bookJson = entry.book.raw.toString()
@@ -246,7 +254,7 @@ private fun CoverImage(book: Book) {
     } else {
         Box(Modifier.fillMaxSize(), Alignment.Center) {
             Icon(
-                Icons.AutoMirrored.Filled.MenuBook,
+                painterResource(R.drawable.ic_menu_book),
                 null,
                 Modifier.size(36.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -273,8 +281,7 @@ private fun EntryMenu(
                             withContext(Dispatchers.IO) {
                                 runCatching {
                                     val current = ComicRepository.entryFor(entry.book) ?: entry
-                                    current.favorite = !current.favorite
-                                    current.save()
+                                    ComicRepository.setFavorite(current.book, current.chapters, !current.favorite)
                                 }
                             }
                             onDismiss()
@@ -440,6 +447,10 @@ fun BookDetailScreen(onBack: () -> Unit, onOpenReader: () -> Unit) {
     var entry by remember { mutableStateOf<LibraryEntry?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
+    val syncRevision by CloudSync.revision.collectAsStateWithLifecycle()
+    LaunchedEffect(bookJson, syncRevision) {
+        if (book != null) entry = withContext(Dispatchers.IO) { ComicRepository.entryFor(book) }
+    }
     LaunchedEffect(bookJson, reload) {
         if (book == null) return@LaunchedEffect
         val result = runCatching {
@@ -477,8 +488,7 @@ fun BookDetailScreen(onBack: () -> Unit, onOpenReader: () -> Unit) {
                             scope.launch {
                                 withContext(Dispatchers.IO) {
                                     runCatching {
-                                        current.favorite = !current.favorite
-                                        current.save()
+                                        ComicRepository.setFavorite(current.book, current.chapters, !current.favorite)
                                     }
                                 }
                                 reload++
@@ -625,5 +635,6 @@ private fun openChapter(
     AppNav.entryJson = entry?.raw?.toString()
     AppNav.initialPage =
         if (entry?.progress?.chapter == chapter.key) entry.progress?.page ?: 0 else 0
+    AppNav.initialFraction = if (entry?.progress?.chapter == chapter.key) entry.progress?.fraction ?: 0f else 0f
     onOpenReader()
 }

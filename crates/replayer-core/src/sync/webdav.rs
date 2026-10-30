@@ -55,8 +55,8 @@ impl WebDav {
         if let Some(body) = body {
             request = request.body(body);
         }
-        let response = request.send().await.map_err(|_| {
-            anyhow::anyhow!("WebDAV 连接失败或超时 / WebDAV connection failed or timed out")
+        let response = request.send().await.map_err(|error| {
+            anyhow::Error::new(error).context("WebDAV 连接失败 / WebDAV connection failed")
         })?;
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
             anyhow::bail!("WebDAV 请求过于频繁，请稍后重试 / WebDAV rate limited; try later");
@@ -175,6 +175,7 @@ pub fn list_paths(xml: &str, directory: &Url) -> Result<Vec<String>> {
     Ok(paths.into_iter().collect())
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Report {
     pub journal: Journal,
     pub secrets: BTreeMap<String, String>,

@@ -1,5 +1,7 @@
 package dev.replayer.music
 
+import androidx.compose.ui.res.painterResource
+import dev.replayer.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -19,11 +21,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -113,7 +110,7 @@ fun PlayerScreen(onBack: () -> Unit) {
                     CircularProgressIndicator()
                 } else {
                     Icon(
-                        Icons.Filled.MusicNote,
+                        painterResource(R.drawable.ic_music_note),
                         null,
                         Modifier.size(84.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -174,7 +171,7 @@ private fun TransportControls(status: PlayStatus) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = { Playback.controller?.previous() }, modifier = Modifier.size(56.dp)) {
-            Icon(Icons.Filled.SkipPrevious, "上一首", Modifier.size(34.dp))
+            Icon(painterResource(R.drawable.ic_skip_previous), "上一首", Modifier.size(34.dp))
         }
         Spacer(Modifier.size(18.dp))
         IconButton(
@@ -187,7 +184,7 @@ private fun TransportControls(status: PlayStatus) {
                 .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(37.dp)),
         ) {
             Icon(
-                if (status == PlayStatus.Playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                if (status == PlayStatus.Playing) painterResource(R.drawable.ic_pause) else painterResource(R.drawable.ic_play_arrow),
                 if (status == PlayStatus.Playing) "暂停" else "播放",
                 Modifier.size(40.dp),
                 tint = MaterialTheme.colorScheme.onPrimary,
@@ -195,7 +192,7 @@ private fun TransportControls(status: PlayStatus) {
         }
         Spacer(Modifier.size(18.dp))
         IconButton(onClick = { Playback.controller?.next() }, modifier = Modifier.size(56.dp)) {
-            Icon(Icons.Filled.SkipNext, "下一首", Modifier.size(34.dp))
+            Icon(painterResource(R.drawable.ic_skip_next), "下一首", Modifier.size(34.dp))
         }
     }
 }

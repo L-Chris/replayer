@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::bail;
 use std::{cell::RefCell, collections::HashMap};
 
 #[derive(Default)]
@@ -45,9 +46,9 @@ fn saving_failure_rolls_back_key_changes_and_deletions() {
 }
 
 #[test]
-#[ignore = "Writes and removes a temporary test-only Windows credential"]
-#[cfg(windows)]
-fn windows_vault_roundtrip() {
+#[ignore = "Writes and removes a temporary test-only OS credential"]
+#[cfg(any(windows, target_os = "macos"))]
+fn system_vault_roundtrip() {
     let target = format!("replayer/test/{}", uuid::Uuid::new_v4());
     struct Cleanup(String);
     impl Drop for Cleanup {

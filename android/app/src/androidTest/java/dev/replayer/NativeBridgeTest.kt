@@ -47,15 +47,11 @@ class NativeBridgeTest {
     @Test
     fun malformedLibraryEntryIsRejected() {
         assertTrue(Native.initialize(testContext))
-        // `Entry` is `#[serde(default)]`, so `{}` and other partial objects are
-        // valid; a wrong-typed field is what actually fails deserialization and
-        // must surface as the core's bilingual "invalid entry" message.
-        val error =
-            assertThrows(IllegalStateException::class.java) {
-                Native.nativeLibrarySave("""{"favorite":"not-a-bool"}""")
-            }
+        val error = assertThrows(IllegalStateException::class.java) {
+            Native.nativeLibraryUpdate("not JSON", "{}")
+        }
         val message = error.message ?: ""
-        assertTrue("unexpected message: $message", message.contains("书架记录") || message.contains("library entry"))
+        assertTrue("unexpected message: $message", message.contains("漫画记录") || message.contains("comic book"))
         assertNotImplementationFailure(message)
     }
 }

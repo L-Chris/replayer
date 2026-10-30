@@ -7,21 +7,25 @@ use jni::{
     sys::{jbyteArray, jint, jstring},
 };
 use replayer_core::{
-    comics::{self, Book, Chapter, Detail, cache, library::Library, source::ComicSource},
+    comics::{
+        self, Book, Chapter, Detail, cache,
+        library::Library,
+        source::{ComicSource, Sources},
+    },
     jobs,
 };
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-/// Android ships Komiic only; aggregator providers stay desktop-exclusive.
-fn source() -> Result<&'static Arc<dyn ComicSource>> {
-    static SOURCE: OnceLock<Result<Arc<dyn ComicSource>, String>> = OnceLock::new();
+/// Share desktop routing for synced books; discovery still starts with Komiic.
+fn source() -> Result<&'static Arc<Sources>> {
+    static SOURCE: OnceLock<Result<Arc<Sources>, String>> = OnceLock::new();
     SOURCE
-        .get_or_init(|| comics::source::Komiic::connect().map_err(|error| error.to_string()))
+        .get_or_init(|| Sources::connect().map_err(|error| error.to_string()))
         .as_ref()
         .map_err(|error| anyhow!("{error}"))
 }
-fn library() -> Result<&'static Mutex<Library>> {
+pub(crate) fn library() -> Result<&'static Mutex<Library>> {
     static LIBRARY: OnceLock<Result<Mutex<Library>, String>> = OnceLock::new();
     LIBRARY
         .get_or_init(|| {
@@ -32,13 +36,69 @@ fn library() -> Result<&'static Mutex<Library>> {
         .as_ref()
         .map_err(|error| anyhow!("{error}"))
 }
-fn locked<T>(guard: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
+pub(crate) fn locked<T>(guard: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
     guard
         .lock()
         .map_err(|_| anyhow!("comic library lock poisoned"))
 }
 fn parse_book(value: &str) -> Result<Book> {
     serde_json::from_str(value).map_err(|_| anyhow!("无效漫画记录 / Invalid comic book"))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_replayer_Native_nativeKomiicConfigure(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+    config: JString<'_>,
+) -> jstring {
+    let result = guard(|| {
+        let value: Value = serde_json::from_str(&text(&mut env, &config)?)?;
+        let mut settings: comics::source::KomiicAccount = serde_json::from_value(value.clone())?;
+        settings.password = value["password"].as_str().unwrap_or_default().into();
+        let source = source()?.komiic();
+        source.configure_account(settings)?;
+        json_string(&mut env, &serde_json::to_value(source.auth_status())?)
+    });
+    failure(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_replayer_Native_nativeKomiicStatus(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+) -> jstring {
+    let result = guard(|| {
+        json_string(
+            &mut env,
+            &serde_json::to_value(source()?.komiic().auth_status())?,
+        )
+    });
+    failure(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_replayer_Native_nativeKomiicLogin(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+) -> jstring {
+    let result = guard(|| {
+        let status = jobs::block_on(source()?.komiic().login())?;
+        json_string(&mut env, &serde_json::to_value(status)?)
+    });
+    failure(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_replayer_Native_nativeKomiicLogout(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+) -> jstring {
+    let result = guard(|| {
+        let source = source()?.komiic();
+        jobs::block_on(source.logout())?;
+        json_string(&mut env, &serde_json::to_value(source.auth_status())?)
+    });
+    failure(&mut env, result)
 }
 
 #[unsafe(no_mangle)]
@@ -49,7 +109,13 @@ pub extern "system" fn Java_dev_replayer_Native_nativeComicSearch(
 ) -> jstring {
     let result = guard(|| -> Result<jstring> {
         let keyword = text(&mut env, &keyword)?;
-        let groups = jobs::block_on(source()?.search(&keyword))?;
+        let provider = source()?
+            .providers()
+            .into_iter()
+            .find(|(site, _)| site.id == "komiic")
+            .ok_or_else(|| anyhow!("Komiic is unavailable"))?
+            .1;
+        let groups = jobs::block_on(provider.search(&keyword))?;
         let value = groups
             .iter()
             .map(|group| -> Result<Value> {
@@ -191,16 +257,39 @@ pub extern "system" fn Java_dev_replayer_Native_nativeLibraryEntries(
     failure(&mut env, result)
 }
 
+/// Apply only explicitly edited fields to the latest row, so reader writes do
+/// not restore stale favorites/read sets after a concurrent cloud pull.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_replayer_Native_nativeLibrarySave(
+pub extern "system" fn Java_dev_replayer_Native_nativeLibraryUpdate(
     mut env: JNIEnv<'_>,
     _: JClass<'_>,
-    value: JString<'_>,
+    book: JString<'_>,
+    changes: JString<'_>,
 ) {
     let result = guard(|| -> Result<()> {
-        let entry = serde_json::from_str(&text(&mut env, &value)?)
-            .map_err(|_| anyhow!("无效书架记录 / Invalid library entry"))?;
-        locked(library()?)?.save(entry)
+        let book = parse_book(&text(&mut env, &book)?)?;
+        let changes: Value = serde_json::from_str(&text(&mut env, &changes)?)?;
+        let mut library = locked(library()?)?;
+        let mut entry = library
+            .get(&book.key())
+            .cloned()
+            .ok_or_else(|| anyhow!("Comic is not shelved"))?;
+        if let Some(favorite) = changes["favorite"].as_bool() {
+            entry.set_favorite(favorite);
+        }
+        if let Some(progress) = changes.get("progress") {
+            let progress: comics::library::Progress = serde_json::from_value(progress.clone())?;
+            ensure!(
+                progress.fraction.is_finite() && (0.0..=1.0).contains(&progress.fraction),
+                "Invalid comic progress"
+            );
+            if changes["completed"].as_bool().unwrap_or(false) {
+                entry.mark_read(&progress.chapter);
+            }
+            entry.progress = Some(progress);
+            entry.last_read = comics::now();
+        }
+        library.save(entry)
     });
     failure(&mut env, result);
 }

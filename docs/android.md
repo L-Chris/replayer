@@ -4,7 +4,91 @@ Android 端复用桌面版的 `replayer-core`：Rust 核心逻辑不变，通过
 `crates/replayer-android` 的 JNI 桥接暴露给 Kotlin/Compose 应用。remdia 引擎
 静态链接进唯一的业务库 `libreplayer_android.so`；AAR 里的独立
 `libremdia_sdk.so` 被 Gradle packaging 排除（`android-dev.py audit` 持续校验）。
-首期范围为漫画（Komiic 单源）与音乐播放。
+漫画搜索先使用 Komiic；从桌面同步的漫画通过共享 Sources 注册表按提供商路由。
+同时支持音乐播放、在线歌曲收藏和与桌面兼容的云同步。
+
+## Komiic 账号与自动登录
+
+Android 入口：漫画页“源设置”；桌面入口：设置 → 漫画 → Komiic 账号。
+填写注册邮箱和密码，选择“自动登录”，点击“保存并登录”。显示昵称、登录
+状态及官网返回的图片用量。未配置账号时保留游客模式。关闭自动登录后仍可
+手动登录本次会话；重启后恢复游客模式。“退出并清除密码”保留邮箱，关闭
+自动登录并删除本机密码，即使远端退出请求失败，本地也已退出。
+
+- 共用 `replayer-core::comics::source::Komiic` 的账号会话，不在两端各写一套
+  登录协议。官网 `/api/login` 接收邮箱和原始密码，通过 Cookie 维持会话；
+  `/auth/refresh` 刷新，GraphQL `account` 确认已登录。
+- Windows 使用 Credential Manager，macOS 使用系统 Keychain（明确关闭
+  Keychain 云同步），Android 复用 KeyStore 保护的 AES-GCM 凭据存储。
+  邮箱和自动登录选项存本机设置，密码不写明文 JSON、SavedState 或日志。
+  Komiic 账号、密码和会话 Cookie 均不参与 WebDAV / API Key 同步。
+- Cookie 只驻留内存。启动后在首次 Komiic 请求时按需自动登录；有效期内
+  复用会话，并发请求共用一次登录/刷新。显式会话失效时最多恢复并重试一次；
+  刷新令牌失效才回退密码登录。网络失败自动退避，错误密码、未激活账号或
+  需要额外验证时暂停自动尝试，修改后可手动重试。
+- 每次切换账号创建独立 HTTP 客户端和 Cookie 容器；旧请求不能更新当前
+  会话或额度。登录后丢弃游客额度，按账号额度重新计算；CDN 图片凭证过期
+  仍走原有一次换票流程，403/402 不会被当作登录失败反复提交密码。
+- 测试账号只由显式启用的测试读取 `.env` 中 `KOMMIC_ACCOUNT` 和
+  `KOMMIC_PASSWORD`，应用不会自动导入这两个环境变量。Android 实测凭据
+  经 stdin 写入 `run-as` 私有缓存，测试结束删除，不放入 APK、命令参数
+  或测试报告。真实测试不调用远端退出，避免影响用户其他客户端。
+
+验证（2026-10-30）：桌面/共享核心 **111 + 46 = 157 passed**；额外的
+macOS Keychain 往返和真实账号登录/刷新测试通过。7 项账号模拟测试覆盖并发、
+刷新回退、错误密码/激活/限流、账号切换、手动登录及 401/403/402 隔离；原有
+游客搜索、换票与离线缓存测试保留。Android API 35 在线回归 **23 passed /
+1 项真实账号用例未附凭据跳过**（`smoke-20261030T115710Z`），另附凭据单跑
+真实账号 **1/1 passed**。API 28 账号离线测试 **2 passed / 1 项在线用例未启用**
+（含凭据恢复与退出清密），另含真实账号的 JNI 测试 **2/2 passed**。
+Windows 凭据接口沿用现有实现，本轮没有 Windows 设备实测。
+
+本功能本地 release APK **11,480,777 bytes / 10.95 MiB**，较云同步版本
+增加 **184.5 KiB**；SHA-256
+`bcba57d2f8c50bde6006cee4b1f77a4568c1ac66049bf05e265bcae156e4485a`。
+audit **13/13**（JNI **32/32**、ELF/ZIP 16 KB 对齐），API 35 / API 28
+release 安装启动通过。没有单独复测 release 变体的在线登录（instrumentation
+挂 debug 变体）。测试结束删除设备凭据缓存并关闭临时 API 28 AVD，保留
+原有 emulator-5554 运行最终 release。代码和构建产物尚未推送或发布。
+
+## 云同步
+
+入口：音乐或漫画页右上角“云同步”。选择与桌面相同的 WebDAV 提供商，填写
+地址、用户名、应用密码并保存；可以先“测试连接”，再“立即同步”。设备 ID
+由本机生成并持久保存，不从远端导入。同步 API Key 时，两端填写相同的独立
+同步口令（至少 12 字符）。连接测试只创建、读取、删除随机探测对象，不触碰
+已有设备文档。
+
+- 协议完全复用 `replayer-core::sync`：`replayer/v1/devices/<UUID>.json`、
+  向量时钟、删除标记、ETag 条件写入、AES-256-GCM/PBKDF2 的 v1 密钥封装。
+  桌面 `src/sync/mod.rs` 只重新导出共享模块，漫画快照/导入也使用同一份代码。
+- 与桌面一致，同步漫画收藏（含曾收藏后取消的已跟踪记录）、章节列表、已读/
+  更新标记、阅读进度；同步在线歌曲收藏、播放进度、音源和音质选项。
+  未收藏且从未跟踪的本地历史、音视频文件、下载路径和缓存不上传。
+- Android 添加歌曲收藏入口和收藏列表；跨设备收藏先显示元数据，下载后播放。
+  阅读进度中的 fraction 与桌面一样表示当前页内的位置；滚到最后一张已解码
+  页的底部才标记章节读完，打开章节本身不会清除未读更新。
+- 本地漫画修改通过字段补丁写入最新 SQLite 记录，不用旧页面对象覆盖云端
+  刚合并的收藏/已读状态。同步请求返回后重新捕获期间发生的本地编辑，再合并；
+  需要继续上传时显示“等待同步”，未完成的操作写入按账户隔离的本地日志。
+- 启动、回到前台、手动触发时同步；前台每 5 分钟检查，普通变更合并 5 秒，
+  进度变更合并 30 秒；退出前台时尝试提交待处理变化。错误自动退避 5 分钟，
+  手动同步可立即重试。进程被系统终止后从下次启动继续，云同步没有单独的常驻后台服务。
+- WebDAV 密码、独立口令和 API Key 使用 Android KeyStore 保护的 AES-GCM
+  凭据存储；旧音乐明文偏好在首次启动时迁移并移除。草稿口令不写 SavedState，
+  `allowBackup` 关闭，避免系统备份复制设备身份和本机凭据。
+- 手机暂未实现的 AI/字幕选项保留在合并日志中，不产生删除操作。开启 API Key
+  同步后，未实现提供商的密钥也保留在本机加密分区，防止下一轮上传空值覆盖。
+  本机登录密码和同步口令从不写入远端文档。
+- 同步完成后，书架/详情和歌曲收藏列表通过 revision 自动刷新；当前正在播放
+  或阅读的位置不会被远端进度强制跳转，下次打开时恢复合并后的进度。
+
+验证：共享 Rust 测试 **111 + 39 = 150 passed**，含桌面→手机→桌面模拟
+WebDAV 双向往返、离线取消、并发编辑、未实现字段及密钥保护。Android API 35
+在线 smoke **20/20 passed，无 skip**（`smoke-20261030T110406Z`），含真实
+漫画流程、云设置导航、KeyStore 随机 nonce、DAV 连接探测、JNI 完整往返与
+应用协调器上传收藏/加密 API Key。API 28 离线 smoke **18 passed / 2 项在线用例未启用**（`smoke-20261030T110252Z`）。
+未使用个人 WebDAV 凭据测试真实网盘服务。
 
 ## 工具链
 
@@ -21,7 +105,7 @@ Android 端复用桌面版的 `replayer-core`：Rust 核心逻辑不变，通过
 ./scripts/android-dev.py audit     # APK 内容审计（DEX/JNI/对齐/keep 规则）
 ```
 
-未实现的子命令（如 `measure`）会显式报错，不会静默通过。构建失败不发布
+`measure` 可记录构建、包体和内存基线；不支持的命令会显式报错。构建失败不发布
 APK；`run`/`smoke` 拒绝安装比源码旧的 APK（可用 `--allow-stale` 覆盖）。
 所有产物与报告位于本仓库 `target/` 下：
 
@@ -58,12 +142,12 @@ platform-tools 36.0.2）。SDK 自带的 adb 37.0.1 在本机出现过 libunwind
   certificate: Revoked`），而同一证书 Java 平台校验器接受。0.2.0（PR #253）
   在 AAR 内携带 network security config：基础配置仍禁止 cleartext，仅对 CCADB
   生成的 CA CRL 主机（如 `c.pki.goog`、`*.c.lencr.org`）放行 HTTP，使吊销
-  检查能经 CRL 完成。诊断证据见 `NetworkDiagnosticsTest`（进程内 PKIX 复现 +
-  `replayer-rust` 日志桥输出平台校验器原始消息）。
+  检查能经 CRL 完成。问题定位时使用过进程内 PKIX 复现与 `replayer-rust` 日志桥。
+  修复后删除了反射 companion 私有字段及复刻 PKIX 的临时测试，保留通用
+  `NetworkDiagnosticsTest` 分层诊断和真实漫画流程。
 - reqwest 的环境代理匹配器（`HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`）默认编译
-  启用（hyper-util `Matcher::from_env`，不受 feature 门控）；replayer-core 另
-  启用 `system-proxy` feature 与上游默认特性集对齐，在 macOS/Windows 桌面端
-  额外读取系统代理配置（Android 上无效果）。
+  启用，不依赖 `system-proxy` feature。core 不为 Android 排障额外启用该
+  feature；它只影响 macOS/Windows 的系统代理配置读取。
 
 ## JNI 约定
 
@@ -71,7 +155,7 @@ platform-tools 36.0.2）。SDK 自带的 adb 37.0.1 在本机出现过 libunwind
   Java 异常，测试据此区分实现缺陷与外部失败。
 - 数据交换使用 JSON 字符串（`JSONTokener` 解析）；页图/封面使用图像容器协议：
   metadata JSON（含 `tiles` 布局）+ RGBA 负载字节数组。
-- Kotlin `external` 声明与 `.so` 导出由 `audit` 逐一对账（当前 24/24）。
+- Kotlin `external` 声明与 `.so` 导出由 `audit` 逐一对账（当前 32/32）。
 
 ## 测试
 
@@ -92,12 +176,11 @@ instrumentation 套件位于 `android/app/src/androidTest/java/dev/replayer/`：
 TLS/HTTP→native reqwest 错误链）。
 
 `--proxy http://10.0.2.2:<端口>` 会让 `ProxyTestRunner` 在测试进程启动时导出
-`HTTPS_PROXY` 等环境变量（依赖 replayer-core 的 reqwest `system-proxy`
-feature 与 hyper-util 环境代理匹配器）；`ProxyTestRunner` 在不传参时是空操作。
+`HTTPS_PROXY` 等环境变量（使用 hyper-util 默认的环境代理匹配器）；`ProxyTestRunner` 在不传参时是空操作。
 另一个候选是启动模拟器时使用官方 `emulator -http-proxy http://127.0.0.1:<端口>`
 （宿主 emulator 进程级代理，对 guest 透明，原生 TCP 也生效）；两者不要同时
-使用，避免双重代理。哪条路径真正可达以 `NetworkDiagnosticsTest` 的分层报告
-为准，尚在验证中。
+使用，避免双重代理。应用进程已通过下述 P0 在线验收；历史 shell/run-as
+探测结果不能用作应用进程的结论。
 
 MainActivity 通过 `testTagsAsResourceId`（`androidx.compose.ui.semantics`，
 需 `@OptIn(ExperimentalComposeUiApi::class)`）把 testTag 原样发布为
@@ -206,3 +289,52 @@ API 28 实测发现平台缺陷并已规避（remdia-api28 AVD）：
 变体；release 的 companion 类与 network security config 已由 audit/aapt2
 静态证实，`run` 证实 nativeInit 成功）。历史报告见 `target/android-review/`、
 `target/android-audit/` 中的 JSON。
+
+## 代码审核后的精简
+
+- 用七个独立 Material Design 矢量资源替代 `material-icons-extended`，仅保留
+  核心图标库；移除未使用的 viewmodel-compose 和 UI Automator 测试依赖。
+- 删除证书问题定位期间的私有字段反射和 PKIX 复刻；默认平台验证及真实
+  reqwest 请求仍覆盖 TLS，不增加证书绕过分支。
+- JNI 图片分片直接写入 Java 数组，不再构造两份完整 native 负载；删除没有
+  Kotlin 调用者的图片 path/hash 元数据。Kotlin 仍将长图拼成整幅 Bitmap，
+  因此这次只降低传输临时内存，不能宣称已经实现视口分片渲染。
+- 阅读器只使用与源策略一致的受限 IO dispatcher，删除重复且无法扩容的
+  Semaphore；取消加载后不再回填缓存。修正页图宽高比。
+- 开发脚本的进程超时覆盖输出读取，显式 NDK 参数传递给统一构建脚本。
+  `audit` 使用 SDK zipalign 校验 ZIP 对齐，不再维护重复的 ZIP 本地头解析；
+  DEX 类索引和包体分项统计由 audit/measure 共用。发布产物安装前校验哈希。
+- 宿主工具回归：`python3 -m unittest discover -s scripts/tests -p test_android_dev.py -v`。
+  `smoke` 只支持 debug instrumentation，release 使用 run/audit。
+
+`measure --cold` 只清除桥接 crate 和 Gradle 输出，保留依赖编译缓存；历史
+33.2s 是局部重建数据，不代表首次构建或完整 CI 冷构建。
+
+审核后验证（2026-10-30）：
+
+- Android target cargo check 无警告，debug/release 完整构建通过。
+- API 35/4 KB 在线 smoke **14/14 passed，无 skip**（包括真实漫画全流程、
+  图片像素、播放 EOF 和新增 PageFetcher 并发回归）；原始报告
+  `target/android-review/smoke-20261030T103055Z.json`。
+- 宿主工具回归 4/4 passed；桌面 122 + 26 passed，26 ignored；fmt/diff 检查通过。
+- audit 使用 SDK ZIP 对齐校验，删除重复的手工校验后为 **13/13**，不与历史
+  14 项统计混用。release API 35 安装启动通过；本轮未重跑 API 28/16 KB 设备。
+- debug DEX 从约 52.7 MiB / 24180 类减至 **22.3 MiB / 13074 类**。
+  本轮观察到增量 APK 为 282.7 MiB，但有效条目压缩大小合计仅约 137.6 MiB；
+  仅删除 Gradle 的 debug APK 输出后重新打包即降为 **137.7 MiB**，相对上一轮
+  167.9 MiB 基线减少约 30 MiB。逐条目 SHA-256 比较确认重新打包前后应用负载
+  完全相同（排除签名元数据），因此这次多余空间来自增量 ZIP，不是 native
+  代码增长。比较包体应使用干净打包产物，不必清空 Cargo 依赖缓存。
+- release APK **9,499,205 bytes / 9.06 MiB**（上一轮 9,455,546 bytes / 9.02 MiB）；
+  R8 本来就会删除未使用图标，裁剪扩展库的收益主要体现在 debug 和构建输入。
+  少量增量包含独立矢量资源及其加载支持、许可证和功能修正。
+  最终 release SHA-256：
+  `30d3a6da66b1193a5b6dc5a579c2813c5b78fb6ab6233cb6a9be0f1a99c7c5ec`。
+- 本轮未测长图峰值内存；删除 native 全量拷贝不等于实测出等量 PSS 降幅。
+
+云同步版本发布构建验证：release APK 11,291,833 bytes / 10.77 MiB，
+SHA-256 `224e293b47889c09c987af01dcd8fe489bd33507659ec864e0390cf431e5de84`。release audit 13/13（JNI 28/28），API 35 安装
+启动无初始化门、无崩溃；API 28 的 KeyStore/协议/应用协调器使用 debug
+instrumentation 验证。个人网盘与 release 变体的完整同步尚未实测；本轮未重跑
+16 KB 设备，已通过 ELF/ZIP 16 KB 对齐审计。临时 API 28 AVD 已关闭，保留
+原有 emulator-5554 运行最终 release。

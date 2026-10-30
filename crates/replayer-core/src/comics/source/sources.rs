@@ -3,10 +3,13 @@ use super::*;
 /// Provider identity is persisted in Book, independently of upstream site IDs.
 pub struct Sources {
     providers: Vec<(Site, Arc<dyn ComicSource>)>,
+    komiic: Arc<Komiic>,
 }
 impl Sources {
     pub fn connect() -> Result<Arc<Self>> {
+        let komiic = Arc::new(Komiic::at("https://komiic.com")?);
         Ok(Arc::new(Self {
+            komiic: komiic.clone(),
             providers: vec![
                 (
                     Site {
@@ -20,10 +23,13 @@ impl Sources {
                         id: "komiic".into(),
                         name: "Komiic".into(),
                     },
-                    Arc::new(Komiic::at("https://komiic.com")?),
+                    komiic,
                 ),
             ],
         }))
+    }
+    pub fn komiic(&self) -> &Arc<Komiic> {
+        &self.komiic
     }
     pub fn providers(&self) -> Vec<(Site, Arc<dyn ComicSource>)> {
         self.providers.clone()

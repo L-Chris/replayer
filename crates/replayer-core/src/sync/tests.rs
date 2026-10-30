@@ -17,6 +17,130 @@ fn journal(device: &str) -> Journal {
         ..Default::default()
     }
 }
+
+#[tokio::test]
+async fn desktop_and_mobile_exchange_comic_progress_without_erasing_unsupported_settings() {
+    use crate::comics::{
+        Book, Chapter,
+        library::{Entry, Progress},
+    };
+    let server = Server::new().await;
+    let desktop = server.settings();
+    let mobile = server.settings();
+    let mut book = Entry {
+        book: Book {
+            provider: "komiic".into(),
+            site: "komiic".into(),
+            url: "https://komiic.com/comic/1".into(),
+            ..Default::default()
+        },
+        chapters: vec![Chapter {
+            id: "one".into(),
+            ..Default::default()
+        }],
+        favorite: true,
+        favorited_at: 42,
+        ..Default::default()
+    };
+    book.new_unread.insert("one".into());
+    let mut desktop_journal = journal(&desktop.device_id);
+    let mut data = values(&[
+        ("ai/desktop/name", json!("Desktop provider")),
+        ("subtitle/bilingual", json!(true)),
+    ]);
+    portable::capture_comics(&mut data, &[book.clone()], None);
+    desktop_journal.capture(data, &Snapshot::new());
+    desktop_journal = webdav::run(desktop.clone(), desktop_journal, BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    let mobile_journal = journal(&mobile.device_id);
+    let report = webdav::run(mobile.clone(), mobile_journal.clone(), BTreeMap::new())
+        .await
+        .unwrap();
+    let applied = portable::finish_mobile(
+        mobile_journal,
+        report,
+        portable::mobile_defaults(),
+        BTreeMap::new(),
+        &BTreeMap::new(),
+        &[],
+    )
+    .unwrap();
+    assert!(applied.entries[0].new_unread.contains("one"));
+    let mut entries = applied.entries;
+    entries[0].mark_read("one");
+    entries[0].progress = Some(Progress {
+        chapter: "one".into(),
+        page: 0,
+        fraction: 0.75,
+        page_count: 1,
+    });
+    entries[0].last_read = 123;
+    let mut mobile_journal = applied.journal;
+    let data = portable::mobile_snapshot(applied.mobile, &mobile_journal, &entries).unwrap();
+    mobile_journal.capture(data, &portable::mobile_defaults());
+    webdav::run(mobile, mobile_journal, BTreeMap::new())
+        .await
+        .unwrap();
+    desktop_journal = webdav::run(desktop, desktop_journal, BTreeMap::new())
+        .await
+        .unwrap()
+        .journal;
+    let restored = portable::apply_comics(&desktop_journal.values(), &[book]).unwrap();
+    assert!(restored[0].read.contains("one"));
+    assert!(restored[0].new_unread.is_empty());
+    assert_eq!(restored[0].progress.as_ref().unwrap().fraction, 0.75);
+    assert_eq!(
+        desktop_journal.values()["ai/desktop/name"],
+        json!("Desktop provider")
+    );
+    assert_eq!(desktop_journal.values()["subtitle/bilingual"], json!(true));
+}
+
+#[test]
+fn mobile_finish_preserves_inflight_edits_and_opaque_desktop_keys() {
+    let song = crate::music_sources::OnlineSong {
+        source: "chksz-163".into(),
+        id: "7".into(),
+        ..Default::default()
+    };
+    let prefix = format!("song/{}", song.key());
+    let mut data = portable::mobile_defaults();
+    data.insert(format!("{prefix}/song"), json!(song));
+    data.insert(format!("{prefix}/favorite"), json!(true));
+    let mut local = journal("mobile");
+    local.capture(data.clone(), &portable::mobile_defaults());
+    let mut remote = local.clone();
+    remote.write("ai/desktop/name".into(), Some(json!("Keep me")));
+    let report = webdav::Report {
+        journal: remote,
+        secrets: BTreeMap::from([
+            ("music/chksz".into(), "old-key".into()),
+            ("ai/desktop".into(), "opaque-key".into()),
+        ]),
+    };
+    data.insert(format!("{prefix}/favorite"), json!(false));
+    let applied = portable::finish_mobile(
+        local,
+        report,
+        data,
+        BTreeMap::from([("music/chksz".into(), "edited-while-syncing".into())]),
+        &BTreeMap::from([("music/chksz".into(), "old-key".into())]),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(applied.mobile[&format!("{prefix}/favorite")], json!(false));
+    assert_eq!(applied.secrets["music/chksz"], "edited-while-syncing");
+    assert_eq!(applied.secrets["ai/desktop"], "opaque-key");
+    assert!(!applied.journal.observed.contains_key("ai/desktop/name"));
+    assert_eq!(
+        applied.journal.values()["ai/desktop/name"],
+        json!("Keep me")
+    );
+    let encoded = serde_json::to_string(&applied.journal).unwrap();
+    assert!(!encoded.contains("opaque-key") && !encoded.contains("edited-while-syncing"));
+}
 fn values(items: &[(&str, serde_json::Value)]) -> Snapshot {
     items
         .iter()
@@ -111,7 +235,7 @@ fn concurrent_cancel_wins_but_a_later_explicit_refavorite_is_allowed() {
 #[test]
 fn pending_changes_survive_restart_and_corrupt_journals_are_not_silently_replaced() {
     let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target/test-data")
+        .join("../../target/test-data/sync")
         .join(uuid::Uuid::new_v4().to_string());
     let path = directory.join("sync.json");
     let mut state = Journal::load(&path, "device").unwrap();

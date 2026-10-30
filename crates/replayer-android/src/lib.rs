@@ -17,6 +17,8 @@ mod comics;
 mod media;
 #[cfg(target_os = "android")]
 mod music;
+#[cfg(target_os = "android")]
+mod sync;
 
 #[cfg(target_os = "android")]
 remdia_android_platform::jni_on_load!();
@@ -122,15 +124,36 @@ pub(crate) fn container(
     metadata: &serde_json::Value,
     payload: &[u8],
 ) -> Result<jbyteArray> {
+    container_parts(env, metadata, &[payload])
+}
+
+/// Copy directly into the Java array, keeping native image tiles separate.
+/// No flattened payload or second full-size native container is needed.
+#[cfg(target_os = "android")]
+fn container_parts(
+    env: &mut JNIEnv<'_>,
+    metadata: &serde_json::Value,
+    payloads: &[&[u8]],
+) -> Result<jbyteArray> {
     let json = metadata.to_string();
-    let mut bytes = Vec::with_capacity(4 + json.len() + payload.len());
-    bytes.extend_from_slice(&(json.len() as u32).to_be_bytes());
-    bytes.extend_from_slice(json.as_bytes());
-    bytes.extend_from_slice(payload);
-    let array = env.new_byte_array(bytes.len() as i32)?;
-    // SAFETY: jbyte is i8; reinterpret for the JNI copy without reallocating.
-    let signed = unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<i8>(), bytes.len()) };
-    env.set_byte_array_region(&array, 0, signed)?;
+    let total = payloads.iter().try_fold(4usize + json.len(), |size, part| {
+        size.checked_add(part.len())
+    });
+    let total = i32::try_from(total.context("JNI container size overflow")?)
+        .context("JNI container exceeds Java array limit")?;
+    let array = env.new_byte_array(total)?;
+    let header = (json.len() as u32).to_be_bytes();
+    let mut offset = 0;
+    for bytes in [&header[..], json.as_bytes()]
+        .into_iter()
+        .chain(payloads.iter().copied())
+    {
+        // SAFETY: jbyte is i8; the borrowed slice remains valid for the copy.
+        let signed =
+            unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<i8>(), bytes.len()) };
+        env.set_byte_array_region(&array, offset, signed)?;
+        offset += bytes.len() as i32;
+    }
     Ok(array.into_raw())
 }
 
@@ -140,26 +163,26 @@ pub(crate) fn image_container(
     env: &mut JNIEnv<'_>,
     image: &replayer_core::comics::cache::CachedImage,
 ) -> Result<jbyteArray> {
-    let mut payload = Vec::new();
+    let mut payloads = Vec::with_capacity(image.bitmap.tiles.len());
     let mut tiles = Vec::new();
+    let mut offset = 0;
     for tile in &image.bitmap.tiles {
         tiles.push(serde_json::json!({
             "width": tile.width(),
             "height": tile.height(),
-            "offset": payload.len(),
+            "offset": offset,
         }));
-        payload.extend_from_slice(tile.bytes());
+        payloads.push(tile.bytes());
+        offset += tile.bytes().len();
     }
-    container(
+    container_parts(
         env,
         &serde_json::json!({
-            "path": image.path.display().to_string(),
-            "hash": image.hash,
             "width": image.bitmap.width,
             "height": image.bitmap.height,
             "tiles": tiles,
         }),
-        &payload,
+        &payloads,
     )
 }
 

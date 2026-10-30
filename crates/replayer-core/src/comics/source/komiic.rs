@@ -1,19 +1,21 @@
 use super::*;
 use anyhow::Context;
-use std::sync::atomic::{AtomicU64, Ordering};
+mod auth;
+use auth::Sessions;
+pub use auth::{AccountSettings, AuthStatus};
 
 fn number(value: &Value) -> Option<u64> {
     value.as_u64().or_else(|| value.as_str()?.parse().ok())
 }
+#[cfg(test)]
+mod auth_tests;
 #[cfg(test)]
 mod tests;
 
 #[derive(Clone)]
 pub struct Komiic {
     base: String,
-    client: reqwest::Client,
-    blocked_until: Arc<AtomicU64>,
-    quota_reset_at: Arc<AtomicU64>,
+    sessions: Arc<Sessions>,
 }
 impl Komiic {
     /// Single-provider entry point for hosts that do not bundle aggregators.
@@ -23,89 +25,91 @@ impl Komiic {
     pub(super) fn at(base: &str) -> Result<Self> {
         Ok(Self {
             base: base.trim_end_matches('/').into(),
-            client: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(25))
-                .redirect(reqwest::redirect::Policy::none())
-                .user_agent(concat!("replayer/", env!("CARGO_PKG_VERSION")))
-                .build()?,
-            blocked_until: Arc::new(AtomicU64::new(0)),
-            quota_reset_at: Arc::new(AtomicU64::new(0)),
+            sessions: Arc::new(Sessions::new(base)?),
         })
     }
-    fn quota_check(&self) -> Result<()> {
-        ensure!(
-            now() >= self.blocked_until.load(Ordering::Relaxed),
-            "Komiic 图片额度已用尽，请稍后重试 / Image quota exhausted; retry later"
-        );
-        Ok(())
+    pub fn configure_account(&self, settings: AccountSettings) -> Result<()> {
+        self.sessions.configure(&self.base, settings)
     }
+    pub fn auth_status(&self) -> AuthStatus {
+        self.sessions.current().status()
+    }
+    pub async fn login(&self) -> Result<AuthStatus> {
+        let session = self.sessions.current();
+        session.ensure_ready(&self.base, true).await?;
+        self.sessions.check(&session)?;
+        Ok(session.status())
+    }
+    pub async fn logout(&self) -> Result<()> {
+        let old = self.sessions.current();
+        self.configure_account(AccountSettings::default())?;
+        old.logout(&self.base).await
+    }
+    #[cfg(test)]
     fn quota_block(&self, seconds: u64) {
-        self.blocked_until.fetch_max(
-            now().saturating_add(seconds.clamp(60, 86400)),
-            Ordering::Relaxed,
-        );
-    }
-    fn reset_seconds(&self) -> u64 {
-        self.quota_reset_at
-            .load(Ordering::Relaxed)
-            .checked_sub(now())
-            .filter(|s| *s > 0)
-            .unwrap_or(3600)
-    }
-    fn quota_update(&self, limit: &Value) {
-        if let Some(seconds) = number(&limit["resetInSeconds"]) {
-            self.quota_reset_at
-                .store(now().saturating_add(seconds), Ordering::Relaxed);
-        }
-        if let (Some(max), Some(usage)) = (number(&limit["limit"]), number(&limit["usage"]))
-            && max > 0
-            && usage >= max
-        {
-            self.quota_block(self.reset_seconds());
-        }
+        self.sessions.current().quota_block(seconds);
     }
     async fn query(&self, operation: &str, query: &str, variables: Value) -> Result<Value> {
-        let response = self
-            .client
-            .post(format!("{}/api/query", self.base))
-            .header("Origin", &self.base)
-            .header("Referer", format!("{}/", self.base))
-            .json(&json!({"operationName":operation,"query":query,"variables":variables}))
-            .send()
-            .await
-            // Keep reqwest's source chain (timeout vs connect vs TLS vs proxy)
-            // for `{error:#}` at the JNI boundary; the context text stays the
-            // user-facing message.
-            .context("Komiic 连接失败 / Source request failed")?;
-        if response.status() == reqwest::StatusCode::PAYMENT_REQUIRED {
-            self.quota_block(self.reset_seconds());
-            self.quota_check()?;
-        }
-        ensure!(
-            response.status().is_success(),
-            "Komiic HTTP {} / Source unavailable",
-            response.status().as_u16()
-        );
-        let bytes = limited_body(response, 8 * 1024 * 1024).await?;
-        let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| anyhow!("Komiic 数据格式已变化 / Invalid source response"))?;
-        self.quota_update(&value["data"]["getImageLimit"]);
-        if let Some(errors) = value["errors"].as_array().filter(|e| !e.is_empty()) {
-            if errors
-                .iter()
-                .any(|e| e["extensions"]["code"] == "QUOTA_EXCEEDED")
-            {
-                self.quota_block(self.reset_seconds());
-                self.quota_check()?;
+        let session = self.sessions.current();
+        session.ensure_ready(&self.base, false).await?;
+        for attempt in 0..2 {
+            self.sessions.check(&session)?;
+            let epoch = session.epoch();
+            let response = session
+                .client
+                .post(format!("{}/api/query", self.base))
+                .header("Origin", &self.base)
+                .header("Referer", format!("{}/", self.base))
+                .json(&json!({"operationName":operation,"query":query,"variables":variables}))
+                .send()
+                .await
+                .context("Komiic 连接失败 / Source request failed")?;
+            let status = response.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 && session.configured() {
+                session.recover(&self.base, epoch).await?;
+                continue;
             }
-            anyhow::bail!("Komiic 请求未成功 / Source rejected the request");
+            if status == reqwest::StatusCode::UNAUTHORIZED && session.configured() {
+                session.reject(epoch);
+            }
+            if status == reqwest::StatusCode::PAYMENT_REQUIRED {
+                session.quota_block(session.reset_seconds());
+                session.quota_check()?;
+            }
+            ensure!(
+                status.is_success(),
+                "Komiic HTTP {} / Source unavailable",
+                status.as_u16()
+            );
+            let bytes = limited_body(response, 8 * 1024 * 1024).await?;
+            let value: Value = serde_json::from_slice(&bytes)
+                .map_err(|_| anyhow!("Komiic 数据格式已变化 / Invalid source response"))?;
+            self.sessions.check(&session)?;
+            if auth::unauthorized(&value) && attempt == 0 && session.configured() {
+                session.recover(&self.base, epoch).await?;
+                continue;
+            }
+            if auth::unauthorized(&value) && session.configured() {
+                session.reject(epoch);
+            }
+            session.quota_update(&value["data"]["getImageLimit"]);
+            if let Some(errors) = value["errors"].as_array().filter(|e| !e.is_empty()) {
+                if errors
+                    .iter()
+                    .any(|e| e["extensions"]["code"] == "QUOTA_EXCEEDED")
+                {
+                    session.quota_block(session.reset_seconds());
+                    session.quota_check()?;
+                }
+                anyhow::bail!("Komiic 请求未成功 / Source rejected the request");
+            }
+            ensure!(
+                value["data"].is_object(),
+                "Komiic 未返回数据 / Missing source data"
+            );
+            return Ok(value["data"].clone());
         }
-        ensure!(
-            value["data"].is_object(),
-            "Komiic 未返回数据 / Missing source data"
-        );
-        Ok(value["data"].clone())
+        anyhow::bail!("Komiic 会话已失效，请重新登录 / Sign in again")
     }
     fn id(url: &str, segment: &str) -> Result<String> {
         let url = http_url(url)?;
@@ -158,8 +162,12 @@ impl Komiic {
     }
     fn ticket(&self, kid: String, refreshable: bool) -> BoxFuture<'_, Result<ImageRequest>> {
         Box::pin(async move {
-            self.quota_check()?;
+            let session = self.sessions.current();
+            session.ensure_ready(&self.base, false).await?;
+            self.sessions.check(&session)?;
+            session.quota_check()?;
             let value = self.query("ImageTicket", "query ImageTicket($kids:[String!]!){getImageTickets(kids:$kids){kid url ticket expiresAt}}", json!({"kids":[kid]})).await?;
+            self.sessions.check(&session)?;
             let ticket = value["getImageTickets"]
                 .as_array()
                 .and_then(|a| a.iter().find(|v| v["kid"] == kid))
@@ -178,11 +186,12 @@ impl Komiic {
             ensure!(!header.is_empty(), "缺少图片凭证 / Missing image ticket");
             header.set_sensitive(true);
             request.headers.insert("x-image-ticket", header);
-            let source = self.clone();
+            let sessions = self.sessions.clone();
             request.on_status = Some(Arc::new(move |status| {
+                sessions.check(&session)?;
                 if status == reqwest::StatusCode::PAYMENT_REQUIRED {
-                    source.quota_block(source.reset_seconds());
-                    source.quota_check()?;
+                    session.quota_block(session.reset_seconds());
+                    session.quota_check()?;
                 }
                 Ok(())
             }));

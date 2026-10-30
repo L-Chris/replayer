@@ -11,3 +11,4 @@ pub mod media_backend;
 pub mod music_sources;
 pub mod paths;
 pub mod pixels;
+pub mod sync;

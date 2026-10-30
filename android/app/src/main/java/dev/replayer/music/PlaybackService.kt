@@ -41,6 +41,7 @@ class PlaybackService : Service(), AudioEngine.Listener, Playback.Controller {
     private var session: MediaSession? = null
     private var focusRequest: AudioFocusRequest? = null
     private val main = Handler(Looper.getMainLooper())
+    private var lastProgressSave = 0L
     private val ticker = object : Runnable {
         override fun run() {
             val current = Playback.state.value
@@ -48,6 +49,7 @@ class PlaybackService : Service(), AudioEngine.Listener, Playback.Controller {
                 val position = engine?.positionUs ?: current.positionUs
                 Playback.publish { it.copy(positionUs = position) }
                 updateSessionState()
+                if (android.os.SystemClock.elapsedRealtime() - lastProgressSave >= 30_000) saveProgress()
             }
             main.postDelayed(this, 500)
         }
@@ -94,6 +96,7 @@ class PlaybackService : Service(), AudioEngine.Listener, Playback.Controller {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        saveProgress()
         Playback.controller = null
         main.removeCallbacks(ticker)
         engine?.close()
@@ -131,6 +134,7 @@ class PlaybackService : Service(), AudioEngine.Listener, Playback.Controller {
             Playback.publish {
                 it.copy(status = PlayStatus.Paused, positionUs = engine?.positionUs ?: it.positionUs)
             }
+            saveProgress()
             refreshNotification()
             updateSessionState()
         }
@@ -139,6 +143,7 @@ class PlaybackService : Service(), AudioEngine.Listener, Playback.Controller {
     override fun seekTo(positionUs: Long) {
         engine?.seekTo(positionUs)
         Playback.publish { it.copy(positionUs = positionUs) }
+        saveProgress()
         updateSessionState()
     }
 
@@ -156,6 +161,7 @@ class PlaybackService : Service(), AudioEngine.Listener, Playback.Controller {
     }
 
     override fun stop() {
+        saveProgress()
         engine?.close()
         engine = null
         abandonFocus()
@@ -176,6 +182,7 @@ class PlaybackService : Service(), AudioEngine.Listener, Playback.Controller {
     // ---- engine lifecycle ----
 
     private fun openTrack(track: Track) {
+        saveProgress()
         engine?.close()
         val audio = AudioEngine(this)
         engine = audio
@@ -193,6 +200,12 @@ class PlaybackService : Service(), AudioEngine.Listener, Playback.Controller {
         audio.open(track.location)
         loadLyrics(track)
         startInForeground()
+    }
+
+    private fun saveProgress() {
+        val state = Playback.state.value
+        MusicRepository.savePlayback(this, state.track, state.positionUs, state.durationUs)
+        lastProgressSave = android.os.SystemClock.elapsedRealtime()
     }
 
     private fun loadLyrics(track: Track) {
@@ -225,8 +238,10 @@ class PlaybackService : Service(), AudioEngine.Listener, Playback.Controller {
             val title = info.title.ifEmpty { track.title }
             val artist = info.artist.ifEmpty { track.artist }
             val duration = if (info.durationUs > 0) info.durationUs else track.durationUs
+            val resume = MusicRepository.resumePosition(this, track).takeIf { it > 0 && it < duration - 3_000_000 } ?: 0
+            if (resume > 0) engine?.seekTo(resume)
             Playback.publish {
-                it.copy(status = PlayStatus.Playing, durationUs = duration)
+                it.copy(status = PlayStatus.Playing, durationUs = duration, positionUs = resume)
             }
             session?.setMetadata(
                 MediaMetadata.Builder()
@@ -258,6 +273,8 @@ class PlaybackService : Service(), AudioEngine.Listener, Playback.Controller {
     override fun onCompleted() {
         main.post {
             val state = Playback.state.value
+            MusicRepository.savePlayback(this, state.track, state.durationUs, state.durationUs)
+            Playback.publish { it.copy(positionUs = it.durationUs) }
             val target = state.index + 1
             if (target in state.queue.indices) {
                 playQueue(state.queue, target)

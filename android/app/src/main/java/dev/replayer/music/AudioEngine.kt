@@ -78,12 +78,12 @@ class AudioEngine(private val listener: Listener) {
                 val first = Native.nativeMediaRead(handle)
                 if (first == null) {
                     listener.onCompleted()
-                    release()
                     return@post
                 }
                 pump(Container(first))
             } catch (error: Exception) {
                 if (!closed.get()) listener.onError(error.message ?: "playback failed")
+            } finally {
                 release()
             }
         }

@@ -51,12 +51,7 @@ class LibraryEntry(val raw: JSONObject) {
         get() = raw.getJSONArray("chapters").let { array ->
             (0 until array.length()).map { Chapter(array.getJSONObject(it)) }
         }
-    var favorite: Boolean
-        get() = raw.optBoolean("favorite")
-        set(value) {
-            raw.put("favorite", value)
-            raw.put("favorited_at", if (value) now() else 0)
-        }
+    val favorite: Boolean get() = raw.optBoolean("favorite")
     val favoritedAt: Long get() = raw.optLong("favorited_at")
     val lastRead: Long get() = raw.optLong("last_read")
     val progress: Progress?
@@ -71,38 +66,7 @@ class LibraryEntry(val raw: JSONObject) {
         return (0 until array.length()).map { array.getString(it) }.toSet()
     }
 
-    private fun addString(name: String, value: String) {
-        val array = raw.optJSONArray(name) ?: JSONArray().also { raw.put(name, it) }
-        if (!stringSet(name).contains(value)) array.put(value)
-    }
 
-    private fun removeString(name: String, value: String) {
-        val array = raw.optJSONArray(name) ?: return
-        val kept = JSONArray()
-        for (i in 0 until array.length()) {
-            if (array.getString(i) != value) kept.put(array.getString(i))
-        }
-        raw.put(name, kept)
-    }
-
-    /** A chapter was opened: known to the shelf, no longer "new". */
-    fun markOpened(chapterKey: String) {
-        addString("known", chapterKey)
-        removeString("new_unread", chapterKey)
-    }
-
-    /** A chapter was read: keep history and unread badges consistent. */
-    fun markRead(chapterKey: String) {
-        addString("known", chapterKey)
-        addString("read", chapterKey)
-        removeString("new_unread", chapterKey)
-    }
-
-    fun save() = Native.nativeLibrarySave(raw.toString())
-
-    companion object {
-        fun now(): Long = System.currentTimeMillis() / 1000
-    }
 }
 
 data class SearchGroup(val siteId: String, val siteName: String, val books: List<Book>, val error: String?)
@@ -188,6 +152,7 @@ object ComicRepository {
         val chapters = JSONArray()
         detail.chapters.forEach { chapters.put(it.raw) }
         Native.nativeLibraryRefresh(detail.book.raw.toString(), chapters.toString())
+        dev.replayer.sync.CloudSync.changed()
     }
 
     fun setFavorite(book: Book, chapters: List<Chapter>, favorite: Boolean): LibraryEntry {
@@ -198,23 +163,17 @@ object ComicRepository {
             refreshIntoLibrary(Detail(book, chapters))
         }
         val entry = entryFor(book) ?: error("无法加入书架 / Could not shelve the book")
-        entry.favorite = favorite
-        entry.save()
-        return entry
+        Native.nativeLibraryUpdate(book.raw.toString(), JSONObject().put("favorite", favorite).toString())
+        dev.replayer.sync.CloudSync.changed()
+        return entryFor(book) ?: entry
     }
 
-    /** Persist reader progress and mark the chapter read. */
-    fun saveProgress(entry: LibraryEntry, chapter: Chapter, page: Int, fraction: Float, pageCount: Int) {
-        entry.raw.put(
-            "progress",
-            JSONObject()
-                .put("chapter", chapter.key)
-                .put("page", page)
-                .put("fraction", fraction.toDouble())
-                .put("page_count", pageCount),
-        )
-        entry.raw.put("last_read", LibraryEntry.now())
-        entry.markRead(chapter.key)
-        entry.save()
+    /** Update the latest row; only a completed chapter joins the read set. */
+    fun saveProgress(entry: LibraryEntry, chapter: Chapter, page: Int, fraction: Float, pageCount: Int, completed: Boolean = false) {
+        val progress = JSONObject().put("chapter", chapter.key).put("page", page)
+            .put("fraction", fraction.toDouble()).put("page_count", pageCount)
+        Native.nativeLibraryUpdate(entry.book.raw.toString(),
+            JSONObject().put("progress", progress).put("completed", completed).toString())
+        dev.replayer.sync.CloudSync.changed(progressOnly = true)
     }
 }

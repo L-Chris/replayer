@@ -7,7 +7,7 @@ use std::{sync::Arc, time::Duration};
 mod dm5;
 mod komiic;
 mod sources;
-pub use komiic::Komiic;
+pub use komiic::{AccountSettings as KomiicAccount, AuthStatus as KomiicAuthStatus, Komiic};
 pub use sources::Sources;
 
 /// UI and storage use normalized records, never provider-specific JSON.

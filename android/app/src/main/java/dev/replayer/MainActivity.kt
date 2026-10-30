@@ -1,5 +1,6 @@
 package dev.replayer
 
+import androidx.compose.ui.res.painterResource
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -13,9 +14,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -58,6 +56,7 @@ object AppNav {
     var bookJson: String? = null
     var chapterJson: String? = null
     var initialPage: Int = 0
+    var initialFraction: Float = 0f
     /** Shelf entry JSON so the reader can persist progress. */
     var entryJson: String? = null
 }
@@ -81,6 +80,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (Native.ready) dev.replayer.sync.CloudSync.foreground(true)
+    }
+
+    override fun onStop() {
+        dev.replayer.sync.CloudSync.foreground(false)
+        super.onStop()
     }
 
     private fun requestRuntimePermissions() {
@@ -166,7 +175,7 @@ private fun App() {
                                     restoreState = true
                                 }
                             },
-                            icon = { Icon(Icons.Filled.MusicNote, null) },
+                            icon = { Icon(painterResource(R.drawable.ic_music_note), null) },
                             label = { Text("音乐") },
                             modifier = Modifier.testTag("nav-music"),
                         )
@@ -179,7 +188,7 @@ private fun App() {
                                     restoreState = true
                                 }
                             },
-                            icon = { Icon(Icons.AutoMirrored.Filled.MenuBook, null) },
+                            icon = { Icon(painterResource(R.drawable.ic_menu_book), null) },
                             label = { Text("漫画") },
                             modifier = Modifier.testTag("nav-comics"),
                         )
@@ -190,15 +199,19 @@ private fun App() {
     ) { padding ->
         Box(Modifier.padding(padding)) {
             NavHost(nav, startDestination = "music") {
-                composable("music") { MusicHome(onOpenPlayer = { nav.navigate("player") }) }
+                composable("music") { MusicHome(onOpenPlayer = { nav.navigate("player") }, onOpenSync = { nav.navigate("sync") }) }
                 composable("comics") {
                     ComicHome(
+                        onOpenSourceSettings = { nav.navigate("komiic-account") },
+                        onOpenSync = { nav.navigate("sync") },
                         onOpenDetail = {
                             nav.navigate("detail")
                         },
                         onOpenReader = { nav.navigate("reader") },
                     )
                 }
+                composable("sync") { dev.replayer.sync.SyncScreen(onBack = { nav.popBackStack() }) }
+                composable("komiic-account") { dev.replayer.comic.KomiicAccountScreen(onBack = { nav.popBackStack() }) }
                 composable("player") { PlayerScreen(onBack = { nav.popBackStack() }) }
                 composable("detail") {
                     BookDetailScreen(

@@ -89,14 +89,6 @@ class NetworkDiagnosticsTest {
             }
         }
 
-        // Layer 5b: reproduce the companion verifier's second PKIX validation
-        // (revocation checker with SOFT_FAIL + ONLY_END_ENTITY). Any
-        // CertPathValidatorException there is what surfaces to Rust as
-        // `invalid peer certificate: Revoked` — this step recovers the real
-        // message/reason the companion drops, plus anchor-store sizes.
-        record("companion anchors", companionAnchors())
-        time("pkix validate komiic chain (companion-style)") { pkixValidateChain() }
-
         // Layer 6: the production path — JNI bridge → reqwest → komiic. The
         // exception message carries the core context plus reqwest's source
         // chain, which is the evidence for timeout vs connect vs TLS vs proxy.
@@ -127,74 +119,6 @@ class NetworkDiagnosticsTest {
                 "environment network failure (report above): $broken",
                 IllegalStateException(broken),
             )
-        }
-    }
-
-    /** Sizes of the trust anchors the companion AAR itself loads vs the platform store. */
-    private fun companionAnchors(): String =
-        try {
-            val verifier = Class.forName("org.rustls.platformverifier.CertificateVerifier")
-            val keystore =
-                verifier.getDeclaredField("systemKeystore").apply { isAccessible = true }
-                    .get(null) as java.security.KeyStore
-            val directory =
-                verifier.getDeclaredField("systemCertificateDirectory").apply { isAccessible = true }
-                    .get(null)
-            val platform = java.security.KeyStore.getInstance("AndroidCAStore").apply { load(null) }
-            "companion=${keystore.size()} dir=$directory platform=${platform.size()}"
-        } catch (error: Throwable) {
-            "$FAILED ${error.javaClass.simpleName}: ${error.message ?: error}"
-        }
-
-    /**
-     * Fetch komiic.com's live chain, clean it through the platform trust
-     * manager (as conscrypt does for HttpsURLConnection), then run the exact
-     * PKIX validation the companion performs, reporting the true cause.
-     */
-    private fun pkixValidateChain(): String {
-        val connection = URL("https://komiic.com/").openConnection() as HttpsURLConnection
-        return try {
-            connection.connectTimeout = CONNECT_TIMEOUT_MS
-            connection.readTimeout = READ_TIMEOUT_MS
-            connection.connect()
-            val chain =
-                connection.serverCertificates
-                    .filterIsInstance<java.security.cert.X509Certificate>()
-                    .toTypedArray()
-            val factory =
-                javax.net.ssl.TrustManagerFactory.getInstance(
-                    javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm(),
-                )
-            factory.init(null as java.security.KeyStore?)
-            val platformManager =
-                factory.trustManagers.filterIsInstance<javax.net.ssl.X509TrustManager>().first()
-            val cleaned =
-                android.net.http.X509TrustManagerExtensions(platformManager)
-                    .checkServerTrusted(chain, "ECDSA", "komiic.com")
-
-            val anchors = java.security.KeyStore.getInstance("AndroidCAStore").apply { load(null) }
-            val params = java.security.cert.PKIXParameters(anchors)
-            val validator = java.security.cert.CertPathValidator.getInstance("PKIX")
-            val revocation =
-                validator.revocationChecker as java.security.cert.PKIXRevocationChecker
-            revocation.options =
-                setOf(
-                    java.security.cert.PKIXRevocationChecker.Option.SOFT_FAIL,
-                    java.security.cert.PKIXRevocationChecker.Option.ONLY_END_ENTITY,
-                )
-            params.certPathCheckers = listOf(revocation)
-            params.isRevocationEnabled = true
-            val path =
-                java.security.cert.CertificateFactory.getInstance("X.509").generateCertPath(cleaned)
-            validator.validate(path, params)
-            "chain=${cleaned.size} leaf=${cleaned[0].subjectX500Principal} root=${cleaned.last().subjectX500Principal} OK"
-        } catch (error: java.security.cert.CertPathValidatorException) {
-            throw IllegalStateException(
-                "PKIX reason=${error.reason} index=${error.index} msg=${error.message} cause=${error.cause}",
-                error,
-            )
-        } finally {
-            connection.disconnect()
         }
     }
 

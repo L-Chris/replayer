@@ -1,4 +1,51 @@
 use super::*;
+
+#[test]
+#[ignore = "Uses explicitly supplied KOMMIC_ACCOUNT/KOMMIC_PASSWORD against the real service"]
+fn komiic_live_account_login_and_refresh() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let _ = dotenvy::from_path(root.join(".env"));
+    let email = std::env::var("KOMMIC_ACCOUNT").expect("KOMMIC_ACCOUNT is required");
+    let password = std::env::var("KOMMIC_PASSWORD").expect("KOMMIC_PASSWORD is required");
+    runtime().block_on(async {
+        let source = Komiic::at("https://komiic.com").unwrap();
+        source
+            .configure_account(AccountSettings {
+                email,
+                password,
+                auto_login: true,
+            })
+            .unwrap();
+        let status = source
+            .login()
+            .await
+            .expect("Live sign-in failed (credentials are never printed)");
+        assert_eq!(status.phase, "signed_in");
+        let session = source.sessions.current();
+        session
+            .recover(&source.base, session.epoch())
+            .await
+            .expect("Live refresh failed");
+        let value = source
+            .query(
+                "ReplayerVerifyAccount",
+                "query ReplayerVerifyAccount { account { id } }",
+                json!({}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            value["account"]["id"]
+                .as_str()
+                .is_some_and(|id| id != "0" && !id.is_empty())
+        );
+        // Discard only this test's local cookies. Do not sign the user out of other clients.
+        source
+            .configure_account(AccountSettings::default())
+            .unwrap();
+        assert_eq!(source.auth_status().phase, "guest");
+    });
+}
 #[cfg(test)]
 use crate::pixels::test_support::TestImageOutput;
 use axum::{
@@ -7,7 +54,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
-use std::{io::Cursor, sync::atomic::AtomicUsize};
+use std::{
+    io::Cursor,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 const KID: &str = "6eb1e407-fad3-4891-a6fb-0489d8af89c1";
 #[derive(Clone)]
@@ -205,7 +255,14 @@ fn komiic_expired_tickets_retry_once_and_402_stops_following_requests() {
             } else {
                 assert!(error.to_string().contains("quota"));
                 assert!(!error.to_string().contains("private info"));
-                assert!(source.blocked_until.load(Ordering::Relaxed) >= now() + 6000);
+                assert!(
+                    source
+                        .sessions
+                        .current()
+                        .blocked_until
+                        .load(Ordering::Relaxed)
+                        >= now() + 6000
+                );
                 assert!(
                     cache::fetch(
                         &directory,
