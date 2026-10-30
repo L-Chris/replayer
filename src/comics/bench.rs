@@ -4,11 +4,7 @@
 use crate::comics::cache::*;
 use crate::pixels::test_support::TestImageOutput;
 use anyhow::Result;
-use std::{
-    io::Cursor,
-    path::Path,
-    time::Instant,
-};
+use std::{io::Cursor, path::Path, time::Instant};
 
 fn full_decode_then_scale(bytes: &[u8], max_width: u32) -> Result<Bitmap> {
     let mut image = read_image(bytes)?;

@@ -20,6 +20,13 @@ fn runtime() -> Result<&'static tokio::runtime::Runtime> {
         .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
+/// Run a fallible future to completion on the shared worker runtime from a
+/// synchronous host thread (JNI/FFI entry points). Never call from a runtime
+/// worker.
+pub fn block_on<T>(future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+    runtime()?.block_on(future)
+}
+
 pub struct Job<T> {
     result: crossbeam_channel::Receiver<Result<T>>,
     cancel: Arc<AtomicBool>,

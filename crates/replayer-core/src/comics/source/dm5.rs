@@ -3,7 +3,7 @@
 use super::{http_url, limited_body};
 #[cfg(test)]
 use crate::pixels::test_support::TestImageOutput;
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use regex::Regex;
 use reqwest::{Client, Url};
 use std::{sync::OnceLock, time::Duration};
@@ -35,7 +35,7 @@ async fn text(client: &Client, url: Url, referer: &Url) -> Result<String> {
         .timeout(Duration::from_secs(15))
         .send()
         .await
-        .map_err(|_| anyhow!("动漫屋连接失败或超时 / DM5 request timed out"))?;
+        .context("动漫屋连接失败 / DM5 request failed")?;
     ensure!(
         response.status().is_success(),
         "动漫屋 HTTP {} / DM5 unavailable",

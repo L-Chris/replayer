@@ -2,6 +2,14 @@
 /dist
 /.deps
 /data
+/android/.gradle
+/android/build
+/android/app/build
+/android/local.properties
+/android/app/src/main/jniLibs
+/android/app/libs/*.aar
+/android/app/libs/maven/
+/android/app/libs/rustls-companion.properties
 /.env
 /.env.*
 !/.env.example

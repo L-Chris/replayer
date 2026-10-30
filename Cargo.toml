@@ -4,7 +4,9 @@ version = "0.5.0"
 edition = "2024"
 
 [workspace]
-members = ["crates/replayer-core"]
+members = ["crates/replayer-core", "crates/replayer-android"]
+# The Android bridge only builds for Android targets and adds Android-only
+# remdia features; keep it out of default desktop builds and tests.
 default-members = [".", "crates/replayer-core"]
 
 [dependencies]
@@ -24,7 +26,9 @@ rfd = "0.17.2"
 rtrb = "0.3"
 base64 = "0.22"
 futures-util = "0.3"
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "multipart", "query", "rustls"] }
+# system-proxy keeps reqwest's standard HTTP(S)_PROXY/NO_PROXY env support,
+# which the default-features-off list above would otherwise drop.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "multipart", "query", "rustls", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "macros", "sync"] }

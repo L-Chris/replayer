@@ -168,7 +168,6 @@ fn image_edit_uses_multipart_returns_a_cached_image_and_never_retries_400() {
     });
 }
 
-
 #[test]
 fn image_edit_uploads_jpeg_and_normalizes_provider_results_to_jpeg() {
     use axum::{Json, routing::post};
@@ -285,7 +284,6 @@ fn image_edit_uploads_jpeg_and_normalizes_provider_results_to_jpeg() {
     });
 }
 
-
 #[test]
 fn tall_images_are_tiled_and_translation_preserves_canvas_dimensions() {
     use futures_util::future::BoxFuture;
@@ -333,7 +331,6 @@ fn tall_images_are_tiled_and_translation_preserves_canvas_dimensions() {
     assert_eq!(count.load(Ordering::Relaxed), bands.len());
     std::fs::remove_dir_all(directory).unwrap();
 }
-
 
 #[test]
 #[ignore = "Uses IMAGE_MODEL and uploads one public manga page to the configured image editing service"]

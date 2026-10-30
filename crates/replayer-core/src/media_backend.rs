@@ -1,12 +1,13 @@
 //! Shared remdia entry point for playback, metadata and independent subtitle jobs.
-use anyhow::{Context, Result};
+#[cfg(not(target_os = "android"))]
+use anyhow::Context;
+use anyhow::Result;
 pub fn engine() -> Result<remdia::Engine> {
     #[cfg(target_os = "android")]
     {
         // Built-in packs (native, image, android framework bridge, SRC) are
         // statically registered; the embedding library's JNI_OnLoad and
         // Bridge.initialize must have run before opening sessions.
-        let _ = Context::context;
         remdia::Engine::bundled(256 * 1024 * 1024)
     }
     #[cfg(not(target_os = "android"))]

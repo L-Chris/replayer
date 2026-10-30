@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn number(value: &Value) -> Option<u64> {
@@ -15,6 +16,10 @@ pub struct Komiic {
     quota_reset_at: Arc<AtomicU64>,
 }
 impl Komiic {
+    /// Single-provider entry point for hosts that do not bundle aggregators.
+    pub fn connect() -> Result<Arc<dyn ComicSource>> {
+        Ok(Arc::new(Self::at("https://komiic.com")?))
+    }
     pub(super) fn at(base: &str) -> Result<Self> {
         Ok(Self {
             base: base.trim_end_matches('/').into(),
@@ -69,7 +74,10 @@ impl Komiic {
             .json(&json!({"operationName":operation,"query":query,"variables":variables}))
             .send()
             .await
-            .map_err(|_| anyhow!("Komiic 连接失败或超时 / Source request timed out"))?;
+            // Keep reqwest's source chain (timeout vs connect vs TLS vs proxy)
+            // for `{error:#}` at the JNI boundary; the context text stays the
+            // user-facing message.
+            .context("Komiic 连接失败 / Source request failed")?;
         if response.status() == reqwest::StatusCode::PAYMENT_REQUIRED {
             self.quota_block(self.reset_seconds());
             self.quota_check()?;

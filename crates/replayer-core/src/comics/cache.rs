@@ -1,5 +1,5 @@
 use super::*;
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use std::{
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -98,7 +98,7 @@ async fn download(
     let response = request
         .send()
         .await
-        .map_err(|_| anyhow!("图片连接失败或超时 / Image request timed out"))?;
+        .context("图片连接失败 / Image request failed")?;
     if !response.status().is_success() {
         return Err(ImageStatus(response.status()).into());
     }

@@ -1,5 +1,5 @@
 use super::*;
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use futures_util::{StreamExt, future::BoxFuture};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
@@ -144,7 +144,7 @@ impl MangaYun {
             .header("x-ym-sign", sign)
             .send()
             .await
-            .map_err(|_| anyhow!("漫画源连接失败或超时 / Comic source timed out"))?;
+            .context("漫画源连接失败 / Comic source request failed")?;
         let status = response.status();
         ensure!(
             status.is_success(),
