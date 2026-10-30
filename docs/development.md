@@ -86,6 +86,8 @@ The CLI uses saved provider/model settings, preserves absolute media timestamps 
 
 Release Rust builds use LTO, one codegen unit and stripped symbols. Debug previews keep their symbols. HTTP clients, cloud-sync encryption and SHA-256 hashing share AWS-LC; the application no longer directly depends on `ring` or `sha2`. WGPU enables only DX12 on Windows and Metal on macOS, preserving accessibility, fonts, clipboard support and the macOS window resize fix.
 
+Bundled SQLite keeps core SQL, transactions and WAL. `.cargo/config.toml` disables its unused FTS3/FTS5, R-tree and dbstat extensions through `LIBSQLITE3_FLAGS` for both desktop platforms. The comic library uses ordinary tables; no database migration or data-file rewrite is required. A macOS ARM64 comparison reduced machine code by about 0.42 MiB. Environment overrides of `LIBSQLITE3_FLAGS` can change these build options.
+
 Both platforms statically register remdia utility, system media/image and
 compatibility demux factories in replayer. Windows needs no SDK DLLs; macOS
 keeps only the separate LAME extension. The factories still compose independent
