@@ -353,7 +353,7 @@ jobs:
         run: |
           target/android-release/source/scripts/build-android.sh --release --assemble
           python3 scripts/package-android.py --apk target/android-release/source/target/android/release/replayer-release.apk --tag "$RELEASE_TAG" --output-directory dist/android
-          python3 scripts/android-dev.py audit --profile release --apk "dist/android/replayer-${RELEASE_TAG#v}-android-arm64-v8a.apk"
+          python3 scripts/android-dev.py audit --profile release --sdk "$ANDROID_HOME" --apk "dist/android/replayer-${RELEASE_TAG#v}-android-arm64-v8a.apk"
       - name: Remove temporary signing key
         if: always()
         run: rm -f target/android-release/signing.jks
