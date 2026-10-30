@@ -76,7 +76,9 @@ try {
     }
     # An existing desktop shortcut must be refreshed even if the task is unchecked.
     foreach ($relative in $retiredCodecFiles) {
-        Set-Content -LiteralPath (Join-Path $InstallDirectory $relative) -Value 'retired codec fixture' -Encoding ascii
+        $fixturePath = Join-Path $InstallDirectory $relative
+        New-Item -ItemType Directory -Path (Split-Path -Parent $fixturePath) -Force | Out-Null
+        Set-Content -LiteralPath $fixturePath -Value 'retired codec fixture' -Encoding ascii
     }
     Set-Content -LiteralPath $unrelatedPluginFile -Value 'preserve unrelated plugin files' -Encoding ascii
     Install-Fixture '!desktopicon'

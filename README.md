@@ -1,6 +1,6 @@
 # replayer
 
-A desktop app for watching videos, listening to music and reading comics, with optional AI subtitles and comic translation.
+A media app for watching videos, listening to music and reading comics, with optional desktop AI subtitles and comic translation.
 
 ## Features
 
@@ -11,7 +11,7 @@ A desktop app for watching videos, listening to music and reading comics, with o
 - **Online music.** Search supported music sources, choose a quality, and listen while downloading or save tracks for later.
 - **Magnet playback.** Choose a file from a magnet link and start watching or listening as it downloads.
 - **Sync between devices.** Use your own WebDAV storage for supported settings, favorites and progress, with optional encrypted API-key sync.
-- **Chinese and English interfaces**, full-screen viewing and controls that stay out of the way.
+- **Chinese and English desktop interfaces**, full-screen viewing and controls that stay out of the way.
 
 Online sources and AI features depend on their respective services. AI services require compatible models and may charge for requests.
 
@@ -24,10 +24,11 @@ Download a package from [Releases](https://github.com/L-Chris/replayer/releases)
 | Windows x64 | Installer, or a portable ZIP to extract and run |
 | macOS 15+ · Apple Silicon | `macos-aarch64` DMG or ZIP |
 | macOS 15+ · Intel | `macos-x86_64` DMG or ZIP |
+| Android 9+ · arm64 | `android-arm64-v8a.apk` for music, comics and WebDAV sync |
 
 On macOS, drag `replayer.app` into Applications. The app includes its playback dependencies. Downloaded builds are currently ad-hoc signed; macOS may ask you to allow the app in **System Settings → Privacy & Security**.
 
-**Platform notes:** Windows supports saved service credentials and installing updates from Settings → About. macOS credential storage is not implemented yet, which limits features requiring saved API keys or passwords; macOS updates are downloaded from Releases.
+**Platform notes:** Windows uses Credential Manager and supports installing updates from Settings → About. macOS uses Keychain; download updates from Releases. Android stores credentials with Android KeyStore protection and uses a persistent release signing key for APK updates. See [Android setup and development](docs/android.md) for supported features and signing details.
 
 Open a file or drop it onto the window to begin. Use **F11** for full screen and **Esc** to leave it. During media playback, **Space** pauses/resumes, the arrow keys seek and **M** toggles mute.
 

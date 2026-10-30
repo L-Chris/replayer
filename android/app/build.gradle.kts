@@ -20,6 +20,27 @@ val companionCoordinate =
         .getProperty("coordinate")
         ?: error("rustls-companion.properties has no coordinate")
 
+// Local credentials stay in an ignored, permission-restricted directory. CI
+// supplies the same fields through encrypted repository secrets.
+val releaseProperties = Properties().apply {
+    val path = rootProject.file("../.deps/android-signing/keystore.properties")
+    if (path.isFile) path.inputStream().use { load(it) }
+}
+fun signingValue(environment: String, property: String): String? =
+    System.getenv(environment)?.takeIf { it.isNotBlank() }
+        ?: releaseProperties.getProperty(property)?.takeIf { it.isNotBlank() }
+val releaseStore = signingValue("ANDROID_KEYSTORE_FILE", "storeFile")
+val releaseStorePassword = signingValue("ANDROID_KEYSTORE_PASSWORD", "storePassword")
+val releaseKeyAlias = signingValue("ANDROID_KEY_ALIAS", "keyAlias")
+val releaseKeyPassword = signingValue("ANDROID_KEY_PASSWORD", "keyPassword")
+val haveReleaseKey = listOf(releaseStore, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { it != null }
+val testSigning = System.getenv("REPLAYER_ANDROID_TEST_SIGNING") == "1"
+if (gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }) {
+    check(haveReleaseKey || testSigning) {
+        "Release signing is required; see docs/android.md. For local measurement only, set REPLAYER_ANDROID_TEST_SIGNING=1."
+    }
+}
+
 android {
     namespace = "dev.replayer"
     compileSdk = 35
@@ -34,6 +55,15 @@ android {
         testInstrumentationRunner = "dev.replayer.ProxyTestRunner"
     }
 
+    signingConfigs {
+        if (haveReleaseKey) create("production") {
+            storeFile = file(releaseStore!!)
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
+    }
+
     buildTypes {
         release {
             // R8 shrinking is part of the measured release baseline (size and
@@ -43,9 +73,11 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Measurement builds only: no release keystore exists yet, and an
-            // unsigned APK cannot be installed for the memory/boot checks.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = when {
+                haveReleaseKey -> signingConfigs.getByName("production")
+                testSigning -> signingConfigs.getByName("debug")
+                else -> null
+            }
         }
     }
 

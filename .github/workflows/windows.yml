@@ -1,16 +1,25 @@
-name: Desktop build and release
+name: Build and release
 on:
   push:
     branches: [main, feat/remdia-windows, feat/remdia-macos]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing stable tag to build and publish (optional)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
+env:
+  RELEASE_SOURCE_REF: ${{ inputs.release_tag || github.ref }}
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+  RELEASE_REF: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
 concurrency:
-  group: desktop-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: build-${{ inputs.release_tag || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') && inputs.release_tag == '' }}
 
 jobs:
   windows-runtime:
@@ -19,6 +28,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SOURCE_REF }}
       - name: Read pinned SDK revision
         id: sdk
         shell: pwsh
@@ -61,6 +72,18 @@ jobs:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SOURCE_REF }}
+      - name: Use the current installer test harness for release backfills
+        if: inputs.release_tag != ''
+        shell: pwsh
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          git fetch --depth 1 origin $env:WORKFLOW_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git show "$($env:WORKFLOW_SHA):scripts/test-installed-icons.ps1" | Set-Content -LiteralPath scripts/test-installed-icons.ps1 -Encoding utf8NoBOM
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -111,9 +134,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate release version
         shell: pwsh
-        env:
-          RELEASE_REF: ${{ github.ref }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
           $version = ($metadata.packages | Where-Object name -eq replayer).version
@@ -182,6 +202,8 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SOURCE_REF }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -190,7 +212,7 @@ jobs:
         run: |
           cargo fmt --all -- --check
           version=$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "replayer"))')
-          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+          if [[ "$RELEASE_REF" == refs/tags/* && "$RELEASE_TAG" != "v$version" ]]; then
             echo "Tag must be v$version to match Cargo.toml" >&2
             exit 1
           fi
@@ -249,14 +271,111 @@ jobs:
             dist/macos-${{ matrix.arch }}/SHA256SUMS-*.txt
           if-no-files-found: error
 
+  android:
+    name: Android (arm64-v8a)
+    if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # Use packaging tools from the workflow commit, but compile application
+      # code from the immutable release tag (also supports the v0.5.1 backfill).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+      - name: Validate release tag
+        run: python3 -c 'import os,re; assert re.fullmatch(r"v\d+\.\d+\.\d+", os.environ["RELEASE_TAG"]), "Expected a stable release tag"'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SOURCE_REF }}
+          path: target/android-release/source
+      - name: Read pinned SDK revision
+        id: sdk
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+          cargo = pathlib.Path('target/android-release/source/Cargo.toml').read_text()
+          revision = re.search(r'^remdia\s*=\s*\{[^}]*rev\s*=\s*"([a-f0-9]{40})"', cargo, re.M).group(1)
+          version = re.search(r'^version\s*=\s*"([^"]+)"', cargo, re.M).group(1)
+          assert os.environ['RELEASE_TAG'] == 'v' + version
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('revision=' + revision + '\n')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: L-Chris/remdia
+          ref: ${{ steps.sdk.outputs.revision }}
+          path: target/android-release/remdia
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            target/android-release/source/target
+            target/android-release/remdia/target
+          key: android-release-v1-${{ steps.sdk.outputs.revision }}-${{ hashFiles('target/android-release/source/Cargo.lock', 'target/android-release/source/android/**/*.gradle.kts') }}
+          restore-keys: android-release-v1-
+      - name: Install pinned Android tools
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          subprocess.run(['sdkmanager', 'ndk;28.2.13676358', 'platforms;android-35', 'build-tools;35.0.0'], input='y\n'*100, text=True, check=True)
+          PY
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+      - name: Build pinned remdia AAR
+        run: python3 target/android-release/remdia/scripts/build-android.py --abi arm64-v8a
+      - name: Restore signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          python3 - <<'PY'
+          import base64, os, pathlib
+          value = os.environ['ANDROID_KEYSTORE_BASE64']
+          assert value, 'Android release signing key is not configured'
+          path = pathlib.Path('target/android-release/signing.jks')
+          with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as output:
+              output.write(base64.b64decode(value, validate=True))
+          PY
+      - name: Build, sign and audit tagged APK
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ github.workspace }}/target/android-release/signing.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          target/android-release/source/scripts/build-android.sh --release --assemble
+          python3 scripts/package-android.py --apk target/android-release/source/target/android/release/replayer-release.apk --tag "$RELEASE_TAG" --output-directory dist/android
+          python3 scripts/android-dev.py audit --profile release --apk "dist/android/replayer-${RELEASE_TAG#v}-android-arm64-v8a.apk"
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f target/android-release/signing.jks
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replayer-${{ env.RELEASE_TAG }}-android-arm64-v8a
+          path: |
+            dist/android/*.apk
+            dist/android/SHA256SUMS-*.txt
+            dist/android/android-release.json
+          if-no-files-found: error
+
   publish:
-    needs: [build, macos]
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, macos, android]
+    if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
       - uses: actions/download-artifact@v4
         with:
           pattern: replayer-*
@@ -266,14 +385,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           # Canonical LF endings across the PowerShell and macOS manifests.
           tr -d '\r' < dist/SHA256SUMS.txt > dist/SHA256SUMS-windows-x86_64.txt
-          cat dist/SHA256SUMS-windows-x86_64.txt dist/SHA256SUMS-macos-*.txt > dist/SHA256SUMS.txt
+          cat dist/SHA256SUMS-windows-x86_64.txt dist/SHA256SUMS-macos-*.txt dist/SHA256SUMS-android-*.txt > dist/SHA256SUMS.txt
           (cd dist && sha256sum --check SHA256SUMS.txt)
-          assets=(dist/*.exe dist/*.zip dist/*.dmg dist/SHA256SUMS*.txt)
+          assets=(dist/*.exe dist/*.zip dist/*.dmg dist/*.apk dist/android-release.json dist/SHA256SUMS*.txt)
           if gh release view "$RELEASE_TAG" --json tagName >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
             gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG"
