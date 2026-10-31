@@ -59,7 +59,7 @@ Configure the service base URL and device Token in **Settings → Comics** (Andr
 
 Choose vertical scrolling, left-to-right or right-to-left pages. Zoom, page position and reading progress are saved. The chapter button opens the chapter list; the page slider and previous/next controls navigate within the book. A new favorite starts with the existing chapter list as its baseline; later unread additions produce update indicators.
 
-The device Token stays in this device’s OS credential vault and is excluded from WebDAV sync. Existing source passwords are no longer read or sent; configure those accounts on the service. Original pages and covers are cached. Clearing these caches in Settings preserves translations, favorites and history. Previously cached pages may remain readable when a source is unavailable or its image quota is exhausted. Some upstream sources require adapter updates or are unsupported.
+The device Token stays in this device’s OS credential vault and is excluded from WebDAV sync. Existing source passwords are no longer read or sent; configure those accounts on the service. The service returns third-party image links; Pordo downloads original pages and covers directly and caches them locally. Clearing these caches in Settings preserves translations, favorites and history. Previously cached pages may remain readable when a source is unavailable or its image quota is exhausted. Some upstream sources require adapter updates or are unsupported.
 
 ### Translate comic pages
 

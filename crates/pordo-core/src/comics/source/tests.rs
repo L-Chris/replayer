@@ -6,20 +6,22 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Clone)]
 struct Mock {
     book: Book,
     chapter: Chapter,
-    prepared: Arc<AtomicUsize>,
+    resolved: Arc<AtomicUsize>,
     images: Arc<AtomicUsize>,
     bytes: Vec<u8>,
+    image_url: String,
+    always_forbidden: Arc<AtomicBool>,
+    unsafe_headers: Arc<AtomicBool>,
 }
 fn view(book: &Book) -> Value {
     let mut v = serde_json::to_value(book).unwrap();
     v["comicId"] = json!(book.key());
-    v["coverAssetId"] = json!("cover-id");
     v
 }
 fn envelope(data: Value) -> Json<Value> {
@@ -42,6 +44,8 @@ async fn fixture() -> (Arc<Sources>, Mock, tokio::task::JoinHandle<()>) {
     crate::pixels::solid(12, 24, [11, 22, 33, 255])
         .write_to(&mut bytes, "png")
         .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
     let state = Mock {
         book: Book {
             provider: "mangayun".into(),
@@ -58,9 +62,12 @@ async fn fixture() -> (Arc<Sources>, Mock, tokio::task::JoinHandle<()>) {
             order: 1,
             kind: ChapterKind::Volume,
         },
-        prepared: Arc::new(AtomicUsize::new(0)),
+        resolved: Arc::new(AtomicUsize::new(0)),
         images: Arc::new(AtomicUsize::new(0)),
         bytes: bytes.into_inner(),
+        image_url: format!("{origin}/image"),
+        always_forbidden: Arc::new(AtomicBool::new(false)),
+        unsafe_headers: Arc::new(AtomicBool::new(false)),
     };
     let app=Router::new()
         .route("/api/v1/sources",get(||async{envelope(json!({"sources":[{"id":"mangayun","displayName":"MangaYun","kind":"comic","capabilities":{"search":true},"imagePolicy":null}]}))}))
@@ -75,20 +82,42 @@ async fn fixture() -> (Arc<Sources>, Mock, tokio::task::JoinHandle<()>) {
         }))
         .route("/api/v1/comics/{id}/chapters/{key}/pages",get(|State(s):State<Mock>,Path((id,key)):Path<(String,String)>|async move{
             assert_eq!(id,s.book.key()); assert_eq!(key,s.chapter.key());
-            envelope(json!({"pages":[{"index":0,"url":"https://images.example/page","assetId":"page-id"}],"imagePolicy":{"concurrency":2,"ahead":1,"behind":0,"retainCacheOnRefresh":true}}))
+            envelope(json!({"pages":[{"index":0,"url":"https://images.example/page"}],"imagePolicy":{"concurrency":2,"ahead":1,"behind":0,"retainCacheOnRefresh":true}}))
         }))
-        .route("/api/v1/assets/prepare",post(|State(s):State<Mock>,Json(body):Json<Value>|async move{
-            s.prepared.fetch_add(1,Ordering::Relaxed);assert_eq!(body["items"][0]["provider"],s.book.provider);
-            envelope(json!({"assets":[{"assetId":"prepared-id"}]}))
+        .route("/api/v1/images/resolve",post(|State(s):State<Mock>,Json(body):Json<Value>|async move{
+            let n = s.resolved.fetch_add(1,Ordering::Relaxed);assert_eq!(body["provider"],s.book.provider);
+            let headers = if s.unsafe_headers.load(Ordering::Relaxed) { json!({"authorization":"Bearer should-not-leak"}) } else { json!({"x-image-ticket":format!("ticket-{n}")}) };
+            envelope(json!({"url":s.image_url,"headers":headers,"expiresAt":null}))
         }))
-        .route("/api/v1/assets/{id}",get(|State(s):State<Mock>|async move{s.images.fetch_add(1,Ordering::Relaxed);([("content-type","image/png")],s.bytes)}))
         .layer(middleware::from_fn(auth)).with_state(state.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}/mounted", listener.local_addr().unwrap());
+    let base = format!("{origin}/mounted");
+    let image_state = state.clone();
     let task = tokio::spawn(async move {
-        axum::serve(listener, Router::new().nest("/mounted", app))
-            .await
-            .unwrap()
+        axum::serve(
+            listener,
+            Router::new().nest("/mounted", app).route(
+                "/image",
+                get(move |headers: axum::http::HeaderMap| {
+                    let s = image_state.clone();
+                    async move {
+                        assert!(
+                            !headers.contains_key("authorization"),
+                            "device token must never reach CDN"
+                        );
+                        assert!(!headers.contains_key("cookie"));
+                        assert!(headers.contains_key("x-image-ticket"));
+                        let n = s.images.fetch_add(1, Ordering::Relaxed);
+                        if n == 0 || s.always_forbidden.load(Ordering::Relaxed) {
+                            (axum::http::StatusCode::FORBIDDEN, "expired").into_response()
+                        } else {
+                            ([("content-type", "image/png")], s.bytes).into_response()
+                        }
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap()
     });
     let source = Sources::connect(&ServiceSettings {
         url: base,
@@ -131,7 +160,7 @@ fn empty_service_opens_old_favorites_preserves_keys_and_reuses_local_bytes() {
         .unwrap();
         assert_eq!((image.bitmap.width, image.bitmap.height), (12, 24));
         assert_eq!(std::fs::read(&image.path).unwrap(), state.bytes);
-        assert_eq!(state.prepared.load(Ordering::Relaxed), 0);
+        assert_eq!(state.resolved.load(Ordering::Relaxed), 2);
         let mut settings = ServiceSettings {
             url: source.client.base.as_str().into(),
             token: "fixture-token".into(),
@@ -150,7 +179,12 @@ fn empty_service_opens_old_favorites_preserves_keys_and_reuses_local_bytes() {
         .await
         .unwrap();
         assert_eq!(image.hash, cached.hash);
-        assert_eq!(state.images.load(Ordering::Relaxed), 1);
+        assert_eq!(state.images.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            state.resolved.load(Ordering::Relaxed),
+            2,
+            "cache hit resolves no new ticket"
+        );
         std::fs::remove_dir_all(directory).unwrap();
         server.abort();
     })
@@ -231,7 +265,7 @@ fn content_service_end_to_end() {
     let mut entry=library.get(&old_key).unwrap().clone();entry.set_favorite(true);entry.mark_read(&chapter_key);
     entry.progress=Some(library::Progress{chapter:chapter_key.clone(),page:0,fraction:0.5,page_count:1});library.save(entry).unwrap();
     assert!(!source.sites().await.unwrap().is_empty());
-    let groups=source.search("fixture").await.unwrap();assert!(!groups[0].books.is_empty());
+    let groups=source.search(fixture["keyword"].as_str().unwrap_or("fixture")).await.unwrap();assert!(!groups[0].books.is_empty());
     let updated=source.detail(&old_book).await.unwrap();
     let pages=source.pages(&updated.book,&updated.chapters[0],false).await.unwrap();
     let key=format!("{old_key}:{chapter_key}:0");
@@ -246,7 +280,7 @@ fn content_service_end_to_end() {
 }
 
 #[test]
-fn authenticated_assets_never_follow_redirects_or_forward_the_device_token() {
+fn image_tickets_never_follow_redirects() {
     runtime().block_on(async {
         let observed = Arc::new(AtomicUsize::new(0));
         let calls = observed.clone();
@@ -291,10 +325,9 @@ fn authenticated_assets_never_follow_redirects_or_forward_the_device_token() {
             .unwrap()
         });
         let mut request = ImageRequest::from(url.parse::<reqwest::Url>().unwrap());
-        request.headers.insert(
-            reqwest::header::AUTHORIZATION,
-            "Bearer fixture-token".parse().unwrap(),
-        );
+        request
+            .headers
+            .insert("x-image-ticket", "scoped-ticket".parse().unwrap());
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/service-integration")
             .join(uuid::Uuid::new_v4().to_string());
@@ -305,5 +338,47 @@ fn authenticated_assets_never_follow_redirects_or_forward_the_device_token() {
         }
         server_task.abort();
         foreign_task.abort();
+    })
+}
+
+#[test]
+fn expired_image_ticket_refresh_is_bounded_and_account_headers_are_rejected() {
+    runtime().block_on(async {
+        let (source, state, server) = fixture().await;
+        state.always_forbidden.store(true, Ordering::Relaxed);
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/service-integration")
+            .join(uuid::Uuid::new_v4().to_string());
+        let request = source
+            .book_image_request(&state.book, "https://images.example/page")
+            .unwrap();
+        assert!(
+            cache::fetch(&directory, "forbidden", request, 1800)
+                .await
+                .is_err()
+        );
+        assert_eq!(state.images.load(Ordering::Relaxed), 2);
+        assert_eq!(state.resolved.load(Ordering::Relaxed), 2);
+        state.unsafe_headers.store(true, Ordering::Relaxed);
+        let request = source
+            .book_image_request(&state.book, "https://images.example/page")
+            .unwrap();
+        assert!(
+            cache::fetch(&directory, "unsafe", request, 1800)
+                .await
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Unsupported image header")
+        );
+        assert_eq!(
+            state.images.load(Ordering::Relaxed),
+            2,
+            "no credentials sent to upstream"
+        );
+        if directory.exists() {
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+        server.abort();
     })
 }

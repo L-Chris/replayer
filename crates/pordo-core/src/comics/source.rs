@@ -5,7 +5,7 @@ use futures_util::{StreamExt, future::BoxFuture};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
@@ -48,10 +48,11 @@ impl Default for ImagePolicy {
     }
 }
 
+#[derive(Clone)]
 pub struct ImageRequest {
     pub url: reqwest::Url,
     pub headers: reqwest::header::HeaderMap,
-    resolver: Option<BoxFuture<'static, Result<ImageRequest>>>,
+    resolver: Option<Arc<dyn Fn() -> BoxFuture<'static, Result<ImageRequest>> + Send + Sync>>,
 }
 impl From<reqwest::Url> for ImageRequest {
     fn from(url: reqwest::Url) -> Self {
@@ -63,19 +64,25 @@ impl From<reqwest::Url> for ImageRequest {
     }
 }
 impl ImageRequest {
-    fn deferred(url: reqwest::Url, resolver: BoxFuture<'static, Result<Self>>) -> Self {
+    fn deferred(
+        url: reqwest::Url,
+        resolver: impl Fn() -> BoxFuture<'static, Result<Self>> + Send + Sync + 'static,
+    ) -> Self {
         Self {
-            resolver: Some(resolver),
+            resolver: Some(Arc::new(resolver)),
             ..url.into()
         }
     }
     /// Local cache hits never require a network roundtrip or an image ticket.
-    pub async fn resolve(mut self) -> Result<Self> {
-        if let Some(resolve) = self.resolver.take() {
-            resolve.await
+    pub async fn resolve(&self) -> Result<Self> {
+        if let Some(resolve) = &self.resolver {
+            resolve().await
         } else {
-            Ok(self)
+            Ok(self.clone())
         }
+    }
+    pub fn can_refresh(&self) -> bool {
+        self.resolver.is_some()
     }
 }
 
@@ -129,7 +136,6 @@ struct Client {
     base: reqwest::Url,
     authorization: reqwest::header::HeaderValue,
     sources: RwLock<Vec<SourceView>>,
-    assets: Mutex<HashMap<String, String>>,
     policies: RwLock<HashMap<String, ImagePolicy>>,
 }
 #[derive(Clone)]
@@ -163,7 +169,6 @@ impl Sources {
                 base,
                 authorization,
                 sources: RwLock::new(vec![]),
-                assets: Mutex::new(HashMap::new()),
                 policies: RwLock::new(HashMap::new()),
             }),
             scope: None,
@@ -250,38 +255,47 @@ impl Sources {
         .await?;
         Ok(())
     }
-    fn remember_asset(&self, book: &Book, url: &str, asset: &str) {
-        let mut assets = self.client.assets.lock().unwrap();
-        if assets.len() >= 2048 {
-            assets.clear();
-        }
-        assets.insert(
-            format!("{}\0{}\0{url}", book.provider, book.site),
-            asset.into(),
-        );
-    }
     fn decode_book(&self, value: &Value) -> Result<Book> {
         let book: Book = serde_json::from_value(value.clone())?;
         ensure!(
             value["comicId"].as_str() == Some(book.key().as_str()),
             "内容服务漫画标识不匹配 / Comic identity mismatch"
         );
-        if let Some(asset) = value["coverAssetId"].as_str() {
-            self.remember_asset(&book, &book.cover, asset);
-        }
         Ok(book)
     }
-    fn asset_request(&self, asset_id: &str) -> Result<ImageRequest> {
-        let mut url = self.client.base.join("api/v1/assets/")?;
-        url.path_segments_mut()
-            .map_err(|()| anyhow!("Invalid service URL"))?
-            .pop_if_empty()
-            .push(asset_id);
+    async fn image_access(&self, book: &Book, original: &str) -> Result<ImageRequest> {
+        let data = self
+            .request(
+                reqwest::Method::POST,
+                "api/v1/images/resolve",
+                &[],
+                Some(json!({"provider":book.provider,"siteId":book.site,"url":original})),
+            )
+            .await?;
+        let url = http_url(data["url"].as_str().context("Missing image URL")?)?;
         let mut request: ImageRequest = url.into();
-        request.headers.insert(
-            reqwest::header::AUTHORIZATION,
-            self.client.authorization.clone(),
-        );
+        let headers = data["headers"]
+            .as_object()
+            .context("Missing image headers")?;
+        ensure!(headers.len() <= 8, "Too many image headers");
+        for (name, value) in headers {
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())?;
+            ensure!(
+                matches!(
+                    name.as_str(),
+                    "referer" | "origin" | "user-agent" | "x-image-ticket"
+                ),
+                "Unsupported image header"
+            );
+            let mut value = reqwest::header::HeaderValue::from_str(
+                value.as_str().context("Invalid image header")?,
+            )?;
+            if name.as_str() == "x-image-ticket" {
+                value.set_sensitive(true);
+            }
+            request.headers.insert(name, value);
+        }
+        // Device Authorization is only used by request(), never copied to the CDN.
         Ok(request)
     }
 }
@@ -483,8 +497,7 @@ impl ComicSource for Sources {
                         "Invalid page order"
                     );
                     let url = p["url"].as_str().context("Missing page URL")?;
-                    let asset = p["assetId"].as_str().context("Missing asset id")?;
-                    self.remember_asset(book, url, asset);
+                    http_url(url)?;
                     Ok(url.to_owned())
                 })
                 .collect()
@@ -495,25 +508,12 @@ impl ComicSource for Sources {
         let book = book.clone();
         let url = url.to_owned();
         let source = self.clone();
-        Ok(ImageRequest::deferred(
-            original,
-            Box::pin(async move {
-                let key = format!("{}\0{}\0{url}", book.provider, book.site);
-                let cached = source.client.assets.lock().unwrap().get(&key).cloned();
-                let asset = if let Some(asset) = cached {
-                    asset
-                } else {
-                    let data = source.request(reqwest::Method::POST,"api/v1/assets/prepare",&[],Some(json!({"items":[{"provider":book.provider,"siteId":book.site,"url":url}]}))).await?;
-                    let asset = data["assets"][0]["assetId"]
-                        .as_str()
-                        .context("Missing asset id")?
-                        .to_owned();
-                    source.remember_asset(&book, &url, &asset);
-                    asset
-                };
-                source.asset_request(&asset)
-            }),
-        ))
+        Ok(ImageRequest::deferred(original, move || {
+            let source = source.clone();
+            let book = book.clone();
+            let url = url.clone();
+            Box::pin(async move { source.image_access(&book, &url).await })
+        }))
     }
 }
 

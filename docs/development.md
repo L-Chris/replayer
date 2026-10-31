@@ -133,7 +133,7 @@ Windows installer migration checks are included in CI and were not run locally.
 
 Comics require [pordo-service](https://github.com/PordoTech/pordo-service). Configure
 its root URL and a per-device Token in Settings → Comics (Android: Comics → Source
-settings). Source credentials, login, tickets, quotas and parsing live on the server.
+settings). Source credentials, login, ticket issuance and parsing live on the server. Image bodies are downloaded directly from third parties by the client; the service has no image cache or proxy.
 The client preserves original provider/site/detail URL and chapter ID/URL identities,
 local library/read/progress records, page cache keys and the WebDAV v1 protocol.
 Device tokens are excluded from serialized settings and cloud sync; old source
@@ -141,8 +141,7 @@ passwords remain untouched in the vault for rollback and are no longer read.
 
 The client uses source-site discovery and original chapter URLs from the service;
 use the companion service contract PR when testing this branch. Metadata and
-image requests never follow redirects with device credentials. Original-byte
-caches are checked before resolving an asset ID, so a cached image needs no request.
+image requests never forward device credentials to third parties. Image-only ticket headers never follow redirects. Original-byte caches are checked before resolving image access, so a cached image needs no service request. A third-party 403 re-resolves the ticket once; other errors are surfaced without a retry loop.
 
 For repeatable integration without public sources, start the opt-in fixture from
 `pordo-service/server` (Node 24; build the management SPA first):
@@ -169,7 +168,7 @@ copy that JSON into `files/content-service-fixture.json` using `adb shell -T run
  dev.replayer tee ...` with host-file stdin and suppressed stdout. Run
 `ContentServiceTest#realServiceReadsLegacyFavoritesDirectoriesAndImages` through the
 normal instrumentation runner. Without this explicit fixture it is assumption-skipped.
-Stop the fixture process when done; it removes its temporary DB/cache and token file.
+Stop the fixture process when done; it removes its temporary DB and token file.
 
 Validation on macOS ARM64 and Android API 28: source discovery, legacy resolve,
 original chapter URLs, page image decode, persisted favorite/read/progress, revoked
@@ -177,7 +176,7 @@ Tokens, credential isolation, redirect rejection and cached-byte reuse passed.
 The management SPA's search/details/page-image flow and settings rendering at 628/
 1030 px passed. Windows runtime verification remains for CI.
 
-A local same-profile artifact comparison against fd6ce5e (same remdia pin, no version
+The earlier asset-proxy implementation measured a local same-profile artifact comparison against fd6ce5e (same remdia pin, no version
 bump) measured the raw ARM64 macOS release executable at 25,144,608 → 24,946,064 B
 (−0.79%) and the Gradle ARM64 Android release APK at 11,482,126 → 10,005,718 B
 (−12.86%). These are neither Windows installer nor installed-footprint measurements.
@@ -186,3 +185,5 @@ Gradle); there is no comparable baseline time, so no build-speed claim is made.
 The isolated test service sampled at 53.1 MiB RSS after requests; a 120-byte cached
 PNG fixture is not a representative public-source workload. Raw measurements/logs
 stay under target/service-integration and are not committed.
+
+Image-direct revision: service endpoint `/api/v1/images/resolve` returns `{url, headers, expiresAt}` with `Cache-Control: no-store`; the old `/assets` endpoints are removed. Device tokens and upstream cookies are forbidden in image request headers. Historical measurements above predate this revision.

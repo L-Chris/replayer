@@ -57,7 +57,8 @@ fn client() -> Result<&'static reqwest::Client> {
         .get_or_init(|| {
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(8))
-                // Authenticated service assets never redirect to a CDN or another origin.
+                // Image tickets and hotlink headers stay bound to their resolved URL.
+                // Do not forward them through redirects.
                 .redirect(reqwest::redirect::Policy::none())
                 .user_agent(concat!("pordo/", env!("CARGO_PKG_VERSION")))
                 .build()
@@ -66,6 +67,19 @@ fn client() -> Result<&'static reqwest::Client> {
         .as_ref()
         .map_err(|error| anyhow!("{error}"))
 }
+
+#[derive(Debug)]
+struct ImageHttpError(reqwest::StatusCode);
+impl std::fmt::Display for ImageHttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "图片 HTTP {}，可刷新章节重试 / Image request failed",
+            self.0.as_u16()
+        )
+    }
+}
+impl std::error::Error for ImageHttpError {}
 
 async fn download(
     request: source::ImageRequest,
@@ -90,15 +104,7 @@ async fn download(
         .context("图片连接失败 / Image request failed")?;
     if !response.status().is_success() {
         let status = response.status();
-        if headers.contains_key(reqwest::header::AUTHORIZATION) {
-            let bytes = source::limited_body(response, 64 * 1024).await?;
-            let value = serde_json::from_slice(&bytes).unwrap_or_default();
-            return Err(source::service_error(status, &value));
-        }
-        anyhow::bail!(
-            "图片 HTTP {}，可刷新章节重试 / Image request failed",
-            status.as_u16()
-        );
+        return Err(anyhow::Error::new(ImageHttpError(status)));
     }
     let bytes = source::limited_body(response, 40 * 1024 * 1024).await?;
     // Persist completed downloads before decoding. Cancelling a display job must
@@ -139,8 +145,20 @@ pub async fn fetch(
     {
         return Ok(image);
     }
-    let request = request.into().resolve().await?;
-    let (bytes, bitmap) = download(request, width, &path).await?;
+    let request = request.into();
+    let first = download(request.resolve().await?, width, &path).await;
+    let (bytes, bitmap) = match first {
+        Err(error)
+            if request.can_refresh()
+                && error
+                    .downcast_ref::<ImageHttpError>()
+                    .is_some_and(|e| e.0 == reqwest::StatusCode::FORBIDDEN) =>
+        {
+            // Only one re-resolution for an expired third-party image ticket.
+            download(request.resolve().await?, width, &path).await?
+        }
+        other => other?,
+    };
     tokio::task::spawn_blocking(move || {
         Ok(CachedImage {
             hash: digest(&bytes),

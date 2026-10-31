@@ -12,6 +12,8 @@ Android 端复用桌面版的 `pordo-core`：Rust 核心逻辑不变，通过
 Android：漫画页 → 源设置；桌面：设置 → 漫画 → 内容服务。
 填写 pordo-service 的根地址与设备 Token，点击“保存并测试连接”。
 源账号、密码、登录与代理由服务管理页面维护，客户端不再包含 Komiic/MangaYun/DM5 的抓取实现。
+图片由 service 返回第三方地址与必要请求头，Android 直接下载并保留本地缓存；service 不缓存或转发图片。
+Komiic 图片票据按需申请，403 重取一次；设备 Token 和源 Cookie 不发往图片服务器。
 
 - Android 只将服务地址保存到 preferences；设备 Token 通过 SecretStore 使用系统 Keystore 加密，按服务地址隔离。
 - Token 不回填到输入框，留空可沿用同一地址的已存 Token；更换地址必须提供新 Token。“断开并清除 Token”清除当前连接。
