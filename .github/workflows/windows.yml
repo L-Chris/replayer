@@ -258,6 +258,7 @@ jobs:
       - name: Package and test relocated application
         run: |
           source '.deps/macos-${{ matrix.arch }}/env.sh'
+          python3 -m unittest discover -s scripts/tests -p 'test_macos_package.py' -v
           python3 scripts/package-macos.py --binary "target/${{ matrix.target }}/release/$APP_PRODUCT" --output-directory 'dist/macos-${{ matrix.arch }}'
           python3 scripts/test-macos-package.py --directory 'dist/macos-${{ matrix.arch }}'
       - uses: actions/cache/save@v4

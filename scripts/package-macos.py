@@ -11,7 +11,36 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from macos_bundle import architecture, embed_libraries, run, sign_bundle, verify_bundle
+
+
+def create_dmg(stage, destination):
+    """Retry transient disk-image contention without publishing partial images."""
+    # Keep the temporary image beside the destination for an atomic replacement,
+    # and outside stage so it cannot become part of its own source image.
+    with tempfile.TemporaryDirectory(prefix='.dmg-', dir=destination.parent) as temporary:
+        image = Path(temporary) / destination.name
+        command = ['hdiutil', 'create', '-verbose', '-ov', '-format', 'UDZO', '-fs', 'HFS+',
+                   '-volname', 'Pordo', '-srcfolder', str(stage), str(image)]
+        for attempt in range(1, 4):
+            try:
+                output = subprocess.check_output(command, text=True, stderr=subprocess.STDOUT,
+                                                 env={**os.environ, 'LC_ALL': 'C'})
+            except subprocess.CalledProcessError as error:
+                output = error.output or ''
+                print(output, file=sys.stderr, flush=True)
+                if 'resource busy' not in output.lower() or attempt == 3:
+                    raise
+                image.unlink(missing_ok=True)
+                delay = 5 * attempt
+                print(f'DMG creation encountered Resource busy; retrying in {delay}s '
+                      f'(attempt {attempt + 1}/3).', file=sys.stderr, flush=True)
+                time.sleep(delay)
+            else:
+                print(output, end='', flush=True)
+                image.replace(destination)
+                return
 
 
 def main():
@@ -104,8 +133,7 @@ def main():
         # Only the app and Applications link go in the image (not the notary submission).
         if profile:
             submission.unlink()
-        run('hdiutil', 'create', '-ov', '-format', 'UDZO', '-fs', 'HFS+',
-            '-volname', 'Pordo', '-srcfolder', stage, dmg)
+        create_dmg(stage, dmg)
         if profile:
             run('xcrun', 'notarytool', 'submit', dmg, '--keychain-profile', profile, '--wait')
             run('xcrun', 'stapler', 'staple', dmg)
