@@ -202,7 +202,7 @@ private fun App() {
                 composable("music") { MusicHome(onOpenPlayer = { nav.navigate("player") }, onOpenSync = { nav.navigate("sync") }) }
                 composable("comics") {
                     ComicHome(
-                        onOpenSourceSettings = { nav.navigate("komiic-account") },
+                        onOpenSourceSettings = { nav.navigate("content-service") },
                         onOpenSync = { nav.navigate("sync") },
                         onOpenDetail = {
                             nav.navigate("detail")
@@ -211,7 +211,7 @@ private fun App() {
                     )
                 }
                 composable("sync") { dev.pordo.sync.SyncScreen(onBack = { nav.popBackStack() }) }
-                composable("komiic-account") { dev.pordo.comic.KomiicAccountScreen(onBack = { nav.popBackStack() }) }
+                composable("content-service") { dev.pordo.comic.ContentServiceScreen(onBack = { nav.popBackStack() }) }
                 composable("player") { PlayerScreen(onBack = { nav.popBackStack() }) }
                 composable("detail") {
                     BookDetailScreen(

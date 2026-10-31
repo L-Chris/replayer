@@ -55,11 +55,11 @@ AI subtitles can use audio already present in the torrent cache. Missing audio m
 
 ## Comics
 
-Search MangaYun or Komiic, open a title and choose a chapter. Sources remain separate even when titles match. Add books to your bookshelf, check updates and resume from history. Komiic chapters can be filtered by chapter/volume type.
+Configure the service base URL and device Token in **Settings → Comics** (Android: **Comics → Source settings**). Create the device Token and configure upstream accounts in the [pordo-service](https://github.com/PordoTech/pordo-service) management page. Search its enabled sources, open a title and choose a chapter. Sources remain separate even when titles match. Add books to your bookshelf, check updates and resume from history. Komiic chapters can be filtered by chapter/volume type.
 
 Choose vertical scrolling, left-to-right or right-to-left pages. Zoom, page position and reading progress are saved. The chapter button opens the chapter list; the page slider and previous/next controls navigate within the book. A new favorite starts with the existing chapter list as its baseline; later unread additions produce update indicators.
 
-Original pages and covers are cached. Clearing these caches in Settings preserves translations, favorites and history. Previously cached pages may remain readable when a source is unavailable or its image quota is exhausted. Some upstream sources require adapter updates or are unsupported.
+The device Token stays in this device’s OS credential vault and is excluded from WebDAV sync. Existing source passwords are no longer read or sent; configure those accounts on the service. Original pages and covers are cached. Clearing these caches in Settings preserves translations, favorites and history. Previously cached pages may remain readable when a source is unavailable or its image quota is exhausted. Some upstream sources require adapter updates or are unsupported.
 
 ### Translate comic pages
 

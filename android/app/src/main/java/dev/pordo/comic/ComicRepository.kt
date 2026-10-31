@@ -88,7 +88,7 @@ object ComicRepository {
         return (0 until array.length()).map { LibraryEntry(array.getJSONObject(it)) }
     }
 
-    fun entryFor(book: Book): LibraryEntry? = entries().firstOrNull { it.book.url == book.url }
+    fun entryFor(book: Book): LibraryEntry? = entries().firstOrNull { it.book.url == book.url && it.book.provider == book.provider && it.book.siteId == book.siteId }
 
     fun search(keyword: String): List<SearchGroup> {
         val array = Native.parse(Native.nativeComicSearch(keyword)) as? JSONArray ?: return emptyList()

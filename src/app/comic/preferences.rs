@@ -4,7 +4,7 @@ use super::*;
 impl App {
     pub(in crate::app) fn preferences_comics(&mut self, ui: &mut Ui) {
         let l = self.settings.language;
-        self.preferences_komiic(ui);
+        self.preferences_comic_service(ui);
         let settings = &mut self.preferences_draft.comics;
         form_row(
             ui,
@@ -113,126 +113,73 @@ impl App {
         }
     }
 
-    fn preferences_komiic(&mut self, ui: &mut Ui) {
+    fn preferences_comic_service(&mut self, ui: &mut Ui) {
         let l = self.settings.language;
-        ui.label(RichText::new(l.text("Komiic 账号", "Komiic account")).strong());
-        let account = &mut self.preferences_draft.comics.komiic;
-        form_row(ui, l.text("邮箱", "Email"), l, |ui| {
-            design::input_field(ui, &mut account.email, ui.available_width(), "");
+        ui.label(RichText::new(l.text("内容服务", "Content service")).strong());
+        let service = &mut self.preferences_draft.comics.service;
+        form_row(ui, l.text("服务地址", "Service URL"), l, |ui| {
+            design::input_field(
+                ui,
+                &mut service.url,
+                ui.available_width(),
+                "https://content.example.com",
+            );
         });
-        form_row(ui, l.text("密码", "Password"), l, |ui| {
+        form_row(ui, l.text("设备 Token", "Device token"), l, |ui| {
             design::secret_field(
                 ui,
-                "komiic-password",
-                &mut account.password,
+                "content-service-token",
+                &mut service.token,
                 ui.available_width(),
-                "",
+                "pt_…",
             );
         });
-        form_row(ui, l.text("自动登录", "Automatic sign-in"), l, |ui| {
-            design::toggle(
-                ui,
-                &mut account.auto_login,
-                l.text("自动登录", "Automatic sign-in"),
-            );
-        });
-        let busy = self.comic.auth_job.is_some();
-        let (login, logout) = form_row(ui, "", l, |ui| {
+        let busy = self.comic.site_job.is_some();
+        if form_row(ui, "", l, |ui| {
             ui.add_enabled_ui(!busy, |ui| {
-                let login = design::control(
+                design::control(
                     ui,
-                    l.text("保存并登录", "Save and sign in"),
+                    l.text("保存并测试连接", "Save and test connection"),
                     None,
                     design::Control::Outline,
                     0.0,
                 )
-                .clicked();
-                let logout = design::control(
-                    ui,
-                    l.text("退出并清除密码", "Sign out and clear password"),
-                    None,
-                    design::Control::Outline,
-                    0.0,
-                )
-                .clicked();
-                (login, logout)
             })
             .inner
-        });
-        if login || logout {
+        })
+        .clicked()
+        {
             let mut next = self.settings.clone();
-            next.comics.komiic = self.preferences_draft.comics.komiic.clone();
-            if logout {
-                next.comics.komiic.auto_login = false;
-                next.comics.komiic.password.clear();
-            }
-            let result = if login
-                && (next.comics.komiic.email.trim().is_empty()
-                    || next.comics.komiic.password.is_empty())
-            {
-                Err(anyhow::anyhow!(
-                    "请填写 Komiic 邮箱和密码 / Enter Komiic credentials"
-                ))
-            } else {
-                next.save()
-            };
-            match result {
-                Err(error) => self.comic.auth_error = Some(error.to_string()),
+            next.comics.service = self.preferences_draft.comics.service.clone();
+            next.comics.service.url = next.comics.service.url.trim().trim_end_matches('/').into();
+            match next.save() {
                 Ok(()) => {
                     self.settings = next;
-                    self.preferences_draft.comics.komiic = self.settings.comics.komiic.clone();
-                    self.comic.auth_configured = Some(self.settings.comics.komiic.clone());
-                    self.comic.auth_error = None;
-                    if let Some(source) = &self.comic.source {
-                        let source = source.komiic().clone();
-                        if login
-                            && let Err(error) =
-                                source.configure_account(self.settings.comics.komiic.clone())
-                        {
-                            self.comic.auth_error = Some(error.to_string());
-                            return;
-                        }
-                        let ctx = ui.ctx().clone();
-                        self.comic.auth_job = Some(Job::spawn(move |_| async move {
-                            let result = if logout {
-                                source.logout().await.map(|()| source.auth_status())
-                            } else {
-                                source.login().await
-                            };
-                            ctx.request_repaint();
-                            result
-                        }));
-                    }
+                    self.preferences_draft.comics.service = self.settings.comics.service.clone();
+                    self.comic.service_configured = None;
+                    self.comic.service_error = None;
                 }
+                Err(error) => self.comic.service_error = Some(error.to_string()),
             }
         }
-        let status = self
-            .comic
-            .source
-            .as_ref()
-            .map(|source| source.komiic().auth_status());
-        let message = self
-            .comic
-            .auth_error
-            .as_deref()
-            .or_else(|| status.as_ref().map(|s| s.label()))
-            .unwrap_or("");
-        ui.label(message);
-        if let Some(status) = status {
-            if !status.nickname.is_empty() {
-                ui.label(status.nickname);
-            }
-            if let (Some(used), Some(limit)) = (status.usage, status.limit) {
-                ui.label(format!(
-                    "{}: {used}/{limit}",
-                    l.text("图片用量", "Image usage")
-                ));
+        if busy {
+            ui.label(l.text("正在连接…", "Connecting…"));
+        } else if let Some(error) = &self.comic.service_error {
+            ui.label(error);
+        } else if self.comic.source.is_some() {
+            ui.label(l.text("连接正常", "Connected"));
+            for site in &self.comic.sites {
+                ui.label(&site.name);
             }
         }
-        ui.label(l.text(
-            "密码仅存本机凭据库，不参与云同步。",
-            "Password stays in the local credential vault and is not cloud-synced.",
-        ));
+        if !self.settings.comics.service.url.is_empty() {
+            ui.hyperlink_to(
+                l.text("打开管理页面", "Open management page"),
+                &self.settings.comics.service.url,
+            );
+        }
+        ui.label(l.text("源账号请在服务管理页面配置。设备 Token 仅存本机凭据库，不参与云同步。",
+            "Manage source accounts on the service. The device token stays in this device's credential vault."));
         ui.separator();
     }
 }

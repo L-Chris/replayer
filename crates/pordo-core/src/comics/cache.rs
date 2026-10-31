@@ -51,24 +51,15 @@ pub async fn background<T: Send + 'static>(
     })
     .await?
 }
-fn client(tickets: bool) -> Result<&'static reqwest::Client> {
+fn client() -> Result<&'static reqwest::Client> {
     static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
-    static TICKET_CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
-    (if tickets { &TICKET_CLIENT } else { &CLIENT })
+    CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(8))
-                .timeout(Duration::from_secs(30))
-                .redirect(if tickets {
-                    reqwest::redirect::Policy::none()
-                } else {
-                    reqwest::redirect::Policy::limited(4)
-                })
-                .user_agent(concat!(
-                    "pordo/",
-                    env!("CARGO_PKG_VERSION"),
-                    " comic-reader"
-                ))
+                // Authenticated service assets never redirect to a CDN or another origin.
+                .redirect(reqwest::redirect::Policy::none())
+                .user_agent(concat!("pordo/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .map_err(|error| error.to_string())
         })
@@ -77,30 +68,37 @@ fn client(tickets: bool) -> Result<&'static reqwest::Client> {
 }
 
 async fn download(
-    url: reqwest::Url,
-    referer: Option<&reqwest::Url>,
-    headers: &reqwest::header::HeaderMap,
-    timeout: Duration,
+    request: source::ImageRequest,
     width: u32,
     path: &Path,
 ) -> Result<(Vec<u8>, Bitmap)> {
-    let client = client(headers.contains_key("x-image-ticket"))?;
-    let mut request = client.get(url).headers(headers.clone()).timeout(timeout);
+    let headers = &request.headers;
+    let client = client()?;
+    let mut request = client
+        .get(request.url)
+        .headers(headers.clone())
+        .timeout(Duration::from_secs(65));
     if !headers.contains_key(reqwest::header::ACCEPT) {
         request = request.header(
             reqwest::header::ACCEPT,
             "image/jpeg,image/webp;q=0.9,image/png;q=0.8,*/*;q=0.1",
         );
     }
-    if let Some(referer) = referer {
-        request = request.header(reqwest::header::REFERER, referer.as_str());
-    }
     let response = request
         .send()
         .await
         .context("图片连接失败 / Image request failed")?;
     if !response.status().is_success() {
-        return Err(ImageStatus(response.status()).into());
+        let status = response.status();
+        if headers.contains_key(reqwest::header::AUTHORIZATION) {
+            let bytes = source::limited_body(response, 64 * 1024).await?;
+            let value = serde_json::from_slice(&bytes).unwrap_or_default();
+            return Err(source::service_error(status, &value));
+        }
+        anyhow::bail!(
+            "图片 HTTP {}，可刷新章节重试 / Image request failed",
+            status.as_u16()
+        );
     }
     let bytes = source::limited_body(response, 40 * 1024 * 1024).await?;
     // Persist completed downloads before decoding. Cancelling a display job must
@@ -116,70 +114,6 @@ async fn download(
         Ok((bytes, bitmap))
     })
     .await
-}
-
-#[derive(Debug)]
-struct ImageStatus(reqwest::StatusCode);
-impl std::fmt::Display for ImageStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "图片 HTTP {}，可刷新章节重试 / Image request failed",
-            self.0.as_u16()
-        )
-    }
-}
-impl std::error::Error for ImageStatus {}
-
-async fn download_request(
-    mut request: source::ImageRequest,
-    width: u32,
-    path: &Path,
-) -> Result<(Vec<u8>, Bitmap)> {
-    // A ticket can expire while queued. Refresh once on 403, never on other failures.
-    for attempt in 0..2 {
-        let timeout = Duration::from_secs(if request.fallback.is_some() { 10 } else { 30 });
-        match download(
-            request.url.clone(),
-            request.referer.as_ref(),
-            &request.headers,
-            timeout,
-            width,
-            path,
-        )
-        .await
-        {
-            Ok(image) => return Ok(image),
-            Err(error) => {
-                if let Some(status) = error.downcast_ref::<ImageStatus>() {
-                    if let Some(callback) = &request.on_status {
-                        callback(status.0)?;
-                    }
-                    if status.0 == reqwest::StatusCode::FORBIDDEN
-                        && attempt == 0
-                        && let Some(refresh) = request.refresh.take()
-                    {
-                        request = refresh.await?;
-                        continue;
-                    }
-                }
-                if let Some(url) = request.fallback {
-                    return download(
-                        url,
-                        None,
-                        &Default::default(),
-                        Duration::from_secs(30),
-                        width,
-                        path,
-                    )
-                    .await
-                    .map_err(|fallback| anyhow!("{error}; {fallback}"));
-                }
-                return Err(error);
-            }
-        }
-    }
-    anyhow::bail!("图片凭证已失效 / Image ticket expired")
 }
 
 pub async fn fetch(
@@ -206,7 +140,7 @@ pub async fn fetch(
         return Ok(image);
     }
     let request = request.into().resolve().await?;
-    let (bytes, bitmap) = download_request(request, width, &path).await?;
+    let (bytes, bitmap) = download(request, width, &path).await?;
     tokio::task::spawn_blocking(move || {
         Ok(CachedImage {
             hash: digest(&bytes),

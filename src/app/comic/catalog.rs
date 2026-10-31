@@ -76,6 +76,9 @@ impl State {
             self.begin_updates(Instant::now());
         }
         ui.add_space(10.0);
+        if let Some(error) = &self.service_error {
+            ui.label(error);
+        }
         if self.tab == Tab::Search {
             self.search_controls(ui, settings);
             let groups: Vec<_> = self

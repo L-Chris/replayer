@@ -22,6 +22,7 @@ class ComicFlowOnlineTest {
     @Test
     fun searchDetailPagesAndImageOverHttps() {
         assumeTrue("online checks need --online", onlineRequested())
+        assumeTrue("configure a content service before live checks", dev.pordo.comic.ContentService.saved(testContext).optString("url").isNotEmpty())
         assertTrue(Native.initError ?: "bridge not ready", Native.initialize(testContext))
 
         val groups = external("search") { ComicRepository.search("one piece") }

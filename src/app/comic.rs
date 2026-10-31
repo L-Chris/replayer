@@ -260,9 +260,8 @@ struct TranslationJob {
 pub(super) struct State {
     library: Option<Library>,
     source: Option<Arc<Sources>>,
-    auth_configured: Option<domain::source::KomiicAccount>,
-    auth_job: Option<Job<domain::source::KomiicAuthStatus>>,
-    auth_error: Option<String>,
+    service_configured: Option<domain::source::ServiceSettings>,
+    service_error: Option<String>,
     sites: Vec<domain::Site>,
     site_job: Option<Job<Vec<domain::Site>>>,
     init_error: Option<String>,
@@ -394,7 +393,7 @@ impl State {
         self.keyword = keyword;
         self.search.clear();
         self.groups.clear();
-        self.status.clear();
+        self.status = self.service_error.clone().unwrap_or_default();
         if !self.keyword.trim().is_empty()
             && let Some(source) = self.source.clone()
         {
@@ -405,14 +404,9 @@ impl State {
                 .into_iter()
                 .map(|(site, provider)| {
                     let keyword = keyword.clone();
-                    let provider_id = site.id.clone();
                     (
                         site,
-                        Job::spawn(move |_| async move {
-                            let mut groups = provider.search(&keyword).await?;
-                            Sources::qualify(&provider_id, &mut groups);
-                            Ok(groups)
-                        }),
+                        Job::spawn(move |_| async move { provider.search(&keyword).await }),
                     )
                 })
                 .collect();
@@ -483,27 +477,19 @@ impl State {
     }
     pub fn new() -> Self {
         let library = Library::open(&domain::root().join("library.sqlite"));
-        let source = Sources::connect();
-        let init_error = library
-            .as_ref()
-            .err()
-            .map(ToString::to_string)
-            .or_else(|| source.as_ref().err().map(ToString::to_string));
+        let source = Sources::connect(&Default::default());
+        let init_error = library.as_ref().err().map(ToString::to_string);
         let site_job = source.as_ref().ok().map(|source| {
             let source = source.clone();
             Job::spawn(move |_| async move { source.sites().await })
         });
         Self {
-            sites: vec![domain::Site {
-                id: "komiic:komiic".into(),
-                name: "Komiic".into(),
-            }],
+            sites: vec![],
             site_job,
             library: library.ok(),
             source: source.ok(),
-            auth_configured: None,
-            auth_job: None,
-            auth_error: None,
+            service_configured: None,
+            service_error: None,
             init_error,
             tab: Tab::Shelf,
             view: View::Catalog,
@@ -593,31 +579,50 @@ impl State {
         }
     }
     pub fn poll(&mut self, ctx: &egui::Context, settings: &crate::settings::Settings) {
-        if self.auth_configured.as_ref() != Some(&settings.comics.komiic) {
-            self.auth_job = None;
-            self.auth_error = self
-                .source
-                .as_ref()
-                .and_then(|source| {
-                    source
-                        .komiic()
-                        .configure_account(settings.comics.komiic.clone())
-                        .err()
-                })
-                .map(|e| e.to_string());
-            self.auth_configured = Some(settings.comics.komiic.clone());
-        }
-        if let Some(result) = self.auth_job.as_ref().and_then(Job::poll) {
-            self.auth_job = None;
-            self.auth_error = result.err().map(|e| e.to_string());
-        }
-        if self.auth_job.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(100));
+        if self.service_configured.as_ref() != Some(&settings.comics.service) {
+            self.site_job = None;
+            self.search.clear();
+            self.groups.clear();
+            self.sites.clear();
+            self.detail_job = None;
+            self.update_job = None;
+            self.update_queue.clear();
+            self.cover_jobs.clear();
+            self.cover_errors.clear();
+            self.reload_images();
+            if let Some(reader) = &mut self.reader {
+                reader.pages_job = None;
+            }
+            match Sources::connect(&settings.comics.service) {
+                Ok(source) => {
+                    self.source = Some(source.clone());
+                    if let Some(reader) = &mut self.reader {
+                        let source = source.clone();
+                        let book = reader.book.clone();
+                        let chapter = reader.chapter.clone();
+                        reader.pages_error = None;
+                        reader.pages_job = Some(Job::spawn(move |_| async move {
+                            source.pages(&book, &chapter, false).await
+                        }));
+                    }
+                    self.service_error = None;
+                    self.site_job = Some(Job::spawn(move |_| async move { source.sites().await }));
+                }
+                Err(error) => {
+                    self.source = None;
+                    self.service_error = Some(error.to_string());
+                }
+            }
+            self.service_configured = Some(settings.comics.service.clone());
         }
         if let Some(result) = self.site_job.as_ref().and_then(Job::poll) {
             self.site_job = None;
-            if let Ok(sites) = result {
-                self.sites = sites;
+            match result {
+                Ok(sites) => {
+                    self.sites = sites;
+                    self.service_error = None;
+                }
+                Err(error) => self.service_error = Some(error.to_string()),
             }
         }
         let mut pending = Vec::new();

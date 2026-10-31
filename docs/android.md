@@ -4,52 +4,21 @@ Android 端复用桌面版的 `pordo-core`：Rust 核心逻辑不变，通过
 `crates/pordo-android` 的 JNI 桥接暴露给 Kotlin/Compose 应用。remdia 引擎
 静态链接进唯一的业务库 `libpordo_android.so`；AAR 里的独立
 `libremdia_sdk.so` 被 Gradle packaging 排除（`android-dev.py audit` 持续校验）。
-漫画搜索先使用 Komiic；从桌面同步的漫画通过共享 Sources 注册表按提供商路由。
+漫画通过 pordo-service 发现和搜索启用的内容源；桌面和 Android 使用同一个 Rust API 适配器。
 同时支持音乐播放、在线歌曲收藏和与桌面兼容的云同步。
 
-## Komiic 账号与自动登录
+## 内容服务连接
 
-Android 入口：漫画页“源设置”；桌面入口：设置 → 漫画 → Komiic 账号。
-填写注册邮箱和密码，选择“自动登录”，点击“保存并登录”。显示昵称、登录
-状态及官网返回的图片用量。未配置账号时保留游客模式。关闭自动登录后仍可
-手动登录本次会话；重启后恢复游客模式。“退出并清除密码”保留邮箱，关闭
-自动登录并删除本机密码，即使远端退出请求失败，本地也已退出。
+Android：漫画页 → 源设置；桌面：设置 → 漫画 → 内容服务。
+填写 pordo-service 的根地址与设备 Token，点击“保存并测试连接”。
+源账号、密码、登录与代理由服务管理页面维护，客户端不再包含 Komiic/MangaYun/DM5 的抓取实现。
 
-- 共用 `pordo-core::comics::source::Komiic` 的账号会话，不在两端各写一套
-  登录协议。官网 `/api/login` 接收邮箱和原始密码，通过 Cookie 维持会话；
-  `/auth/refresh` 刷新，GraphQL `account` 确认已登录。
-- Windows 使用 Credential Manager，macOS 使用系统 Keychain（明确关闭
-  Keychain 云同步），Android 复用 KeyStore 保护的 AES-GCM 凭据存储。
-  邮箱和自动登录选项存本机设置，密码不写明文 JSON、SavedState 或日志。
-  Komiic 账号、密码和会话 Cookie 均不参与 WebDAV / API Key 同步。
-- Cookie 只驻留内存。启动后在首次 Komiic 请求时按需自动登录；有效期内
-  复用会话，并发请求共用一次登录/刷新。显式会话失效时最多恢复并重试一次；
-  刷新令牌失效才回退密码登录。网络失败自动退避，错误密码、未激活账号或
-  需要额外验证时暂停自动尝试，修改后可手动重试。
-- 每次切换账号创建独立 HTTP 客户端和 Cookie 容器；旧请求不能更新当前
-  会话或额度。登录后丢弃游客额度，按账号额度重新计算；CDN 图片凭证过期
-  仍走原有一次换票流程，403/402 不会被当作登录失败反复提交密码。
-- 测试账号只由显式启用的测试读取 `.env` 中 `KOMMIC_ACCOUNT` 和
-  `KOMMIC_PASSWORD`，应用不会自动导入这两个环境变量。Android 实测凭据
-  经 stdin 写入 `run-as` 私有缓存，测试结束删除，不放入 APK、命令参数
-  或测试报告。真实测试不调用远端退出，避免影响用户其他客户端。
-
-验证（2026-10-30）：桌面/共享核心 **111 + 46 = 157 passed**；额外的
-macOS Keychain 往返和真实账号登录/刷新测试通过。7 项账号模拟测试覆盖并发、
-刷新回退、错误密码/激活/限流、账号切换、手动登录及 401/403/402 隔离；原有
-游客搜索、换票与离线缓存测试保留。Android API 35 在线回归 **23 passed /
-1 项真实账号用例未附凭据跳过**（`smoke-20261030T115710Z`），另附凭据单跑
-真实账号 **1/1 passed**。API 28 账号离线测试 **2 passed / 1 项在线用例未启用**
-（含凭据恢复与退出清密），另含真实账号的 JNI 测试 **2/2 passed**。
-Windows 凭据接口沿用现有实现，本轮没有 Windows 设备实测。
-
-本功能本地 release APK **11,480,777 bytes / 10.95 MiB**，较云同步版本
-增加 **184.5 KiB**；SHA-256
-`bcba57d2f8c50bde6006cee4b1f77a4568c1ac66049bf05e265bcae156e4485a`。
-audit **13/13**（JNI **32/32**、ELF/ZIP 16 KB 对齐），API 35 / API 28
-release 安装启动通过。没有单独复测 release 变体的在线登录（instrumentation
-挂 debug 变体）。测试结束删除设备凭据缓存并关闭临时 API 28 AVD，保留
-原有 emulator-5554 运行最终 release。代码和构建产物尚未推送或发布。
+- Android 只将服务地址保存到 preferences；设备 Token 通过 SecretStore 使用系统 Keystore 加密，按服务地址隔离。
+- Token 不回填到输入框，留空可沿用同一地址的已存 Token；更换地址必须提供新 Token。“断开并清除 Token”清除当前连接。
+- 设置保存与凭据写入失败会回滚；临时服务故障不会丢弃已保存的连接。
+- 旧源密码不自动上传、不参与同步；在服务页面重新配置，旧本机凭据保留以便回退版本。
+- 旧收藏按原 provider/site/detailUrl 调用 resolve；章节保留原 ID/URL，已读、阅读进度和 WebDAV 协议不变。
+- 服务不可达或 Token 撤销时显示明确错误，不退回源站直连。服务配置异常不阻断音频/媒体 JNI 初始化。
 
 ## 正式签名与发布
 
@@ -209,6 +178,7 @@ platform-tools 36.0.2）。SDK 自带的 adb 37.0.1 在本机出现过 libunwind
 
 instrumentation 套件位于 `android/app/src/androidTest/java/dev/pordo/`：
 
+- `ContentServiceTest`：Token 凭据隔离、重启恢复、配置验证，以及显式本地服务联调。
 - `NativeBridgeTest`：桥接契约（初始化幂等、库沙箱路径、空白搜索报错、
   书架条目反序列化校验），离线可跑。
 - `NavigationUiTest`：Compose 语义导航（testTag 选择器），离线可跑。

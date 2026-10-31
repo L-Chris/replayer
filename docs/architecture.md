@@ -34,9 +34,9 @@ QQ local adapters prepare supported encrypted audio in bounded, cancellable work
 
 ## Comics and images
 
-`ComicSource` isolates search, details, chapters and page requests. Stable identities include provider/site and upstream work identity; equal titles are not merged. SQLite stores the bookshelf, chapter state and reading progress.
+`ComicSource` is a shared Rust adapter to the versioned pordo-service API. Desktop and Android discover enabled sources through the service, resolve legacy favorites before opening them, and fetch images through authenticated asset IDs. Upstream parsing, source accounts, tickets, proxy rules and quota handling live in the service. Stable identities include provider/site and upstream work identity; equal titles are not merged. SQLite stores the bookshelf, chapter state and reading progress.
 
-Original downloads are cached unchanged and detected by content. JPEG/WebP/PNG request preferences do not trigger lossy conversion of ordinary original pages. DM5 can fall back to its public reader data when aggregation fails; remote scripts are parsed for data and are not executed. Komiic requests use short-lived tickets, bounded concurrency and quota backoff; tickets and ticketed URLs are not persisted.
+Original downloads are cached unchanged and detected by content. JPEG/WebP/PNG request preferences do not trigger lossy conversion of ordinary original pages. Original page and chapter URLs remain content identities; service URLs and deployment changes never enter library or sync keys. Device tokens are stored per service address in the OS vault, excluded from settings JSON and cloud sync, and are never forwarded through asset redirects. Cached images are checked before any asset preparation request.
 
 Image decoding, resizing, tiling, cropping, composition and encoding use remdia image components in the same graph runtime as audio/video. Windows uses WIC and macOS uses ImageIO/CoreGraphics; a narrow Windows WebP plugin covers systems without a WIC WebP decoder. Processing runs in bounded background work. Prepared images use memory budgets and shared in-flight requests. Source-byte changes and explicit disk-cache clearing invalidate the corresponding memory entries.
 

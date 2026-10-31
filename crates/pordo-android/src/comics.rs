@@ -15,15 +15,20 @@ use pordo_core::{
     jobs,
 };
 use serde_json::{Value, json};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
 
-/// Share desktop routing for synced books; discovery still starts with Komiic.
-fn source() -> Result<&'static Arc<Sources>> {
-    static SOURCE: OnceLock<Result<Arc<Sources>, String>> = OnceLock::new();
-    SOURCE
-        .get_or_init(|| Sources::connect().map_err(|error| error.to_string()))
-        .as_ref()
-        .map_err(|error| anyhow!("{error}"))
+fn connection() -> &'static RwLock<Option<Arc<Sources>>> {
+    static SOURCE: OnceLock<RwLock<Option<Arc<Sources>>>> = OnceLock::new();
+    SOURCE.get_or_init(|| RwLock::new(None))
+}
+fn source() -> Result<Arc<Sources>> {
+    connection()
+        .read()
+        .map_err(|_| anyhow!("Content service lock poisoned"))?
+        .clone()
+        .ok_or_else(|| {
+            anyhow!("请在源设置中配置内容服务 / Configure a content service in Source settings")
+        })
 }
 pub(crate) fn library() -> Result<&'static Mutex<Library>> {
     static LIBRARY: OnceLock<Result<Mutex<Library>, String>> = OnceLock::new();
@@ -46,57 +51,42 @@ fn parse_book(value: &str) -> Result<Book> {
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_pordo_Native_nativeKomiicConfigure(
+pub extern "system" fn Java_dev_pordo_Native_nativeComicServiceConfigure(
     mut env: JNIEnv<'_>,
     _: JClass<'_>,
     config: JString<'_>,
 ) -> jstring {
     let result = guard(|| {
         let value: Value = serde_json::from_str(&text(&mut env, &config)?)?;
-        let mut settings: comics::source::KomiicAccount = serde_json::from_value(value.clone())?;
-        settings.password = value["password"].as_str().unwrap_or_default().into();
-        let source = source()?.komiic();
-        source.configure_account(settings)?;
-        json_string(&mut env, &serde_json::to_value(source.auth_status())?)
-    });
-    failure(&mut env, result)
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_pordo_Native_nativeKomiicStatus(
-    mut env: JNIEnv<'_>,
-    _: JClass<'_>,
-) -> jstring {
-    let result = guard(|| {
+        let mut settings: comics::source::ServiceSettings = serde_json::from_value(value.clone())?;
+        settings.token = value["token"].as_str().unwrap_or_default().into();
+        settings.validate()?;
+        let source = if settings.url.trim().is_empty() {
+            None
+        } else {
+            Some(Sources::connect(&settings)?)
+        };
+        *connection()
+            .write()
+            .map_err(|_| anyhow!("Content service lock poisoned"))? = source;
         json_string(
             &mut env,
-            &serde_json::to_value(source()?.komiic().auth_status())?,
+            &json!({"configured": !settings.url.trim().is_empty()}),
         )
     });
     failure(&mut env, result)
 }
-
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_pordo_Native_nativeKomiicLogin(
+pub extern "system" fn Java_dev_pordo_Native_nativeComicServiceTest(
     mut env: JNIEnv<'_>,
     _: JClass<'_>,
 ) -> jstring {
     let result = guard(|| {
-        let status = jobs::block_on(source()?.komiic().login())?;
-        json_string(&mut env, &serde_json::to_value(status)?)
-    });
-    failure(&mut env, result)
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_pordo_Native_nativeKomiicLogout(
-    mut env: JNIEnv<'_>,
-    _: JClass<'_>,
-) -> jstring {
-    let result = guard(|| {
-        let source = source()?.komiic();
-        jobs::block_on(source.logout())?;
-        json_string(&mut env, &serde_json::to_value(source.auth_status())?)
+        let sites = jobs::block_on(source()?.sites())?;
+        json_string(
+            &mut env,
+            &json!({"sites": sites.iter().map(|site|json!({"siteId":site.id,"siteName":site.name})).collect::<Vec<_>>()}),
+        )
     });
     failure(&mut env, result)
 }
@@ -109,13 +99,8 @@ pub extern "system" fn Java_dev_pordo_Native_nativeComicSearch(
 ) -> jstring {
     let result = guard(|| -> Result<jstring> {
         let keyword = text(&mut env, &keyword)?;
-        let provider = source()?
-            .providers()
-            .into_iter()
-            .find(|(site, _)| site.id == "komiic")
-            .ok_or_else(|| anyhow!("Komiic is unavailable"))?
-            .1;
-        let groups = jobs::block_on(provider.search(&keyword))?;
+        ensure!(!keyword.trim().is_empty(), "请输入漫画名称 / Enter a title");
+        let groups = jobs::block_on(source()?.search(&keyword))?;
         let value = groups
             .iter()
             .map(|group| -> Result<Value> {
