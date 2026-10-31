@@ -179,7 +179,7 @@ impl App {
                             let executable = std::env::current_exe()
                                 .ok()
                                 .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-                                .unwrap_or_else(|| "replayer.exe".into());
+                                .unwrap_or_else(|| "pordo.exe".into());
                             let base = self
                                 .settings
                                 .ai

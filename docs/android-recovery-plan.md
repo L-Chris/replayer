@@ -4,20 +4,20 @@
 
 ## 目标与边界
 
-在现有 Kotlin Compose + Rust `replayer-core` + remdia Android 实现上继续，先交付可靠的音乐、漫画使用路径及开发工具。音视频和图片继续通过 remdia 使用系统能力；不引入 FFmpeg、额外图片解码库，不改变可组合插件图，不扩展到全量视频、AI、同步功能。
+在现有 Kotlin Compose + Rust `pordo-core` + remdia Android 实现上继续，先交付可靠的音乐、漫画使用路径及开发工具。音视频和图片继续通过 remdia 使用系统能力；不引入 FFmpeg、额外图片解码库，不改变可组合插件图，不扩展到全量视频、AI、同步功能。
 
-保留其他 agent 的全部未提交修改；目前 `android/`、`crates/replayer-android/`、构建脚本及部分 core 修改尚未提交。已提交的 core 提取为 `cd302aa`，SQLite 裁剪已在 `9c5e8b5`，均不是待丢弃的本地修改。先读仓库 `AGENTS.md`，按阶段提交自己的完整改动；此任务不包含推送、合并、发布或跟踪旧 Actions。
+保留其他 agent 的全部未提交修改；目前 `android/`、`crates/pordo-android/`、构建脚本及部分 core 修改尚未提交。已提交的 core 提取为 `cd302aa`，SQLite 裁剪已在 `9c5e8b5`，均不是待丢弃的本地修改。先读仓库 `AGENTS.md`，按阶段提交自己的完整改动；此任务不包含推送、合并、发布或跟踪旧 Actions。
 
 ## 已核实的当前状态
 
 | 项目 | 证据与判断 |
 | --- | --- |
-| Android Rust 当前不可编译 | 正确设置 NDK 后运行 `cargo check --locked -p replayer-android --target aarch64-linux-android`，稳定得到 4 个错误。日志：`target/android-audit/current-check.log`。历史 APK 不能证明当前源码可编译。 |
+| Android Rust 当前不可编译 | 正确设置 NDK 后运行 `cargo check --locked -p pordo-android --target aarch64-linux-android`，稳定得到 4 个错误。日志：`target/android-audit/current-check.log`。历史 APK 不能证明当前源码可编译。 |
 | JNI 版本边界未完成 | 桥接使用 jni 0.21.1，verifier 0.7.0 使用 jni 0.22.4。错误涉及 VM 原始指针类型、attach 回调错误类型、class loader API 和 get_java_vm 的 Result。不要依据旧版示例猜 API。 |
 | TLS 不仅缺 Rust 初始化 | 锁定的 companion 为 `rustls-platform-verifier-android 0.1.1`。Gradle 未引入其 Maven/AAR，也没有对应 keep 规则；旧 APK 的全部 DEX 未发现 `org/rustls/platformverifier`，而 `dev/remdia` 已存在。 |
 | 初始化失败被吞掉 | `init_tls_verifier()` 仅记录错误，返回 `()`；`nativeInit()` 继续成功，Kotlin `ready=true`，后续 HTTPS 仍可能触发 verifier 未初始化 panic。 |
-| remdia 单库路径基本正确 | `ReplayerApplication` → `Native.initialize` → `RemdiaBootstrap`；桥接复用 remdia Java 类，APK 排除了独立 `libremdia_sdk.so`。应保持这条路径。 |
-| 旧 debug APK 很大 | 旧包 `android/app/build/outputs/apk/debug/app-debug.apk` 为 295,247,594 bytes，业务库 `libreplayer_android.so` 为 119,874,896 bytes。另有正常的 Compose `libandroidx.graphics.path.so`。这不是 release 包体结论。 |
+| remdia 单库路径基本正确 | `PordoApplication` → `Native.initialize` → `RemdiaBootstrap`；桥接复用 remdia Java 类，APK 排除了独立 `libremdia_sdk.so`。应保持这条路径。 |
+| 旧 debug APK 很大 | 旧包 `android/app/build/outputs/apk/debug/app-debug.apk` 为 295,247,594 bytes，业务库 `libpordo_android.so` 为 119,874,896 bytes。另有正常的 Compose `libandroidx.graphics.path.so`。这不是 release 包体结论。 |
 
 编译错误位于当前桥接 `lib.rs` 约 171–181 行：E0308、E0277、E0061、E0308。修复后需继续实际链接、组装、安装和运行，不能把 `cargo check` 作为最终验收。
 
@@ -53,7 +53,7 @@
 - 若 SDK 自带 ADB 37 在当前 macOS 发生 libunwind 崩溃，可显式使用已下载的官方 36.0.2：`../remdia/.deps/android-platform-tools-36/platform-tools/adb`。不要全局替换 ADB 或杀其他 agent 的 server；需要隔离时单独配置 server socket。
 - 已有 API 28、API 35、16 KB AVD 在 `../remdia/target/android/avd/`，优先复用；已有 `emulator-5554` 可能属于另一会话，先枚举再选择，不重置、不全局 kill。
 - `/Users/lchris/.android/bin/android-cli` 已存在。新建 AVD 先查看 CLI 实际 help 或使用 Android Studio Device Manager，不再手写不完整 AVD 配置。
-- remdia 的 `scripts/build-android.py`、`audit-android.py`、`test-android.py` 和 `docs/android.md` 可供参考；SDK 测试通过不等于 replayer APK 测试通过。
+- remdia 的 `scripts/build-android.py`、`audit-android.py`、`test-android.py` 和 `docs/android.md` 可供参考；SDK 测试通过不等于 pordo APK 测试通过。
 
 ## P1：功能正确性和资源占用
 

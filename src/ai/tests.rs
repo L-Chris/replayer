@@ -94,7 +94,7 @@ fn fetch_models_uses_the_selected_connection_and_hides_upstream_secrets() {
 
 #[test]
 fn client_ignores_service_environment_and_dotenv_files() {
-    const CHILD: &str = "REPLAYER_TEST_ENV_ISOLATION_CHILD";
+    const CHILD: &str = "PORDO_TEST_ENV_ISOLATION_CHILD";
     if std::env::var_os(CHILD).is_some() {
         let settings = crate::settings::Settings::load();
         assert!(settings.ai.providers.is_empty());
@@ -123,8 +123,8 @@ fn client_ignores_service_environment_and_dotenv_files() {
         ])
         .current_dir(&directory)
         .env(CHILD, "1")
-        .env("REPLAYER_SETTINGS_FILE", directory.join("settings.json"))
-        .env("REPLAYER_ENV_FILE", &file)
+        .env("PORDO_SETTINGS_FILE", directory.join("settings.json"))
+        .env("PORDO_ENV_FILE", &file)
         .env("LLM_API_KEY", "environment-fixture")
         .env("OPENAI_API_KEY", "environment-fixture")
         .env("LLM_BASE_URL", "http://127.0.0.1:9/v1")

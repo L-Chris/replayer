@@ -257,7 +257,7 @@ impl App {
             upload_max_ms: 0.0,
             video_format: String::new(),
             last_stats: Instant::now(),
-            stats: std::env::var_os("REPLAYER_STATS").is_some(),
+            stats: pordo_core::environment::var_os("PORDO_STATS").is_some(),
         };
         if let Ok(bytes) = std::fs::read(Settings::queue_path())
             && let Ok(saved) = serde_json::from_slice::<crate::queue::SavedQueues>(&bytes)

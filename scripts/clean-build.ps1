@@ -28,20 +28,20 @@ $directories = @(
 if ($IncludeLegacyTempCache) {
     # One-time cleanup of the previous cache migration. Never create this path.
     $tempRoot = [IO.Path]::GetTempPath()
-    $directories += Assert-InDirectory (Join-Path $tempRoot 'replayer-build-cache-recovery') $tempRoot
+    $directories += Assert-InDirectory (Join-Path $tempRoot 'pordo-build-cache-recovery') $tempRoot
 }
 $directories = @($directories | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
 
 $depsRoot = Join-Path $targetRoot 'debug/deps'
 $files = @()
 if (Test-Path -LiteralPath $depsRoot) {
-    $artifacts = @(Get-ChildItem -LiteralPath $depsRoot -File -Filter 'replayer*')
-    $latestTest = $artifacts | Where-Object Name -Match '^replayer-[0-9a-f]+\.exe$' |
+    $artifacts = @(Get-ChildItem -LiteralPath $depsRoot -File -Filter 'pordo*')
+    $latestTest = $artifacts | Where-Object Name -Match '^pordo-[0-9a-f]+\.exe$' |
         Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
     $keepTest = if ($latestTest) { $latestTest.BaseName } else { '' }
     $files += $artifacts | Where-Object {
-        $_.Name -like 'replayer.*.rcgu.o' -or
-        ($_.Name -match '^replayer-[0-9a-f]+\.(exe|pdb)$' -and $_.BaseName -ne $keepTest)
+        $_.Name -like 'pordo.*.rcgu.o' -or
+        ($_.Name -match '^pordo-[0-9a-f]+\.(exe|pdb)$' -and $_.BaseName -ne $keepTest)
     }
 }
 foreach ($name in @('avdevice-63.dll', 'avfilter-12.dll')) {
@@ -71,7 +71,7 @@ foreach ($file in $files) {
 Write-Output "Disposable directories: $($directories.Count); files: $($files.Count); logical bytes: $bytes"
 foreach ($directory in $directories) { Write-Output $directory }
 if ($latestTest) { Write-Output "Keeping latest test executable and symbols: $($latestTest.BaseName)" }
-Write-Output 'Keeping target/debug/replayer.exe, its symbols, playback DLLs and dependency libraries.'
+Write-Output 'Keeping target/debug/pordo.exe, its symbols, playback DLLs and dependency libraries.'
 if ($DryRun) { return }
 foreach ($directory in $directories) { Remove-Item -LiteralPath $directory -Recurse -Force }
 foreach ($file in $files) { Remove-Item -LiteralPath $file.FullName -Force }

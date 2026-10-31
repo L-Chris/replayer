@@ -132,8 +132,10 @@ mod tests {
     #[test]
     #[ignore = "requires remdia component DLLs and native fixture corpus"]
     fn native_media_subtitle_range_and_mp3() {
-        let path = std::path::PathBuf::from(std::env::var("REPLAYER_NATIVE_FIXTURES").unwrap())
-            .join("audio.wav");
+        let path = std::path::PathBuf::from(
+            pordo_core::environment::var("PORDO_NATIVE_FIXTURES").unwrap(),
+        )
+        .join("audio.wav");
         let cancel = Arc::new(AtomicBool::new(false));
         let mut audio = AudioChunks::open(&path, cancel.clone(), 1).unwrap();
         audio.set_range(0.333, Some(1.456)).unwrap();

@@ -1,4 +1,4 @@
-//! Replayer's readable-dialogue profile, based on Netflix's Chinese, English
+//! Pordo's readable-dialogue profile, based on Netflix's Chinese, English
 //! and general timed-text guidance. This is not a delivery-compliance checker.
 use super::Cue;
 use crate::settings::Language;

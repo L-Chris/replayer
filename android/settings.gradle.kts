@@ -18,5 +18,5 @@ dependencyResolutionManagement {
         }
     }
 }
-rootProject.name = "replayer"
+rootProject.name = "pordo"
 include(":app")

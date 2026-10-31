@@ -2,7 +2,7 @@
 
 ## Install and update
 
-Get the package for your platform from [Releases](https://github.com/PordoTech/pordo/releases). Windows offers an installer and portable ZIP. macOS 15+ offers separate Apple Silicon and Intel DMG/ZIP packages; move `replayer.app` to Applications.
+Get the package for your platform from [Releases](https://github.com/PordoTech/pordo/releases). Windows offers an installer and portable ZIP. macOS 15+ offers separate Apple Silicon and Intel DMG/ZIP packages; move `Pordo.app` to Applications. When upgrading from `replayer.app`, quit the old app and remove its app bundle after installing Pordo; existing settings are kept.
 
 Windows updates can be checked, downloaded and installed from **Settings → About**. On macOS, use the Releases link. Export generated subtitles before restarting.
 
@@ -37,7 +37,7 @@ Configure the music-source API key in **Settings → Music**. The ChKSz adapter 
 
 **Play** starts playback while downloading when the source permits it. **Download** saves a complete file. Existing downloads are reused; unavailable quality is reported rather than silently replaced. The download directory is configurable, and completed files remain there after playback.
 
-Keep `.replayer.json`, `.replayer-cover.png` and any `.lrc` sidecars with their audio file when moving downloaded music. They contain metadata, cover art and lyrics that may not be embedded in the audio.
+Keep `.pordo.json`, `.pordo-cover.png` (or their older `.replayer` equivalents) and any `.lrc` sidecars with their audio file when moving downloaded music. They contain metadata, cover art and lyrics that may not be embedded in the audio.
 
 ### QQ Music local files
 
@@ -87,6 +87,6 @@ Sync covers supported service/model settings, comic and online-music favorites, 
 
 API keys are excluded by default. To sync them, enable the option and use the same separate sync passphrase on all devices; keep the original passphrase available when changing it. WebDAV passwords and the passphrase itself are not uploaded. A wrong passphrase stops writes rather than replacing existing encrypted keys.
 
-Windows data normally lives in `%LOCALAPPDATA%/replayer`. macOS defaults to `~/.config/replayer`; a configured `XDG_CONFIG_HOME` changes that location. Downloads and caches can occupy significant space. Stop a torrent before manually deleting its cache, and retain downloaded-music sidecars when moving files.
+Windows data normally lives in `%LOCALAPPDATA%/pordo`. macOS defaults to `~/.config/pordo`; a configured `XDG_CONFIG_HOME` changes that location. Existing profiles in the corresponding `replayer` directory are reused automatically. Downloads and caches can occupy significant space. Stop a torrent before manually deleting its cache, and retain downloaded-music sidecars when moving files.
 
 The app does not read development `.env` files. Provider keys belong in the app's supported credential settings. See [third-party notices](third-party.md) for bundled components and [Releases](https://github.com/PordoTech/pordo/releases) for changes.

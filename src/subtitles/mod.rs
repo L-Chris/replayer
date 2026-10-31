@@ -124,7 +124,7 @@ impl Job {
         let priority = Arc::new(std::sync::atomic::AtomicU64::new(position.to_bits()));
         let worker_priority = priority.clone();
         let thread = std::thread::Builder::new()
-            .name("replayer-subtitles".into())
+            .name("pordo-subtitles".into())
             .spawn(move || {
                 let result = scheduler::run_with_cache(
                     &path,
@@ -166,7 +166,7 @@ impl Drop for Job {
         self.cancel.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
             let _ = std::thread::Builder::new()
-                .name("replayer-subtitle-reaper".into())
+                .name("pordo-subtitle-reaper".into())
                 .spawn(move || {
                     let _ = thread.join();
                 });
@@ -221,7 +221,7 @@ fn generate_with_client(
     let (sender, receiver) = tokio::sync::mpsc::channel(options.concurrency);
     let audio = audio.into_transfer();
     let decoder = std::thread::Builder::new()
-        .name("replayer-subtitle-audio".into())
+        .name("pordo-subtitle-audio".into())
         .spawn(move || {
             let mut audio = match audio.open() {
                 Ok(audio) => audio,
@@ -658,7 +658,7 @@ mod tests {
                 }
             });
             let path = std::env::temp_dir().join(format!(
-                "replayer-skip-{}-{prioritized}-{error_status}.wav",
+                "pordo-skip-{}-{prioritized}-{error_status}.wav",
                 std::process::id()
             ));
             std::fs::write(
@@ -827,7 +827,7 @@ mod tests {
             }
         });
         let path =
-            std::env::temp_dir().join(format!("replayer-concurrency-{}.wav", std::process::id()));
+            std::env::temp_dir().join(format!("pordo-concurrency-{}.wav", std::process::id()));
         std::fs::write(
             &path,
             audio::Chunk {

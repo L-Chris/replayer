@@ -9,7 +9,7 @@ pub fn get(name: &str) -> Result<Option<String>> {
         return Ok(Some(value));
     }
     let file = Some(
-        std::env::var_os("REPLAYER_ENV_FILE")
+        pordo_core::environment::var_os("PORDO_ENV_FILE")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".env")),
     );

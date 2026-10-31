@@ -354,7 +354,7 @@ mod tests {
             }
         }
         let directory =
-            std::env::temp_dir().join(format!("replayer-legacy-format-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("pordo-legacy-format-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let paths = cached_paths(&directory, "legacy");
         crate::pixels::solid(32, 64, [250, 250, 250, 255])

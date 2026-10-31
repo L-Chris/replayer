@@ -1,22 +1,23 @@
 param(
     [Parameter(Mandatory)][string]$Installer,
-    [Parameter(Mandatory)][string]$InstallDirectory
+    [Parameter(Mandatory)][string]$InstallDirectory,
+    [ValidateSet("pordo", "replayer")][string]$Product = "pordo"
 )
 # Run only in the isolated Windows CI account: installs twice to check upgrades.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$sourceIcon = Join-Path $root 'assets/branding/replayer.ico'
+$sourceIcon = Join-Path $root "assets/branding/$Product.ico"
 $digest = (Get-FileHash -LiteralPath $sourceIcon -Algorithm SHA256).Hash.ToLowerInvariant()
-$expectedIcon = Join-Path $InstallDirectory ('icons/replayer-' + $digest.Substring(0, 16) + '.ico')
-$executable = Join-Path $InstallDirectory 'replayer.exe'
+$expectedIcon = Join-Path $InstallDirectory ("icons/$Product-" + $digest.Substring(0, 16) + '.ico')
+$executable = Join-Path $InstallDirectory "$Product.exe"
 $shell = New-Object -ComObject WScript.Shell
 $pinnedDirectory = Join-Path $env:APPDATA 'Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar'
 New-Item -ItemType Directory -Path $pinnedDirectory -Force | Out-Null
 $fixtureID = [Guid]::NewGuid().ToString('N')
-$pinnedLink = Join-Path $pinnedDirectory "replayer-icon-test-$fixtureID.lnk"
+$pinnedLink = Join-Path $pinnedDirectory "$Product-icon-test-$fixtureID.lnk"
 $unrelatedLink = Join-Path $pinnedDirectory "unrelated-icon-test-$fixtureID.lnk"
-$desktopLink = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'replayer.lnk'
-$startLink = Join-Path ([Environment]::GetFolderPath('Programs')) 'replayer/replayer.lnk'
+$desktopLink = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) "$Product.lnk"
+$startLink = Join-Path ([Environment]::GetFolderPath('Programs')) "$Product/$Product.lnk"
 $retiredCodecFiles = @('plugins/image_webp.json', 'plugins/remdia_backend_image_webp.dll',
     'plugins/native.json', 'plugins/remdia_backend_native.dll',
     'plugins/windows.json', 'plugins/remdia_backend_windows.dll',
@@ -29,6 +30,8 @@ $retiredCodecFiles = @('plugins/image_webp.json', 'plugins/remdia_backend_image_
     'plugins/fallback_vorbis.json', 'plugins/remdia_backend_fallback_vorbis.dll',
     'plugins/fallback_mp3_lame.json', 'plugins/remdia_backend_fallback_mp3_lame.dll',
     'remdia-licenses/LAME-COPYING.txt', 'remdia-licenses/mp3lame-encoder-LGPL-3.0.txt')
+$legacyDesktop = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'replayer.lnk'
+$legacyStart = Join-Path ([Environment]::GetFolderPath('Programs')) 'replayer/replayer.lnk'
 $unrelatedPluginFile = Join-Path $InstallDirectory 'plugins/upgrade-test.keep'
 
 function Assert-LinkIcon([string]$Path) {
@@ -81,7 +84,24 @@ try {
         Set-Content -LiteralPath $fixturePath -Value 'retired codec fixture' -Encoding ascii
     }
     Set-Content -LiteralPath $unrelatedPluginFile -Value 'preserve unrelated plugin files' -Encoding ascii
+    if ($Product -eq 'pordo') {
+        # Model a pre-branding installation, including a pinned link with arguments.
+        Remove-Item -LiteralPath $desktopLink
+        foreach ($path in @($legacyDesktop, $legacyStart, $pinnedLink)) {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+            $link = $shell.CreateShortcut($path)
+            $link.TargetPath = Join-Path $InstallDirectory 'replayer.exe'
+            if ($path -eq $pinnedLink) { $link.Arguments = '--icon-smoke-fixture' }
+            $link.Save()
+        }
+        Set-Content -LiteralPath (Join-Path $InstallDirectory 'replayer.exe') -Value 'old executable fixture'
+    }
     Install-Fixture '!desktopicon'
+    if ($Product -eq 'pordo') {
+        foreach ($path in @($legacyDesktop, $legacyStart, (Join-Path $InstallDirectory 'replayer.exe'))) {
+            if (Test-Path -LiteralPath $path) { throw "Upgrade retained old branding: $path" }
+        }
+    }
     foreach ($relative in $retiredCodecFiles) {
         if (Test-Path -LiteralPath (Join-Path $InstallDirectory $relative)) { throw "Upgrade retained removed codec file: $relative" }
     }

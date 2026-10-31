@@ -1,4 +1,4 @@
-# replayer
+# Pordo
 
 A media app for watching videos, listening to music and reading comics, with optional desktop AI subtitles and comic translation.
 
@@ -28,7 +28,7 @@ Windows builds through v0.5.1 validate updates against the former repository pat
 | macOS 15+ · Intel | `macos-x86_64` DMG or ZIP |
 | Android 9+ · arm64 | `android-arm64-v8a.apk` for music, comics and WebDAV sync |
 
-On macOS, drag `replayer.app` into Applications. The app includes its playback dependencies. Downloaded builds are currently ad-hoc signed; macOS may ask you to allow the app in **System Settings → Privacy & Security**.
+On macOS, drag `Pordo.app` into Applications. The app includes its playback dependencies. Downloaded builds are currently ad-hoc signed; macOS may ask you to allow the app in **System Settings → Privacy & Security**.
 
 **Platform notes:** Windows uses Credential Manager and supports installing updates from Settings → About. macOS uses Keychain; download updates from Releases. Android stores credentials with Android KeyStore protection and uses a persistent release signing key for APK updates. See [Android setup and development](docs/android.md) for supported features and signing details.
 

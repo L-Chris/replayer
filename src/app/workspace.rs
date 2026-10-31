@@ -374,7 +374,7 @@ impl App {
             let (r, _) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::hover());
             branding::paint(ui.painter(), r);
             if !narrow {
-                ui.label(RichText::new("replayer").size(20.0).strong());
+                ui.label(RichText::new("Pordo").size(20.0).strong());
             }
         });
         ui.add_space(26.0);

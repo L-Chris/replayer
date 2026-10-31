@@ -49,5 +49,5 @@ for path in root.rglob('*'):
         linked = imports(path)
         assert not any(re.search(r'(avcodec|avformat|avutil|swresample|swscale|vcruntime|msvcp|msvcr\d)', item, re.I) for item in linked), (path, linked)
 assert not list(root.rglob('remdia_backend_*.dll')), 'Built-in media components must not be shipped again as DLLs'
-assert not list(root.rglob('remdia_sdk.dll')), 'replayer statically includes the SDK'
+assert not list(root.rglob('remdia_sdk.dll')), 'pordo statically includes the SDK'
 print('Windows media components are built in; no duplicate SDK DLLs or FFmpeg imports')

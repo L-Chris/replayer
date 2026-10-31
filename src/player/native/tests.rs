@@ -4,10 +4,12 @@ use std::{
     time::{Duration, Instant},
 };
 fn fixture(name: &str) -> String {
-    PathBuf::from(std::env::var("REPLAYER_NATIVE_FIXTURES").expect("set REPLAYER_NATIVE_FIXTURES"))
-        .join(name)
-        .to_string_lossy()
-        .into_owned()
+    PathBuf::from(
+        pordo_core::environment::var("PORDO_NATIVE_FIXTURES").expect("set PORDO_NATIVE_FIXTURES"),
+    )
+    .join(name)
+    .to_string_lossy()
+    .into_owned()
 }
 fn pump(player: &mut Player) -> Vec<Event> {
     let mut events = Vec::new();

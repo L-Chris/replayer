@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified Android development entry point for replayer.
+"""Unified Android development entry point for pordo.
 
 Every step from a locked Android cargo check to a verified device run goes
 through this script so no second, inconsistent build path appears next to
@@ -43,15 +43,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = "dev.replayer"
-ACTIVITY = f"{PACKAGE}/.MainActivity"
-TEST_RUNNER = "dev.replayer.ProxyTestRunner"
+ACTIVITY = f"{PACKAGE}/dev.pordo.MainActivity"
+TEST_RUNNER = "dev.pordo.ProxyTestRunner"
 TARGET_ABI = "arm64-v8a"
 MIN_API = 28
 PAGE_SIZE_16K = 16384
 JNI_CLASSES = (
     "org/rustls/platformverifier/CertificateVerifier",
     "dev/remdia/Bridge",
-    "dev/replayer/Native",
+    "dev/pordo/Native",
 )
 
 
@@ -444,13 +444,13 @@ def command_doctor(args: argparse.Namespace, env: Env) -> int:
         print(f"  remdia AAR sha256 {sha256(remdia)}")
     else:
         problems.append("remdia AAR not staged; run scripts/build-android.sh")
-    native = ROOT / "android" / "app" / "src" / "main" / "jniLibs" / TARGET_ABI / "libreplayer_android.so"
+    native = ROOT / "android" / "app" / "src" / "main" / "jniLibs" / TARGET_ABI / "libpordo_android.so"
     if native.exists():
-        built = ROOT / "target" / "aarch64-linux-android" / args.profile / "libreplayer_android.so"
+        built = ROOT / "target" / "aarch64-linux-android" / args.profile / "libpordo_android.so"
         stale = built.exists() and built.stat().st_mtime > native.stat().st_mtime
         print(f"  native     {human(native.stat().st_size)} sha256 {sha256(native)[:16]}{' STALE' if stale else ''}")
         if stale:
-            problems.append("staged libreplayer_android.so is older than the last cargo build")
+            problems.append("staged libpordo_android.so is older than the last cargo build")
     else:
         print("  native     not staged yet")
 
@@ -492,7 +492,7 @@ def command_check(args: argparse.Namespace, env: Env) -> int:
         tool,
         "--locked",
         "-p",
-        "replayer-android",
+        "pordo-android",
         "--target",
         "aarch64-linux-android",
     ]
@@ -639,8 +639,8 @@ def wait_for_activity(env: Env, serial: str, timeout: int) -> str:
 
 def read_init_gate(env: Env, serial: str) -> str:
     """Return the initialization error text when the startup gate is showing."""
-    adb(env, ["shell", "uiautomator", "dump", "/sdcard/replayer-ui.xml"], serial)
-    dump = adb(env, ["exec-out", "cat", "/sdcard/replayer-ui.xml"], serial).stdout
+    adb(env, ["shell", "uiautomator", "dump", "/sdcard/pordo-ui.xml"], serial)
+    dump = adb(env, ["exec-out", "cat", "/sdcard/pordo-ui.xml"], serial).stdout
     if "init-error-title" not in dump:
         return ""
     try:
@@ -659,7 +659,7 @@ def read_init_gate(env: Env, serial: str) -> str:
 
 def collect_crash_lines(env: Env, serial: str) -> list[str]:
     crash = adb(env, ["logcat", "-d", "-b", "crash"], serial).stdout
-    native = adb(env, ["logcat", "-d", "-s", "replayer-native:E", "AndroidRuntime:E", "DEBUG:F"], serial).stdout
+    native = adb(env, ["logcat", "-d", "-s", "pordo-native:E", "AndroidRuntime:E", "DEBUG:F"], serial).stdout
     # "--------- beginning of ..." banners are logcat metadata, not events; on
     # freshly cleared buffers they can be the only output (seen on API 28).
     lines = [
@@ -671,7 +671,7 @@ def collect_crash_lines(env: Env, serial: str) -> list[str]:
 
 
 def capture_screenshot(env: Env, serial: str, destination: Path):
-    remote = "/sdcard/replayer-screen.png"
+    remote = "/sdcard/pordo-screen.png"
     if adb(env, ["shell", "screencap", "-p", remote], serial).returncode != 0:
         return None
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -686,7 +686,7 @@ def command_logs(args: argparse.Namespace, env: Env) -> int:
     pid = adb(env, ["shell", "pidof", PACKAGE], serial).stdout.strip()
     sections = {
         "crash buffer": ["logcat", "-d", "-b", "crash"],
-        "native + runtime": ["logcat", "-d", "-s", "replayer-native:V", "AndroidRuntime:E", "DEBUG:V", "replayer:V"],
+        "native + runtime": ["logcat", "-d", "-s", "pordo-native:V", "AndroidRuntime:E", "DEBUG:V", "pordo:V"],
     }
     if pid:
         sections[f"app pid {pid}"] = ["logcat", "-d", "--pid", pid]
@@ -698,7 +698,7 @@ def command_logs(args: argparse.Namespace, env: Env) -> int:
     interesting = [
         line
         for line in text.splitlines()
-        if re.search(r"panic|FATAL|Exception|abort message|signal \d|replayer-native", line)
+        if re.search(r"panic|FATAL|Exception|abort message|signal \d|pordo-native", line)
     ]
     print(f"logs     {out}")
     print(f"device   {serial} pid {pid or 'not running'}")
@@ -708,7 +708,7 @@ def command_logs(args: argparse.Namespace, env: Env) -> int:
             print(f"  {line}")
     else:
         print("\nno panic, exception or fatal line captured")
-    symbols = ROOT / "target" / "aarch64-linux-android" / args.profile / "libreplayer_android.so"
+    symbols = ROOT / "target" / "aarch64-linux-android" / args.profile / "libpordo_android.so"
     print("\nsymbolize a native frame with:")
     print(f"  {env.llvm('llvm-addr2line')} -Cfe {symbols} <address>")
     print(f"  {env.sdk}/ndk/{env.ndk.name}/ndk-stack -sym {symbols.parent} -dump <logcat.txt>")
@@ -985,6 +985,14 @@ def command_audit(args: argparse.Namespace, env: Env) -> int:
     if not apk.exists():
         raise ToolError(f"APK not found: {apk}")
     print(f"auditing {apk} ({human(apk.stat().st_size)})")
+    source_root = Path(args.source_root)
+    native_paths = list((source_root / "android/app/src/main/java").glob("**/Native.kt"))
+    if len(native_paths) != 1:
+        raise ToolError("Expected one source Native.kt for this APK")
+    kotlin = native_paths[0].read_text(encoding="utf-8")
+    namespace = re.search(r"^package ([\w.]+)", kotlin, re.M).group(1)
+    library = "lib" + re.search(r'System.loadLibrary\("([\w]+)"\)', kotlin).group(1) + ".so"
+    native_class = namespace.replace(".", "/") + "/Native"
     checks: list[dict] = []
 
     def record(name: str, ok: bool, detail: str) -> None:
@@ -1000,14 +1008,14 @@ def command_audit(args: argparse.Namespace, env: Env) -> int:
         # 1. The two Java components that JNI resolves by name.
         classes = dex_classes(env, apk)
         record("DEX indexed", bool(classes), f"{len(dex_names)} dex file(s), {len(classes)} classes")
-        for required in JNI_CLASSES:
+        for required in tuple(c for c in JNI_CLASSES if not c.endswith("/Native")) + (native_class,):
             record(f"dex contains {required}", required in classes, f"{len(classes)} classes indexed")
 
         # 2. Native payload: the single business library, no remdia SDK library.
-        business = [name for name in so_names if name.endswith("libreplayer_android.so")]
+        business = [name for name in so_names if Path(name).name == library]
         record(
             "business native library present",
-            len(business) == 1 and business[0] == f"lib/{TARGET_ABI}/libreplayer_android.so",
+            len(business) == 1 and business[0] == f"lib/{TARGET_ABI}/{library}",
             ", ".join(business) or "missing",
         )
         remdia_libs = [name for name in so_names if "remedia_sdk" in name or "remdia_sdk" in name]
@@ -1035,8 +1043,8 @@ def command_audit(args: argparse.Namespace, env: Env) -> int:
 
     # 5. ELF alignment of the business library.
     with zipfile.ZipFile(apk) as archive:
-        member = f"lib/{TARGET_ABI}/libreplayer_android.so"
-        extracted = ROOT / "target" / "android-audit" / f"libreplayer_android-{args.profile}.so"
+        member = f"lib/{TARGET_ABI}/{library}"
+        extracted = ROOT / "target" / "android-audit" / f"{Path(library).stem}-{args.profile}.so"
         extracted.parent.mkdir(parents=True, exist_ok=True)
         extracted.write_bytes(archive.read(member))
     readelf = run([env.llvm("llvm-readelf"), "-l", str(extracted)], quiet=True, check=False).stdout
@@ -1050,11 +1058,10 @@ def command_audit(args: argparse.Namespace, env: Env) -> int:
     )
 
     # 6. Every Kotlin `external fun` has a matching exported JNI symbol.
-    kotlin = (ROOT / "android" / "app" / "src" / "main" / "java" / "dev" / "replayer" / "Native.kt").read_text(encoding="utf-8")
     declared = set(re.findall(r"external fun (\w+)", kotlin))
     symbols = set(
         re.findall(
-            r"Java_dev_replayer_Native_(\w+)",
+            r"Java_" + re.escape(namespace.replace(".", "_") + "_Native_") + r"(\w+)",
             run([env.llvm("llvm-nm"), "-D", "--defined-only", str(extracted)], quiet=True, check=False).stdout,
         )
     )
@@ -1069,8 +1076,8 @@ def command_audit(args: argparse.Namespace, env: Env) -> int:
         print(f"  note: exported but not declared in Native.kt: {extra}")
 
     # 7. Keep rules for both JNI-referenced class sets.
-    rules = (ROOT / "android" / "app" / "proguard-rules.pro").read_text(encoding="utf-8")
-    for pattern in ("dev.remdia", "dev.replayer.Native", "org.rustls.platformverifier"):
+    rules = (source_root / "android" / "app" / "proguard-rules.pro").read_text(encoding="utf-8")
+    for pattern in ("dev.remdia", namespace + ".Native", "org.rustls.platformverifier"):
         record(f"proguard keeps {pattern}", pattern in rules, "present" if pattern in rules else "MISSING")
 
     report = {
@@ -1110,12 +1117,12 @@ def command_measure(args: argparse.Namespace, env: Env) -> int:
         for path in (ROOT / "android" / "build", ROOT / "android" / "app" / "build", ROOT / "android" / ".gradle"):
             shutil.rmtree(path, ignore_errors=True)
         run(
-            ["cargo", "clean", "-p", "replayer-android", "--target", "aarch64-linux-android"],
+            ["cargo", "clean", "-p", "pordo-android", "--target", "aarch64-linux-android"],
             env=cross_env(env),
             check=False,
             quiet=True,
         )
-        print("partial rebuild: removed Gradle build dirs and replayer-android artifacts; dependencies cached")
+        print("partial rebuild: removed Gradle build dirs and pordo-android artifacts; dependencies cached")
 
     command = [str(ROOT / "scripts" / "build-android.sh"), "--assemble"]
     if profile == "release":
@@ -1246,9 +1253,10 @@ def main(argv: list[str] | None = None) -> int:
         "reach the source through a host tunnel (e.g. http://10.0.2.2:7890)",
     )
     parser.add_argument("--test", default=None, help="smoke: instrumentation class or class#method filter")
+    parser.add_argument("--source-root", type=Path, default=ROOT, help="audit: source checkout matching the APK")
     parser.add_argument("--apk", default=None, help="audit: inspect a specific APK instead of the published artifact")
     parser.add_argument("--allow-stale", action="store_true", help="run/smoke: install an APK older than the sources")
-    parser.add_argument("--cold", action="store_true", help="measure: drop Gradle and replayer-android cargo caches before building")
+    parser.add_argument("--cold", action="store_true", help="measure: drop Gradle and pordo-android cargo caches before building")
     parser.add_argument("--samples", type=int, default=3, help="measure: dumpsys meminfo samples after launch")
     args = parser.parse_args(argv)
     if args.profile is None:

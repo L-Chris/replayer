@@ -11,19 +11,19 @@ from pathlib import Path
 from PIL import Image
 
 root = Path(__file__).resolve().parents[1] / 'assets' / 'branding'
-with Image.open(root / 'replayer-logo.png') as source:
+with Image.open(root / 'pordo-logo.png') as source:
     logo = source.convert('RGBA')
 print('Source:', logo.size, 'center alpha:', logo.getpixel((logo.width // 2, logo.height // 2))[3])
 assert logo.getpixel((logo.width // 2, logo.height // 2))[3] >= 250
 sizes = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 images = {size: logo.resize((size, size), Image.Resampling.LANCZOS) for size in sizes}
-images[256].save(root / 'replayer-icon-256.png')
-images[256].save(root / 'replayer.ico', format='ICO',
+images[256].save(root / 'pordo-icon-256.png')
+images[256].save(root / 'pordo.ico', format='ICO',
                  sizes=[(size, size) for size in sizes],
                  append_images=[images[size] for size in sizes if size != 256])
 mac_images = [logo.resize((size, size), Image.Resampling.LANCZOS)
               for size in (32, 64, 128, 256, 512, 1024)]
-mac_images[-1].save(root / 'replayer.icns', format='ICNS', append_images=mac_images)
+mac_images[-1].save(root / 'pordo.icns', format='ICNS', append_images=mac_images)
 
 # Ignore almost-transparent generation noise when measuring the sidebar crop;
 # only the crop bounds change, not the source pixels or their alpha values.
@@ -32,9 +32,9 @@ mark = logo.crop(bounds)
 mark.thumbnail((240, 240), Image.Resampling.LANCZOS)
 sidebar = Image.new('RGBA', (256, 256))
 sidebar.alpha_composite(mark, ((256 - mark.width) // 2, (256 - mark.height) // 2))
-sidebar.save(root / 'replayer-mark-256.png')
+sidebar.save(root / 'pordo-mark-256.png')
 
-with Image.open(root / 'replayer.ico') as icon:
+with Image.open(root / 'pordo.ico') as icon:
     print('ICO sizes:', sorted(icon.ico.sizes()))
     assert icon.ico.sizes() == {(n, n) for n in (16, 20, 24, 32, 40, 48, 64, 128, 256)}
     for size in sizes:

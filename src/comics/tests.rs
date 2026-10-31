@@ -75,10 +75,8 @@ fn image_edit_uses_multipart_returns_a_cached_image_and_never_retries_400() {
         };
         let config =
             || translation::Config::load(&settings, crate::settings::Language::English).unwrap();
-        let directory = std::env::temp_dir().join(format!(
-            "replayer-comic-translation-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("pordo-comic-translation-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let original = directory.join("original.png");
         let original_bytes = png(96, 160);
@@ -174,7 +172,7 @@ fn image_edit_uploads_jpeg_and_normalizes_provider_results_to_jpeg() {
     use base64::{Engine, engine::general_purpose::STANDARD};
     runtime().block_on(async {
         let directory =
-            std::env::temp_dir().join(format!("replayer-edit-formats-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("pordo-edit-formats-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let original = directory.join("original.png");
         let original_bytes = png(32, 64);
@@ -310,7 +308,7 @@ fn tall_images_are_tiled_and_translation_preserves_canvas_dimensions() {
     assert_eq!(bitmap.tiles.len(), 3);
     assert!(bitmap.tiles.iter().all(|t| t.height() <= 2048));
     let directory =
-        std::env::temp_dir().join(format!("replayer-comic-bands-{}", uuid::Uuid::new_v4()));
+        std::env::temp_dir().join(format!("pordo-comic-bands-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("original.png");
     let bytes = png(500, 5200);

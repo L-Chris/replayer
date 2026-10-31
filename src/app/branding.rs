@@ -5,10 +5,8 @@ use std::sync::OnceLock;
 fn rasterize(size: [usize; 2]) -> egui::ColorImage {
     static SOURCE: OnceLock<crate::pixels::Image> = OnceLock::new();
     let source = SOURCE.get_or_init(|| {
-        crate::pixels::read_image(include_bytes!(
-            "../../assets/branding/replayer-mark-256.png"
-        ))
-        .expect("embedded brand image through remdia")
+        crate::pixels::read_image(include_bytes!("../../assets/branding/pordo-mark-256.png"))
+            .expect("embedded brand image through remdia")
     });
     let image = crate::pixels::resize(source, size[0] as u32, size[1] as u32, false)
         .expect("brand resize through remdia");
@@ -41,13 +39,13 @@ pub(super) fn paint(painter: &Painter, rect: Rect) {
         ),
         vec2(size[0] as f32 / scale, size[1] as f32 / scale),
     );
-    let id = Id::new("replayer-brand-mark");
+    let id = Id::new("pordo-brand-mark");
     let cached = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id));
     let texture = cached
         .filter(|texture| texture.size() == size)
         .unwrap_or_else(|| {
             let texture = ctx.load_texture(
-                "replayer-brand-mark",
+                "pordo-brand-mark",
                 rasterize(size),
                 egui::TextureOptions::LINEAR,
             );

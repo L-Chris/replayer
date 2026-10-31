@@ -44,7 +44,7 @@ impl Demux {
         let worker = shared.clone();
         let stop = shared.stop.clone();
         let thread = std::thread::Builder::new()
-            .name("replayer-remdia-graph".into())
+            .name("pordo-remdia-graph".into())
             .spawn(move || {
                 if let Err(e) = run(&path, &worker, rate, &tx, commands, &worker_waiting)
                     && !worker.stop.load(Ordering::Acquire)
@@ -97,7 +97,7 @@ fn run(
     let mut request = remdia::Request::playback(prepared.path());
     request.audio_rate = rate;
     request.timeout_ms = if s.progressive { 300000 } else { 30000 };
-    request.hardware = std::env::var_os("REPLAYER_SOFTWARE").is_none();
+    request.hardware = pordo_core::environment::var_os("PORDO_SOFTWARE").is_none();
     let mut session = unsafe { engine.open(request.clone(), s.cancel.clone()) }
         .with_context(|| format!("open media '{path}' through remdia"))?;
     #[cfg(test)]

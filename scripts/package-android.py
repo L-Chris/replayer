@@ -78,6 +78,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--tag", required=True)
+    parser.add_argument("--source-root", type=Path, default=ROOT, help="Source checkout being packaged (supports old release tags)")
     parser.add_argument("--sdk", type=Path, default=os.environ.get("ANDROID_HOME"))
     parser.add_argument("--output-directory", type=Path, default=ROOT / "dist/android")
     args = parser.parse_args()
@@ -94,7 +95,11 @@ def main():
     before = payload(args.apk)
     output = args.output_directory.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    name = f"replayer-{args.tag[1:]}-android-arm64-v8a.apk"
+    cargo = (args.source_root / "Cargo.toml").read_text()
+    product = re.search(r'^name\s*=\s*"([^\"]+)"', cargo, re.M).group(1)
+    if product not in {"pordo", "replayer"}:
+        raise ValueError("Unexpected source application")
+    name = f"{product}-{args.tag[1:]}-android-arm64-v8a.apk"
     # Work under the checkout; only publish the final artifact after all checks pass.
     (ROOT / "target/android-release").mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=ROOT / "target/android-release") as work:

@@ -15,7 +15,7 @@ Install Rust stable, Visual Studio C++ Build Tools/Windows SDK, CMake and Python
 
 Setup builds the exact remdia revision pinned in Cargo.toml. `-RuntimeDirectory`
 can select an already staged SDK runtime whose REVISION matches that pin.
-`preview.ps1` rebuilds/restarts only this checkout's `target/debug/replayer.exe`;
+`preview.ps1` rebuilds/restarts only this checkout's `target/debug/pordo.exe`;
 a failed build never launches an older executable.
 
 ## macOS
@@ -25,11 +25,11 @@ Requires macOS 15+, Rust stable, Apple command-line tools and CMake.
 ```bash
 brew install cmake
 ./scripts/build-macos.sh
-./target/debug/replayer "path/to/video.mkv"
+./target/debug/pordo "path/to/video.mkv"
 ```
 
 The first build fetches and builds the pinned remdia SDK. Built-in components
-are linked into replayer; only the LAME extension is copied beside the fixed
+are linked into pordo; only the LAME extension is copied beside the fixed
 preview executable on macOS. Before
 standalone Cargo commands, source the generated environment:
 
@@ -50,7 +50,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-Use `REPLAYER_SETTINGS_FILE` pointing inside `target/` to isolate developer settings. Ordinary tests use committed synthetic media and local mock services, and do not consume model credits. Set `REPLAYER_NATIVE_FIXTURES` to `.deps/remdia-source/tests/fixtures` and run `cargo test --locked native_media -- --ignored --nocapture` for the real plugin tests.
+Use `PORDO_SETTINGS_FILE` pointing inside `target/` to isolate developer settings. Ordinary tests use committed synthetic media and local mock services, and do not consume model credits. Set `PORDO_NATIVE_FIXTURES` to `.deps/remdia-source/tests/fixtures` and run `cargo test --locked native_media -- --ignored --nocapture` for the real plugin tests.
 
 Additional checks are explicit:
 
@@ -62,22 +62,22 @@ cargo test --locked comics
 cargo test --locked music_sources
 ```
 
-GPU/visual tests require an adapter. Visual artifacts are written under `target/`. Live source/model tests are ignored by default and may use the network or incur service charges. Their test-only helper reads `.env.example`-documented values from an explicit `.env` or `REPLAYER_ENV_FILE`; the app, preview and subtitle CLI never read those files.
+GPU/visual tests require an adapter. Visual artifacts are written under `target/`. Live source/model tests are ignored by default and may use the network or incur service charges. Their test-only helper reads `.env.example`-documented values from an explicit `.env` or `PORDO_ENV_FILE`; the app, preview and subtitle CLI never read those files.
 
-On Windows, `./verify.ps1` reuses the fixed preview and committed MP4/MKV corpus; `-Software` forces software decoding and `-Stress` repeats the seek/drain regressions 25 times. CLI smoke tests are `replayer --selftest <video>` and `replayer --selftest-music <audio>`; the music check uses the actual output device. Keep all fixtures/logs inside `target/`.
+On Windows, `./verify.ps1` reuses the fixed preview and committed MP4/MKV corpus; `-Software` forces software decoding and `-Stress` repeats the seek/drain regressions 25 times. CLI smoke tests are `pordo --selftest <video>` and `pordo --selftest-music <audio>`; the music check uses the actual output device. Keep all fixtures/logs inside `target/`.
 
 ## Diagnostics and CLI
 
-- `REPLAYER_SOFTWARE=1`: force software video decoding.
-- `REPLAYER_STATS=1`: playback diagnostics; Windows preview also accepts `-Stats`.
-- `REPLAYER_SETTINGS_FILE`: isolate settings and related application data.
-- `REPLAYER_TORRENT_CACHE`: override the torrent cache root.
+- `PORDO_SOFTWARE=1`: force software video decoding.
+- `PORDO_STATS=1`: playback diagnostics; Windows preview also accepts `-Stats`.
+- `PORDO_SETTINGS_FILE`: isolate settings and related application data.
+- `PORDO_TORRENT_CACHE`: override the torrent cache root.
 
 Subtitle CLI examples:
 
 ```text
-replayer --subtitles input.mkv output.srt --language zh-CN --concurrency 3
-replayer --subtitles input.mkv sample.srt --language en-US --start 600 --duration 60
+pordo --subtitles input.mkv output.srt --language zh-CN --concurrency 3
+pordo --subtitles input.mkv sample.srt --language en-US --start 600 --duration 60
 ```
 
 The CLI uses saved provider/model settings, preserves absolute media timestamps and refuses to overwrite an existing SRT. Language/concurrency arguments do not modify the saved UI configuration.
@@ -89,7 +89,7 @@ Release Rust builds use LTO, one codegen unit and stripped symbols. Debug previe
 Bundled SQLite keeps core SQL, transactions and WAL. `.cargo/config.toml` disables its unused FTS3/FTS5, R-tree and dbstat extensions through `LIBSQLITE3_FLAGS` for both desktop platforms. The comic library uses ordinary tables; no database migration or data-file rewrite is required. A macOS ARM64 comparison reduced machine code by about 0.42 MiB. Environment overrides of `LIBSQLITE3_FLAGS` can change these build options.
 
 Both platforms statically register remdia utility, system media/image and
-compatibility demux factories in replayer. Windows needs no SDK DLLs; macOS
+compatibility demux factories in pordo. Windows needs no SDK DLLs; macOS
 keeps only the separate LAME extension. The factories still compose independent
 graph nodes and external extensions retain ABI 2.2. Windows MFT and macOS
 VideoToolbox supply video decoding. macOS copies CPU NV12 planes to WGPU;
@@ -99,3 +99,32 @@ Packagers verify architecture, ABI, revision and native imports and reject FFmpe
 runtime files. No test tool, Homebrew runtime tree, environment dump or user data
 is packaged. See [releasing](releasing.md) for package commands and
 [architecture](architecture.md) for implementation boundaries.
+
+## Brand and upgrade compatibility
+
+The application is Pordo; Cargo packages, executables and new download sidecars use
+`pordo`. Existing desktop profiles under `replayer` are reused without moving them;
+new profiles use `pordo`. `PORDO_*` developer overrides also accept their old
+`REPLAYER_*` aliases, with the new name taking precedence.
+
+Published identities intentionally remain stable: Android application ID
+`dev.replayer` (source namespace `dev.pordo`), its old launcher component alias,
+macOS bundle ID `io.github.l-chris.replayer`, the Windows installer AppId,
+OS credential namespaces and Android keystore alias/AAD. The WebDAV v1 path
+`replayer/v1/devices/` and encrypted formats remain compatible across devices.
+Existing `.replayer.json` / `.replayer-cover.png` downloads remain readable;
+new writes use `.pordo.json` / `.pordo-cover.png`.
+
+Historical release notes, design references and measurement records retain their
+original filenames and product names. Existing release tags are immutable;
+release backfills derive artifact/JNI names from the tagged source checkout.
+
+Branding validation on macOS ARM64 (2026-10-31): 159 desktop/core tests,
+strict Clippy, 8 Python tool tests and workflow lint passed. Android API 28
+passed 21 offline cases (3 network-gated skips), 13 release APK audit checks,
+and upgrades from both legacy debug and production-signed APKs. The debug
+upgrade retained files, preferences and keystore-encrypted secrets; both
+upgrades retained UID and first-install time. The legacy launcher alias opened
+the renamed app. macOS ZIP relocation, signing and playback passed; DMG
+checksum verification passed but mounting was unavailable on this host.
+Windows installer migration checks are included in CI and were not run locally.

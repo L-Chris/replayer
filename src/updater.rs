@@ -190,7 +190,7 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
 fn client(timeout: Duration) -> Result<reqwest::Client> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     Ok(reqwest::Client::builder()
-        .user_agent(concat!("replayer/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("pordo/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(15))
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
@@ -244,7 +244,7 @@ fn select_release(release: Release, current: &str) -> Result<Option<Update>> {
     if !version.pre.is_empty() || !version.build.is_empty() || version <= Version::parse(current)? {
         return Ok(None);
     }
-    let expected = format!("replayer-{version}-windows-x86_64-setup.exe");
+    let expected = format!("pordo-{version}-windows-x86_64-setup.exe");
     let asset = release
         .assets
         .into_iter()
@@ -261,7 +261,7 @@ fn select_release(release: Release, current: &str) -> Result<Option<Update>> {
 fn validate(update: &Update) -> Result<()> {
     let asset = &update.asset;
     ensure!(
-        asset.name == format!("replayer-{}-windows-x86_64-setup.exe", update.version),
+        asset.name == format!("pordo-{}-windows-x86_64-setup.exe", update.version),
         "Unexpected installer name"
     );
     ensure!(
@@ -306,10 +306,11 @@ fn verify(update: &Update, size: u64, hash: &str) -> Result<()> {
 }
 async fn download(update: &Update, tx: &Sender<Event>) -> Result<PathBuf> {
     validate(update)?;
-    let cache = std::env::var_os("LOCALAPPDATA")
+    let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
-        .context("LOCALAPPDATA is unavailable")?
-        .join("replayer/updates")
+        .context("LOCALAPPDATA is unavailable")?;
+    let cache = pordo_core::paths::application_directory(&base)
+        .join("updates")
         .join(&update.version);
     std::fs::create_dir_all(&cache)?;
     let path = cache.join(&update.asset.name);
@@ -389,14 +390,14 @@ fn launch_installer(update: &Update, path: &std::path::Path) -> Result<()> {
             "-File",
         ])
         .arg(&helper)
-        .env("REPLAYER_UPDATE_PID", std::process::id().to_string())
-        .env("REPLAYER_UPDATE_INSTALLER", path)
-        .env("REPLAYER_UPDATE_DIR", install_dir)
+        .env("PORDO_UPDATE_PID", std::process::id().to_string())
+        .env("PORDO_UPDATE_INSTALLER", path)
+        .env("PORDO_UPDATE_DIR", install_dir)
         .env(
-            "REPLAYER_UPDATE_SHA256",
+            "PORDO_UPDATE_SHA256",
             &update.asset.digest.as_deref().unwrap()[7..],
         )
-        .env("REPLAYER_UPDATE_RELAUNCH", install_dir.join("replayer.exe"))
+        .env("PORDO_UPDATE_RELAUNCH", install_dir.join("pordo.exe"))
         .creation_flags(0x08000000)
         .spawn()
         .context("Unable to start update installer")?;
@@ -463,7 +464,7 @@ mod tests {
     }
     fn release(version: &str) -> Release {
         let data = b"installer";
-        let name = format!("replayer-{version}-windows-x86_64-setup.exe");
+        let name = format!("pordo-{version}-windows-x86_64-setup.exe");
         Release {
             tag_name: format!("v{version}"),
             body: None,

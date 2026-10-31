@@ -1,4 +1,4 @@
-# Replayer logo
+# Pordo logo
 
 The current logo was generated with the built-in `image_gen` tool on 2026-10-24.
 The reference was the small folded play mark at the top-left of the approved
@@ -6,16 +6,16 @@ The reference was the small folded play mark at the top-left of the approved
 
 The user requested a solid center. The final image fills the former central
 opening while preserving the rounded silhouette, mint and blue-teal palette,
-and folded surfaces. `replayer-logo.png` is the unmodified generated output;
+and folded surfaces. `pordo-logo.png` is the unmodified generated output;
 its SHA-256 matches the selected image-generation artifact.
 
 ## Application assets
 
-- `replayer-logo.png`: original transparent artwork.
-- `replayer-icon-256.png`: window/application icon with original clear space.
-- `replayer-mark-256.png`: same artwork with compact padding for the sidebar.
-- `replayer.ico`: Windows icons at 16, 20, 24, 32, 40, 48, 64, 128 and 256px.
-- `replayer.icns`: macOS application/Dock icon with Retina variants through 1024px,
+- `pordo-logo.png`: original transparent artwork.
+- `pordo-icon-256.png`: window/application icon with original clear space.
+- `pordo-mark-256.png`: same artwork with compact padding for the sidebar.
+- `pordo.ico`: Windows icons at 16, 20, 24, 32, 40, 48, 64, 128 and 256px.
+- `pordo.icns`: macOS application/Dock icon with Retina variants through 1024px,
   resized from the same approved original. The macOS bundle references it in Info.plist.
 
 Regenerate the resized/encoded derivatives from the checkout in PowerShell:
@@ -39,14 +39,14 @@ All pages with the main sidebar use this mark. Immersive players and the comic
 reader keep their existing layout without a brand header.
 
 `build.rs` embeds the ICO in the executable. `src/main.rs` supplies the PNG to the
-native window. Packaging also copies the ICO to `icons/replayer-<sha256-prefix>.ico`.
+native window. Packaging also copies the ICO to `icons/pordo-<sha256-prefix>.ico`.
 The installer uses that content-addressed file for Setup, desktop/Start Menu
 shortcuts and the installed-apps entry. This gives changed artwork a new Windows
 icon-cache key, including same-version rebuilds; existing icon files are retained
 for older custom shortcuts until uninstall.
 
 After installation, existing taskbar shortcut copies targeting this installation's
-`replayer.exe` have only their icon location updated and saved. Their target,
+`pordo.exe` have only their icon location updated and saved. Their target,
 arguments and application identity are retained. The installer sends targeted
 `SHCNE_UPDATEITEM` notifications for the executable and affected shortcuts; it
 neither restarts Explorer nor clears other applications' icon caches. The app's
@@ -69,4 +69,4 @@ square transparent canvas. No text, tile, background, shadow or extra symbols.
 
 ## Final edit prompt (verbatim)
 
-Use case: precise-object-edit. Edit the attached replayer logo. Make exactly one design change: remove the central triangular hole and fill that entire opening with the logo's blue-teal surface so the mark becomes one continuous SOLID right-pointing play silhouette, with absolutely no hollow center or transparent interior. Blend the filled center naturally into the folded blue-teal upper surface. Keep the mint front ribbon crossing the bottom-right and the restrained fold shading, but do not create a smaller triangle, a new inset outline, a dark cavity, or a second play symbol in the center. Invariants: preserve the outer rounded triangular silhouette, its orientation, overall proportions, position and canvas size, mint/jade and blue-teal palette, folded surface quality, and clean edges. Preserve genuine transparency OUTSIDE the solid silhouette only. No text, no tile, no shadow, no added symbols.
+Use case: precise-object-edit. Edit the attached pordo logo. Make exactly one design change: remove the central triangular hole and fill that entire opening with the logo's blue-teal surface so the mark becomes one continuous SOLID right-pointing play silhouette, with absolutely no hollow center or transparent interior. Blend the filled center naturally into the folded blue-teal upper surface. Keep the mint front ribbon crossing the bottom-right and the restrained fold shading, but do not create a smaller triangle, a new inset outline, a dark cavity, or a second play symbol in the center. Invariants: preserve the outer rounded triangular silhouette, its orientation, overall proportions, position and canvas size, mint/jade and blue-teal palette, folded surface quality, and clean edges. Preserve genuine transparency OUTSIDE the solid silhouette only. No text, no tile, no shadow, no added symbols.

@@ -1,8 +1,8 @@
 # Android 客户端
 
-Android 端复用桌面版的 `replayer-core`：Rust 核心逻辑不变，通过
-`crates/replayer-android` 的 JNI 桥接暴露给 Kotlin/Compose 应用。remdia 引擎
-静态链接进唯一的业务库 `libreplayer_android.so`；AAR 里的独立
+Android 端复用桌面版的 `pordo-core`：Rust 核心逻辑不变，通过
+`crates/pordo-android` 的 JNI 桥接暴露给 Kotlin/Compose 应用。remdia 引擎
+静态链接进唯一的业务库 `libpordo_android.so`；AAR 里的独立
 `libremdia_sdk.so` 被 Gradle packaging 排除（`android-dev.py audit` 持续校验）。
 漫画搜索先使用 Komiic；从桌面同步的漫画通过共享 Sources 注册表按提供商路由。
 同时支持音乐播放、在线歌曲收藏和与桌面兼容的云同步。
@@ -15,7 +15,7 @@ Android 入口：漫画页“源设置”；桌面入口：设置 → 漫画 →
 手动登录本次会话；重启后恢复游客模式。“退出并清除密码”保留邮箱，关闭
 自动登录并删除本机密码，即使远端退出请求失败，本地也已退出。
 
-- 共用 `replayer-core::comics::source::Komiic` 的账号会话，不在两端各写一套
+- 共用 `pordo-core::comics::source::Komiic` 的账号会话，不在两端各写一套
   登录协议。官网 `/api/login` 接收邮箱和原始密码，通过 Cookie 维持会话；
   `/auth/refresh` 刷新，GraphQL `account` 确认已登录。
 - Windows 使用 Credential Manager，macOS 使用系统 Keychain（明确关闭
@@ -53,7 +53,7 @@ release 安装启动通过。没有单独复测 release 变体的在线登录（
 
 ## 正式签名与发布
 
-正式下载包为 `replayer-VERSION-android-arm64-v8a.apk`，支持 Android 9+
+正式下载包为 `pordo-VERSION-android-arm64-v8a.apk`，支持 Android 9+
 arm64 设备。首版提供音乐、漫画和 WebDAV 云同步，尚无桌面端的视频、AI
 字幕和漫画翻译界面。签名证书的 SHA-256 固定在
 `android/release-certificate.sha256`，后续 APK 使用同一密钥覆盖更新。
@@ -72,7 +72,7 @@ arm64 设备。首版提供音乐、漫画和 WebDAV 云同步，尚无桌面端
 - Gradle `release` 不再默认使用 debug 密钥。环境变量
   `ANDROID_KEYSTORE_FILE` 及上述三个口令/别名变量优先于本机配置；没有
   正式密钥时拒绝 release 构建。仅本地测量可显式设置
-  `REPLAYER_ANDROID_TEST_SIGNING=1`，该签名无法通过正式打包证书校验。
+  `PORDO_ANDROID_TEST_SIGNING=1`，该签名无法通过正式打包证书校验。
 - `scripts/package-android.py` 检查包名、版本、最低系统、ABI 和非调试属性，
   先 zipalign 再签名，分别验证 v2/v3 签名及固定证书，确认所有应用负载未变。
   APK、校验和与公开签名报告是唯一输出，私钥及口令不进入输出目录。
@@ -86,7 +86,7 @@ arm64 设备。首版提供音乐、漫画和 WebDAV 云同步，尚无桌面端
 ```sh
 python3 scripts/android-dev.py build --profile release
 JAVA_HOME=/path/to/jdk ANDROID_HOME=/path/to/sdk python3 scripts/package-android.py \
-  --apk target/android/release/replayer-release.apk --tag v0.5.1
+  --apk target/android/release/pordo-release.apk --tag v0.5.1
 ```
 
 签名私钥和口令仅有本机/密钥库/CI 副本，请保留这些恢复途径，避免后续无法
@@ -107,7 +107,7 @@ SHA-256 `3ad50bbec1844fe42c4b248d1ac0e6c17027a57ab52b912ea17a374fb1ec3cbe`。
 同步口令（至少 12 字符）。连接测试只创建、读取、删除随机探测对象，不触碰
 已有设备文档。
 
-- 协议完全复用 `replayer-core::sync`：`replayer/v1/devices/<UUID>.json`、
+- 协议完全复用 `pordo-core::sync`：`replayer/v1/devices/<UUID>.json`、
   向量时钟、删除标记、ETag 条件写入、AES-256-GCM/PBKDF2 的 v1 密钥封装。
   桌面 `src/sync/mod.rs` 只重新导出共享模块，漫画快照/导入也使用同一份代码。
 - 与桌面一致，同步漫画收藏（含曾收藏后取消的已跟踪记录）、章节列表、已读/
@@ -147,7 +147,7 @@ WebDAV 双向往返、离线取消、并发编辑、未实现字段及密钥保�
 ```sh
 ./scripts/android-dev.py doctor    # 工具链、暂存依赖、设备与 AVD 体检
 ./scripts/android-dev.py check     # 锁定的 aarch64-linux-android cargo check（--clippy 可选）
-./scripts/android-dev.py build     # cargo + gradle，发布 target/android/<profile>/replayer-<profile>.apk
+./scripts/android-dev.py build     # cargo + gradle，发布 target/android/<profile>/pordo-<profile>.apk
 ./scripts/android-dev.py run --serial emulator-5554     # 安装、启动、验证 native 就绪与初始化门
 ./scripts/android-dev.py smoke --serial emulator-5554   # 离线 instrumentation 套件
 ./scripts/android-dev.py audit     # APK 内容审计（DEX/JNI/对齐/keep 规则）
@@ -207,7 +207,7 @@ platform-tools 36.0.2）。SDK 自带的 adb 37.0.1 在本机出现过 libunwind
 
 ## 测试
 
-instrumentation 套件位于 `android/app/src/androidTest/java/dev/replayer/`：
+instrumentation 套件位于 `android/app/src/androidTest/java/dev/pordo/`：
 
 - `NativeBridgeTest`：桥接契约（初始化幂等、库沙箱路径、空白搜索报错、
   书架条目反序列化校验），离线可跑。
@@ -264,7 +264,7 @@ resource-id（无 `package:id/` 前缀），供 UI Automator/adb 驱动的检查
   `build`；androidTest 源码改动不影响 app APK 的新鲜度（smoke 每次重建测试
   APK）。
 
-## 验证状态
+## 历史验证状态（品牌更名前）
 
 P0 验收于 2026-10-30 在 emulator-5554（API 35）全部通过，APK
 `bf0663a80e363d06986f0328b37caccdb2ec1e1ebdb66972e24c1bdf86d03435`

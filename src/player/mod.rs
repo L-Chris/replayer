@@ -122,7 +122,7 @@ impl Player {
         });
         let worker = shared.clone();
         let thread = std::thread::Builder::new()
-            .name("replayer-session".into())
+            .name("pordo-session".into())
             .spawn(move || {
                 if let Err(e) =
                     session::run(path, &worker, command_rx, frame_tx, stale_frames, &event_tx)
@@ -271,7 +271,7 @@ impl Drop for Player {
         if let Some(thread) = self.thread.take() {
             // Cancellation interrupts media I/O; joining is kept off the UI thread.
             let _ = std::thread::Builder::new()
-                .name("replayer-reaper".into())
+                .name("pordo-reaper".into())
                 .spawn(move || {
                     let _ = thread.join();
                 });

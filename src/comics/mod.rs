@@ -7,7 +7,7 @@ mod bench;
 #[cfg(test)]
 mod tests;
 
-pub use replayer_core::comics::*;
+pub use pordo_core::comics::*;
 
 use serde::{Deserialize, Serialize};
 

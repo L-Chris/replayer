@@ -9,7 +9,7 @@ impl App {
             branding::paint(ui.painter(), logo);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                ui.label(RichText::new("replayer").size(22.0).strong());
+                ui.label(RichText::new("Pordo").size(22.0).strong());
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).color(MUTED));
                     ui.hyperlink_to(language.text("项目主页", "Project"), updater::REPOSITORY);

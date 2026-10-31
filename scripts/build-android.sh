@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-compile the Android JNI bridge (libreplayer_android.so), stage it plus
+# Cross-compile the Android JNI bridge (libpordo_android.so), stage it plus
 # the prebuilt remdia AAR and the rustls-platform-verifier JVM companion into
 # the Gradle project, optionally assemble the APK.
 # NDK environment mirrors remdia/scripts/build-android.py.
@@ -57,17 +57,19 @@ export RUSTFLAGS=$rustflags
 sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
 sha1() { shasum -a 1 "$1" | awk '{print $1}'; }
 
-cargo_args=(--locked -p replayer-android --target aarch64-linux-android)
+cargo_args=(--locked -p pordo-android --target aarch64-linux-android)
 if [[ $profile == release ]]; then cargo_args+=(--release); fi
 cargo build "${cargo_args[@]}"
 
 jni=android/app/src/main/jniLibs/arm64-v8a
 mkdir -p "$jni"
-cp "target/aarch64-linux-android/$profile/libreplayer_android.so" "$jni/"
+cp "target/aarch64-linux-android/$profile/libpordo_android.so" "$jni/"
+# Retire the old bridge after successfully staging its replacement.
+rm -f "$jni/libreplayer_android.so"
 
 # The AAR contributes dev.remdia Java classes and consumer proguard rules; its
 # libremedia_sdk.so is excluded at packaging because the engine is statically
-# embedded in libreplayer_android.so. Re-stage whenever the source differs: the
+# embedded in libpordo_android.so. Re-stage whenever the source differs: the
 # previous "copy only if missing" rule silently kept stale engine builds.
 aar=android/app/libs/remdia-0.3.0.aar
 aar_source=$root/../remdia/dist/android/remdia-0.3.0.aar
@@ -85,7 +87,7 @@ fi
 # The remdia Cargo pin and the local engine checkout should agree: the .so
 # embeds the pinned git rev while the staged AAR was built from the checkout, so
 # a drifted checkout can pair mismatched Java and native halves.
-pin=$(sed -n 's/.*rev = "\([0-9a-f]*\)".*/\1/p' crates/replayer-android/Cargo.toml | head -1)
+pin=$(sed -n 's/.*rev = "\([0-9a-f]*\)".*/\1/p' crates/pordo-android/Cargo.toml | head -1)
 head=$(git -C "$root/../remdia" rev-parse HEAD 2>/dev/null || echo unknown)
 if [[ -n $pin && $head != unknown && ${head:0:${#pin}} != "$pin" ]]; then
   echo "WARNING: remdia checkout $head differs from the pinned rev $pin" >&2
@@ -164,16 +166,16 @@ if $assemble; then
   apk=android/app/build/outputs/apk/$profile/app-$profile.apk
   out=target/android/$profile
   mkdir -p "$out"
-  cp "$apk" "$out/replayer-$profile.apk"
+  cp "$apk" "$out/pordo-$profile.apk"
   cat >"$out/artifact.json" <<EOF
 {
   "profile": "$profile",
-  "apk": "$out/replayer-$profile.apk",
-  "sha256": "$(sha256 "$out/replayer-$profile.apk")",
-  "bytes": $(stat -f%z "$out/replayer-$profile.apk" 2>/dev/null || stat -c%s "$out/replayer-$profile.apk"),
+  "apk": "$out/pordo-$profile.apk",
+  "sha256": "$(sha256 "$out/pordo-$profile.apk")",
+  "bytes": $(stat -f%z "$out/pordo-$profile.apk" 2>/dev/null || stat -c%s "$out/pordo-$profile.apk"),
   "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
-  echo "APK $out/replayer-$profile.apk ($(sha256 "$out/replayer-$profile.apk"))"
+  echo "APK $out/pordo-$profile.apk ($(sha256 "$out/pordo-$profile.apk"))"
 fi
-echo "staged libreplayer_android.so ($profile) into $jni"
+echo "staged libpordo_android.so ($profile) into $jni"

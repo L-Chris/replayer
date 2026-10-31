@@ -4569,7 +4569,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
-name = "replayer"
+name = "pordo"
 version = "0.5.1"
 dependencies = [
  "anyhow",
@@ -4587,7 +4587,7 @@ dependencies = [
  "librqbit",
  "regex",
  "remdia",
- "replayer-core",
+ "pordo-core",
  "reqwest",
  "rfd",
  "rtrb",
@@ -4610,7 +4610,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "replayer-android"
+name = "pordo-android"
 version = "0.5.1"
 dependencies = [
  "anyhow",
@@ -4619,14 +4619,14 @@ dependencies = [
  "log",
  "remdia",
  "remdia-android-platform",
- "replayer-core",
+ "pordo-core",
  "rustls-platform-verifier",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "replayer-core"
+name = "pordo-core"
 version = "0.5.1"
 dependencies = [
  "anyhow",

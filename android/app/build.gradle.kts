@@ -34,25 +34,27 @@ val releaseStorePassword = signingValue("ANDROID_KEYSTORE_PASSWORD", "storePassw
 val releaseKeyAlias = signingValue("ANDROID_KEY_ALIAS", "keyAlias")
 val releaseKeyPassword = signingValue("ANDROID_KEY_PASSWORD", "keyPassword")
 val haveReleaseKey = listOf(releaseStore, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { it != null }
-val testSigning = System.getenv("REPLAYER_ANDROID_TEST_SIGNING") == "1"
+val testSigning = (System.getenv("PORDO_ANDROID_TEST_SIGNING")
+    ?: System.getenv("REPLAYER_ANDROID_TEST_SIGNING")) == "1"
 if (gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }) {
     check(haveReleaseKey || testSigning) {
-        "Release signing is required; see docs/android.md. For local measurement only, set REPLAYER_ANDROID_TEST_SIGNING=1."
+        "Release signing is required; see docs/android.md. For local measurement only, set PORDO_ANDROID_TEST_SIGNING=1."
     }
 }
 
 android {
-    namespace = "dev.replayer"
+    namespace = "dev.pordo"
     compileSdk = 35
 
     defaultConfig {
+        // Published identity: retain installed data, permissions and signing continuity.
         applicationId = "dev.replayer"
         minSdk = 28
         targetSdk = 35
         versionCode = 2
         versionName = "0.5.1"
         ndk { abiFilters += listOf("arm64-v8a") }
-        testInstrumentationRunner = "dev.replayer.ProxyTestRunner"
+        testInstrumentationRunner = "dev.pordo.ProxyTestRunner"
     }
 
     signingConfigs {
@@ -68,7 +70,7 @@ android {
         release {
             // R8 shrinking is part of the measured release baseline (size and
             // build time via `scripts/android-dev.py measure`). The audit's DEX
-            // keep checks (dev.remdia, dev.replayer.Native, the rustls
+            // keep checks (dev.remdia, dev.pordo.Native, the rustls
             // companion) must pass on the minified APK.
             isMinifyEnabled = true
             isShrinkResources = true
@@ -95,7 +97,7 @@ android {
 
     packaging {
         jniLibs {
-            // remdia's engine is statically embedded in libreplayer_android.so, so
+            // remdia's engine is statically embedded in libpordo_android.so, so
             // the AAR's standalone SDK library (jni/<abi>/libremdia_sdk.so, ~1.9 MB
             // per ABI) must never be packaged. A file-dependency AAR *does*
             // contribute its jni/ folder, so this exclusion is what actually keeps

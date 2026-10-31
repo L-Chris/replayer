@@ -426,8 +426,7 @@ mod tests {
     }
     #[test]
     fn favorites_and_playback_history_survive_restart_and_metadata_refresh() {
-        let folder =
-            std::env::temp_dir().join(format!("replayer-library-{}", uuid::Uuid::new_v4()));
+        let folder = std::env::temp_dir().join(format!("pordo-library-{}", uuid::Uuid::new_v4()));
         let path = folder.join("library.json");
         {
             let mut library = Library::open(path.clone());

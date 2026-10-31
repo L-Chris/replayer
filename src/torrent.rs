@@ -68,7 +68,7 @@ impl Job {
         let worker_misses = cache_misses.clone();
         let worker_cancel = cancel.clone();
         std::thread::Builder::new()
-            .name("replayer-torrent".into())
+            .name("pordo-torrent".into())
             .spawn(move || {
                 let result = (|| {
                     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -112,13 +112,13 @@ impl Drop for Job {
     }
 }
 pub fn cache_dir() -> PathBuf {
-    std::env::var_os("REPLAYER_TORRENT_CACHE")
+    pordo_core::environment::var_os("PORDO_TORRENT_CACHE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            std::env::var_os("LOCALAPPDATA")
+            let base = std::env::var_os("LOCALAPPDATA")
                 .map(PathBuf::from)
-                .unwrap_or_else(std::env::temp_dir)
-                .join("replayer/torrents")
+                .unwrap_or_else(std::env::temp_dir);
+            pordo_core::paths::application_directory(&base).join("torrents")
         })
 }
 pub fn is_media(name: &str) -> bool {
@@ -126,7 +126,7 @@ pub fn is_media(name: &str) -> bool {
 }
 pub fn routing_rules(executable: &str, llm_base: &str) -> String {
     let name = if executable.contains([',', '\n', '\r', '/', '\\']) {
-        "replayer.exe"
+        "pordo.exe"
     } else {
         executable
     };
@@ -521,7 +521,7 @@ async fn stream_file(
                         .unwrap());
                 }
             };
-        if std::env::var_os("REPLAYER_TORRENT_TRACE").is_some() {
+        if pordo_core::environment::var_os("PORDO_TORRENT_TRACE").is_some() {
             eprintln!("torrent HTTP streaming range {start}-{end}");
         }
         stream.seek(std::io::SeekFrom::Start(start)).await?;
@@ -664,7 +664,7 @@ mod tests {
     #[test]
     fn loopback_magnet_resolves_multiple_files_and_streams_only_selected_video() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let root = std::env::temp_dir().join(format!("replayer-loopback-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("pordo-loopback-{}", uuid::Uuid::new_v4()));
         let seed = root.join("seed");
         let download = root.join("download");
         std::fs::create_dir_all(&seed).unwrap();
@@ -810,7 +810,7 @@ mod tests {
     }
     #[test]
     fn cached_http_never_serves_unverified_data_and_supports_ranges() {
-        let root = std::env::temp_dir().join(format!("replayer-torrent-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("pordo-torrent-{}", uuid::Uuid::new_v4()));
         let seed = root.join("seed");
         let empty = root.join("empty");
         std::fs::create_dir_all(&seed).unwrap();
@@ -913,14 +913,14 @@ mod tests {
     }
     #[test]
     fn ranges_and_paths_are_bounded() {
-        let rules = routing_rules("replayer.exe", "https://chat.rethinkos.com/v1");
+        let rules = routing_rules("pordo.exe", "https://chat.rethinkos.com/v1");
         assert!(rules.starts_with("# Clash Verge Rev"));
         assert!(
             rules.find("IP-CIDR,127.0.0.1/32,DIRECT").unwrap()
-                < rules.find("PROCESS-NAME,replayer.exe,PROXY").unwrap()
+                < rules.find("PROCESS-NAME,pordo.exe,PROXY").unwrap()
         );
         assert!(
-            rules.find("PROCESS-NAME,replayer.exe,PROXY").unwrap()
+            rules.find("PROCESS-NAME,pordo.exe,PROXY").unwrap()
                 < rules.find("DOMAIN,chat.rethinkos.com,PROXY").unwrap()
         );
         assert!(!routing_rules("bad,INJECT.exe", "http://localhost:8000").contains("INJECT"));

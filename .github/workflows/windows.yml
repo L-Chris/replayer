@@ -112,6 +112,7 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/setup-windows.ps1 -RuntimeDirectory target/windows-runtime/dist/remdia
+          "PORDO_NATIVE_FIXTURES=$PWD/target/windows-runtime/tests/fixtures" >> $env:GITHUB_ENV
           "REPLAYER_NATIVE_FIXTURES=$PWD/target/windows-runtime/tests/fixtures" >> $env:GITHUB_ENV
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -136,29 +137,32 @@ jobs:
         shell: pwsh
         run: |
           $metadata = cargo metadata --no-deps --format-version 1 --locked | ConvertFrom-Json
-          $version = ($metadata.packages | Where-Object name -eq replayer).version
+          $app = $metadata.packages | Where-Object { $_.name -in @('pordo', 'replayer') }
+          if (@($app).Count -ne 1) { throw "Expected one application package" }
+          $version = $app.version
+          "APP_PRODUCT=$($app.name)" >> $env:GITHUB_ENV
           if ($env:RELEASE_REF.StartsWith('refs/tags/') -and $env:RELEASE_TAG -cne "v$version") { throw "Tag must match Cargo.toml" }
           "APP_VERSION=$version" >> $env:GITHUB_ENV
       - name: Build Windows x64
         run: cargo build --locked --release --target x86_64-pc-windows-msvc
       - name: Build installer and portable package
         shell: pwsh
-        run: ./scripts/package-windows.ps1 -Binary target/x86_64-pc-windows-msvc/release/replayer.exe
+        run: ./scripts/package-windows.ps1 -Binary "target/x86_64-pc-windows-msvc/release/$env:APP_PRODUCT.exe"
       - name: Smoke test installed package without build paths
         shell: pwsh
         run: |
-          $installDir = Join-Path $env:RUNNER_TEMP 'replayer-native-smoke'
+          $installDir = Join-Path $env:RUNNER_TEMP 'pordo-native-smoke'
           $setup = Get-ChildItem dist/*-setup.exe | Select-Object -First 1
-          ./scripts/test-installed-icons.ps1 -Installer $setup.FullName -InstallDirectory $installDir
+          ./scripts/test-installed-icons.ps1 -Installer $setup.FullName -InstallDirectory $installDir -Product $env:APP_PRODUCT
           $media = (Resolve-Path target/windows-runtime/tests/fixtures/av.mp4).Path
           $savedPath = $env:PATH
           $savedPlugins = $env:REMDIA_PLUGIN_DIR
           try {
             $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
             Remove-Item Env:REMDIA_PLUGIN_DIR -ErrorAction SilentlyContinue
-            $log = Join-Path $env:RUNNER_TEMP 'replayer-native-selftest.log'
-            $errors = Join-Path $env:RUNNER_TEMP 'replayer-native-selftest.err'
-            $process = Start-Process -FilePath (Join-Path $installDir 'replayer.exe') -ArgumentList @('--selftest', ('"' + $media + '"')) -WorkingDirectory $installDir -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError $errors -Wait -PassThru
+            $log = Join-Path $env:RUNNER_TEMP 'pordo-native-selftest.log'
+            $errors = Join-Path $env:RUNNER_TEMP 'pordo-native-selftest.err'
+            $process = Start-Process -FilePath (Join-Path $installDir "$env:APP_PRODUCT.exe") -ArgumentList @('--selftest', ('"' + $media + '"')) -WorkingDirectory $installDir -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError $errors -Wait -PassThru
             Get-Content $log, $errors
             if ($process.ExitCode -ne 0) { throw "Installed native selftest failed: $($process.ExitCode)" }
           } finally { $env:PATH = $savedPath; $env:REMDIA_PLUGIN_DIR = $savedPlugins }
@@ -172,7 +176,7 @@ jobs:
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
-          name: replayer-${{ env.APP_VERSION }}-windows-x86_64-remdia
+          name: pordo-${{ env.APP_VERSION }}-windows-x86_64-remdia
           path: |
             dist/*.exe
             dist/*.zip
@@ -211,12 +215,14 @@ jobs:
       - name: Check formatting and release version
         run: |
           cargo fmt --all -- --check
-          version=$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "replayer"))')
+          version=$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] in ("pordo", "replayer")))')
           if [[ "$RELEASE_REF" == refs/tags/* && "$RELEASE_TAG" != "v$version" ]]; then
             echo "Tag must be v$version to match Cargo.toml" >&2
             exit 1
           fi
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          product=$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; print(next(p["name"] for p in json.load(sys.stdin)["packages"] if p["name"] in ("pordo", "replayer")))')
+          echo "APP_PRODUCT=$product" >> "$GITHUB_ENV"
       - name: Install native build tools
         run: command -v cmake || brew install cmake
       - uses: actions/cache/restore@v4
@@ -235,23 +241,24 @@ jobs:
       - name: Build pinned native SDK
         run: |
           REMDIA_TARGET='${{ matrix.target }}' ./scripts/setup-macos.sh
+          echo "PORDO_NATIVE_FIXTURES=$PWD/.deps/remdia-source/tests/fixtures" >> "$GITHUB_ENV"
           echo "REPLAYER_NATIVE_FIXTURES=$PWD/.deps/remdia-source/tests/fixtures" >> "$GITHUB_ENV"
       - name: Lint and test host plus real media components
         run: |
           source '.deps/macos-${{ matrix.arch }}/env.sh'
           cargo clippy --locked --target '${{ matrix.target }}' --all-targets -- -D warnings
-          REPLAYER_SETTINGS_FILE="$PWD/target/ci-macos-settings.json" cargo test --locked --target '${{ matrix.target }}'
+          PORDO_SETTINGS_FILE="$PWD/target/ci-macos-settings.json" REPLAYER_SETTINGS_FILE="$PWD/target/ci-macos-settings.json" cargo test --locked --target '${{ matrix.target }}'
           cargo test --locked --target '${{ matrix.target }}' native_media -- --ignored --nocapture
       - name: Preflight actual audio device and video lifecycle
         run: |
           ./scripts/build-macos.sh --target '${{ matrix.target }}'
-          env -u REMDIA_PLUGIN_DIR -u REMDIA_RUNTIME_DIR PATH=/usr/bin:/bin:/usr/sbin:/sbin REPLAYER_SOFTWARE=1 REPLAYER_SETTINGS_FILE="$PWD/target/preflight-settings.json" "$PWD/target/${{ matrix.target }}/debug/replayer" --selftest "$REPLAYER_NATIVE_FIXTURES/av.mp4"
+          env -u REMDIA_PLUGIN_DIR -u REMDIA_RUNTIME_DIR PATH=/usr/bin:/bin:/usr/sbin:/sbin PORDO_SOFTWARE=1 REPLAYER_SOFTWARE=1 PORDO_SETTINGS_FILE="$PWD/target/preflight-settings.json" REPLAYER_SETTINGS_FILE="$PWD/target/preflight-settings.json" "$PWD/target/${{ matrix.target }}/debug/$APP_PRODUCT" --selftest "$PORDO_NATIVE_FIXTURES/av.mp4"
       - name: Build macOS application
         run: ./scripts/build-macos.sh --release --target '${{ matrix.target }}'
       - name: Package and test relocated application
         run: |
           source '.deps/macos-${{ matrix.arch }}/env.sh'
-          python3 scripts/package-macos.py --binary 'target/${{ matrix.target }}/release/replayer' --output-directory 'dist/macos-${{ matrix.arch }}'
+          python3 scripts/package-macos.py --binary "target/${{ matrix.target }}/release/$APP_PRODUCT" --output-directory 'dist/macos-${{ matrix.arch }}'
           python3 scripts/test-macos-package.py --directory 'dist/macos-${{ matrix.arch }}'
       - uses: actions/cache/save@v4
         if: ${{ !cancelled() && steps.mac-cache.outputs.cache-hit != 'true' }}
@@ -264,7 +271,7 @@ jobs:
           key: ${{ steps.mac-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
-          name: replayer-${{ env.APP_VERSION }}-macos-${{ matrix.arch }}
+          name: pordo-${{ env.APP_VERSION }}-macos-${{ matrix.arch }}
           path: |
             dist/macos-${{ matrix.arch }}/*.dmg
             dist/macos-${{ matrix.arch }}/*.zip
@@ -295,10 +302,13 @@ jobs:
           import os, pathlib, re
           cargo = pathlib.Path('target/android-release/source/Cargo.toml').read_text()
           revision = re.search(r'^remdia\s*=\s*\{[^}]*rev\s*=\s*"([a-f0-9]{40})"', cargo, re.M).group(1)
+          product = re.search(r'^name\s*=\s*"([^"]+)"', cargo, re.M).group(1)
+          assert product in ('pordo', 'replayer')
           version = re.search(r'^version\s*=\s*"([^"]+)"', cargo, re.M).group(1)
           assert os.environ['RELEASE_TAG'] == 'v' + version
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('revision=' + revision + '\n')
+              output.write('product=' + product + '\n')
           PY
       - uses: actions/checkout@v4
         with:
@@ -358,14 +368,14 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           target/android-release/source/scripts/build-android.sh --release --assemble
-          python3 scripts/package-android.py --apk target/android-release/source/target/android/release/replayer-release.apk --tag "$RELEASE_TAG" --output-directory dist/android
-          python3 scripts/android-dev.py audit --profile release --sdk "$ANDROID_HOME" --apk "dist/android/replayer-${RELEASE_TAG#v}-android-arm64-v8a.apk"
+          python3 scripts/package-android.py --apk target/android-release/source/target/android/release/${{ steps.sdk.outputs.product }}-release.apk --source-root target/android-release/source --tag "$RELEASE_TAG" --output-directory dist/android
+          python3 scripts/android-dev.py audit --source-root target/android-release/source --profile release --sdk "$ANDROID_HOME" --apk "dist/android/${{ steps.sdk.outputs.product }}-${RELEASE_TAG#v}-android-arm64-v8a.apk"
       - name: Remove temporary signing key
         if: always()
         run: rm -f target/android-release/signing.jks
       - uses: actions/upload-artifact@v4
         with:
-          name: replayer-${{ env.RELEASE_TAG }}-android-arm64-v8a
+          name: pordo-${{ env.RELEASE_TAG }}-android-arm64-v8a
           path: |
             dist/android/*.apk
             dist/android/SHA256SUMS-*.txt
@@ -384,7 +394,7 @@ jobs:
           ref: ${{ github.workflow_sha }}
       - uses: actions/download-artifact@v4
         with:
-          pattern: replayer-*
+          pattern: pordo-*
           path: dist
           merge-multiple: true
       - name: Publish stable release

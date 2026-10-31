@@ -67,10 +67,10 @@ pub fn prepare(source: &str, stop: &AtomicBool, ekey: Option<&str>) -> Result<Pr
     let (mut cipher, payload) = qq::probe(&mut input, length, Path::new(source), ekey)?;
     ensure!(payload >= 16, "QQ music file has no audio payload");
     input.rewind()?;
-    let root = std::env::var_os("LOCALAPPDATA")
+    let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("replayer/music-cache");
+        .unwrap_or_else(std::env::temp_dir);
+    let root = pordo_core::paths::application_directory(&base).join("music-cache");
     fs::create_dir_all(&root)?;
     let mut prepared = Prepared {
         path: String::new(),

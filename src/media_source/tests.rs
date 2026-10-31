@@ -32,7 +32,7 @@ fn independent_qmc2_vectors_and_unaligned_chunks() {
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let p = std::env::temp_dir().join(format!("replayer-qq-test-{}", uuid::Uuid::new_v4()));
+        let p = std::env::temp_dir().join(format!("pordo-qq-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&p).unwrap();
         Self(p)
     }

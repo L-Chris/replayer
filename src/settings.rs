@@ -225,6 +225,7 @@ impl Settings {
     }
     fn secret_target(path: &std::path::Path, id: &str) -> String {
         format!(
+            // Persisted OS credential targets are independent of the display brand.
             "replayer/{}/{}",
             crate::comics::digest(path.to_string_lossy().as_bytes()),
             id
@@ -419,7 +420,7 @@ impl Settings {
         Self::root().join("queue.json")
     }
     fn root() -> PathBuf {
-        replayer_core::paths::root()
+        pordo_core::paths::root()
     }
 }
 

@@ -19,7 +19,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     os.chdir(root)
     directory = args.directory.resolve()
-    fixtures = Path(os.environ.get('REPLAYER_NATIVE_FIXTURES', root / '.deps/remdia-source/tests/fixtures'))
+    fixtures = Path(os.environ.get('PORDO_NATIVE_FIXTURES', root / '.deps/remdia-source/tests/fixtures'))
     media = (fixtures / 'av.mp4').resolve(strict=True)
     arch = platform.machine()
     rust_arch = 'aarch64' if arch == 'arm64' else arch
@@ -50,18 +50,18 @@ def main():
                 run('hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', mount, archive, timeout=60)
                 try:
                     assert (mount / 'Applications').is_symlink()
-                    run('ditto', mount / 'replayer.app', destination / 'replayer.app')
+                    run('ditto', mount / 'Pordo.app', destination / 'Pordo.app')
                 finally:
                     run('hdiutil', 'detach', mount)
-            app = destination / 'replayer.app'
+            app = destination / 'Pordo.app'
             info = verify_bundle(app, arch)
-            executable = app / 'Contents/MacOS/replayer'
+            executable = app / 'Contents/MacOS/pordo'
             env = {key: value for key, value in os.environ.items()
                    if not key.startswith(('DYLD_', 'FFMPEG_', 'LIBCLANG_', 'PKG_CONFIG_', 'REMDIA_'))}
-            env.update(PATH='/usr/bin:/bin:/usr/sbin:/sbin', REPLAYER_SOFTWARE='1',
-                       REPLAYER_SETTINGS_FILE=str(temporary / 'settings.json'))
+            env.update(PATH='/usr/bin:/bin:/usr/sbin:/sbin', PORDO_SOFTWARE='1',
+                       PORDO_SETTINGS_FILE=str(temporary / 'settings.json'))
             result = subprocess.check_output([str(executable), '--version'], env=env, text=True, timeout=15)
-            assert result.strip() == 'replayer ' + info['CFBundleShortVersionString']
+            assert result.strip() == 'pordo ' + info['CFBundleShortVersionString']
             subprocess.run([str(executable), '--selftest', str(media)], env=env,
                            cwd=destination, check=True, timeout=90)
             print('PASS:', archive.name, 'signature, architecture, icon, relocated libraries and playback')

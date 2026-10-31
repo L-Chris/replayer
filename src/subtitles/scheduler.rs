@@ -137,7 +137,7 @@ pub(super) fn run_with_cache(
     let worker_cancel = cancel.clone();
     let audio = audio.into_transfer();
     let decoder = std::thread::Builder::new()
-        .name("replayer-subtitle-audio".into())
+        .name("pordo-subtitle-audio".into())
         .spawn(move || {
             let mut audio = match audio.open() {
                 Ok(audio) => audio,
@@ -463,7 +463,7 @@ mod tests {
             }
         });
         let path =
-            std::env::temp_dir().join(format!("replayer-seek-priority-{}.wav", std::process::id()));
+            std::env::temp_dir().join(format!("pordo-seek-priority-{}.wav", std::process::id()));
         std::fs::write(
             &path,
             audio::Chunk {

@@ -52,7 +52,7 @@ Formatting keeps at most two centered lines, preserves dialogue and language-app
 
 ## Persistence and sync
 
-Settings, media queues and comic data are separate. Secrets are not written into settings JSON; the current system vault backend supports Windows only. Runtime paths use the application data root, with `REPLAYER_SETTINGS_FILE` available for isolated tests.
+Settings, media queues and comic data are separate. Secrets are not written into settings JSON; the current system vault backend supports Windows only. Runtime paths use the application data root, with `PORDO_SETTINGS_FILE` available for isolated tests.
 
 WebDAV sync exports a whitelist into per-device documents under `replayer/v1/devices/`. Version vectors and deletion markers merge changes; concurrent unfavorite wins, explicit later refavorite remains possible, and progress can move backward on a deliberate reread. Each device writes its own document using ETag conditions and persists unacknowledged local changes.
 

@@ -97,7 +97,8 @@ def verify_bundle(app, expected_arch, expected_version=None):
     with (contents / 'Info.plist').open('rb') as file:
         info = plistlib.load(file)
     assert info['CFBundleIdentifier'] == 'io.github.l-chris.replayer'
-    assert info['CFBundleExecutable'] == 'replayer'
+    assert info['CFBundleExecutable'] == 'pordo'
+    assert info['CFBundleName'] == info['CFBundleDisplayName'] == 'Pordo'
     assert info['CFBundlePackageType'] == 'APPL'
     if expected_version:
         assert info['CFBundleShortVersionString'] == expected_version
@@ -110,7 +111,7 @@ def verify_bundle(app, expected_arch, expected_version=None):
     for name in ('THIRD_PARTY.md', 'LICENSE', 'BUILD.txt'):
         assert (notices / name).is_file(), 'Missing SDK source/rebuild notice: ' + name
     assert any((notices / 'licenses').iterdir()), 'Missing codec licenses'
-    executable = contents / 'MacOS/replayer'
+    executable = contents / 'MacOS/pordo'
     framework_dir = contents / 'Frameworks'
     plugins = framework_dir / 'remdia'
     expected_files = {filename for name in ('fallback_mp3_lame',) for filename in (name+'.json',f'libremdia_backend_{name}.dylib')}

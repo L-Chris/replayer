@@ -1,2 +1,2 @@
 //! Shared remdia entry point for playback, metadata and independent subtitle jobs.
-pub use replayer_core::media_backend::*;
+pub use pordo_core::media_backend::*;

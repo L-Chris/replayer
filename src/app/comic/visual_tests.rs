@@ -1089,7 +1089,7 @@ fn branding_scaling_visuals() {
     let mut capture = Capture::new();
     let ctx = egui::Context::default();
     let image = crate::pixels::read_image(include_bytes!(
-        "../../../assets/branding/replayer-mark-256.png"
+        "../../../assets/branding/pordo-mark-256.png"
     ))
     .unwrap();
     // Reproduce the previous direct 256px -> 26pt GPU minification for comparison.
@@ -1135,7 +1135,7 @@ fn branding_scaling_visuals() {
                         painter.text(
                             pos2(x + 36.0, y + 13.0),
                             egui::Align2::LEFT_CENTER,
-                            "replayer",
+                            "Pordo",
                             egui::FontId::proportional(20.0),
                             color,
                         );

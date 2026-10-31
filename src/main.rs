@@ -32,7 +32,7 @@ fn main() -> eframe::Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("--version") {
-        println!("replayer {}", env!("CARGO_PKG_VERSION"));
+        println!("pordo {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     if args.first().map(String::as_str) == Some("--selftest-music") {
@@ -55,7 +55,7 @@ fn main() -> eframe::Result<()> {
         let result = match (args.get(1), args.get(2)) {
             (Some(input), Some(output)) => subtitle_cli(input, output, &args[3..]),
             _ => Err(anyhow::anyhow!(
-                "Usage: replayer --subtitles <media> <output.srt>"
+                "Usage: pordo --subtitles <media> <output.srt>"
             )),
         };
         if let Err(error) = result {
@@ -77,11 +77,11 @@ fn main() -> eframe::Result<()> {
     let initial = args;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("replayer")
+            .with_title("Pordo")
             .with_decorations(false)
             .with_icon({
                 let image = crate::pixels::read_image(include_bytes!(
-                    "../assets/branding/replayer-icon-256.png"
+                    "../assets/branding/pordo-icon-256.png"
                 ))
                 .expect("embedded application icon through remdia");
                 egui::IconData {
@@ -95,7 +95,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "replayer",
+        "Pordo",
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, initial)))),
     )

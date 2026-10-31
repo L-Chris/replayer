@@ -125,6 +125,7 @@ mod macos {
     const ITEM_NOT_FOUND: i32 = -25300;
 
     fn options(target: &str) -> PasswordOptions {
+        // Published Keychain service: changing this would hide existing credentials.
         let mut options = PasswordOptions::new_generic_password("dev.replayer.credentials", target);
         options.set_access_synchronized(Some(false));
         options

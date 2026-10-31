@@ -2,7 +2,7 @@
 
 Windows and macOS use the public [remdia SDK](https://github.com/PordoTech/remdia),
 pinned to an exact Git revision in Cargo.toml. Built-in factories are statically
-registered in replayer; optional external extensions retain C ABI v2.2. Neither the executable nor its media plugins links
+registered in pordo; optional external extensions retain C ABI v2.2. Neither the executable nor its media plugins links
 FFmpeg. The `remdia-media` feature remains as a compatibility alias; remdia is
 now the default backend.
 
@@ -20,7 +20,7 @@ macOS 15+ requires Rust stable, CMake and Apple command-line tools:
 ```bash
 ./scripts/build-macos.sh
 source .deps/macos-aarch64/env.sh  # macos-x86_64 on Intel
-./target/debug/replayer /path/to/movie.mp4
+./target/debug/pordo /path/to/movie.mp4
 ```
 
 Setup builds the pinned SDK into `.deps/remdia-source`, validates its revision,
@@ -44,7 +44,7 @@ progressive HTTP buffering, cancellation, EOF/replay and audio-device recovery.
 Tests read a committed synthetic corpus and require no external media encoder.
 
 The SDK accepts arbitrary compatible demux/decoder/filter/encoder/mux/sink DAGs,
-including fanout and compressed-packet paths that bypass decoding. The replayer
+including fanout and compressed-packet paths that bypass decoding. The pordo
 adapter uses the playback and subtitle graphs rather than exposing an editor.
 
 ## Current limits
@@ -52,7 +52,7 @@ adapter uses the playback and subtitle graphs rather than exposing an editor.
 H.264 in MP4/MKV is the primary video verification path. Windows currently uses
 synchronous software MFT decoding. macOS supports VideoToolbox H.264/HEVC,
 progressive 8-bit 4:2:0 SDR; H.264 is covered by real-file tests. macOS automatic
-mode prefers hardware and falls back to system software; `REPLAYER_SOFTWARE=1`
+mode prefers hardware and falls back to system software; `PORDO_SOFTWARE=1`
 requests software. Frames are copied to CPU NV12 buffers; Metal texture sharing,
 Main10/HDR and asynchronous decode ABI extensions remain future work. In-band
 codec parameter changes require reopening from a keyframe.
@@ -76,7 +76,7 @@ for the installed machine; unsupported codecs fail explicitly.
 
 ## Validation and packaging
 
-After setup, set `REPLAYER_NATIVE_FIXTURES` to the SDK's `tests/fixtures`:
+After setup, set `PORDO_NATIVE_FIXTURES` to the SDK's `tests/fixtures`:
 
 ```bash
 cargo test --locked

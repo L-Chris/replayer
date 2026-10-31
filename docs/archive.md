@@ -14,4 +14,4 @@ An earlier investigation of Thunder 25.1.10.1612 found a session-specific local 
 
 Older [XMP forwarding adapters](https://github.com/fondoger/xmp-2-potplayer) and [download-engine research](https://github.com/tomjiu/smart-downloader/blob/main/docs/research/xunlei/xunlei_engine_research.md) were investigation references, not verified integrations for that installation. Their ports, paths and ABI assumptions must not be copied into current setup instructions.
 
-No Thunder button integration is presented as a shipped feature. Replayer's implemented magnet playback uses its embedded torrent engine and is documented separately in the user guide.
+No Thunder button integration is presented as a shipped feature. Pordo's implemented magnet playback uses its embedded torrent engine and is documented separately in the user guide.
