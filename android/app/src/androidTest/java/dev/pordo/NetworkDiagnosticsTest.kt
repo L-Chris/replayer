@@ -47,6 +47,9 @@ class NetworkDiagnosticsTest {
     @Test
     fun diagnoseNetworkLayers() {
         assumeTrue("diagnostics need --online", onlineRequested())
+        val service = dev.pordo.comic.ContentService.saved(testContext).optString("url")
+        assumeTrue("configure an HTTPS content service before TLS diagnostics", service.startsWith("https://"))
+        val target = URL(service)
         val proxy =
             InstrumentationRegistry.getArguments().getString("proxy")?.takeIf { it.isNotBlank() }
 
@@ -55,8 +58,8 @@ class NetworkDiagnosticsTest {
         record("proxy argument", proxy ?: "(none)")
 
         // Layer 2: DNS, inside the app process.
-        time("dns komiic.com") {
-            InetAddress.getAllByName("komiic.com").joinToString { it.hostAddress ?: "?" }
+        time("dns ${target.host}") {
+            InetAddress.getAllByName(target.host).joinToString { it.hostAddress ?: "?" }
         }
 
         // Layers 3-4: TCP + CONNECT tunnel to the proxy, when one was given.
@@ -71,14 +74,14 @@ class NetworkDiagnosticsTest {
                 }
             }
             if (!tcp.startsWith(FAILED)) {
-                time("connect komiic.com:443 via $host:$port") { connectFirstLine(host, port) }
+                time("connect ${target.host} via $host:$port") { connectFirstLine(host, port, target) }
             }
         }
 
         // Layer 5: TLS + HTTP through the Java stack with the system trust
         // store. Any HTTP status (even 4xx) proves DNS+TCP+TLS+HTTP work.
-        time("tls+http https://komiic.com/ (Java verifier)") {
-            val connection = URL("https://komiic.com/").openConnection() as HttpsURLConnection
+        time("tls+http content service (Java verifier)") {
+            val connection = target.openConnection() as HttpsURLConnection
             try {
                 connection.connectTimeout = CONNECT_TIMEOUT_MS
                 connection.readTimeout = READ_TIMEOUT_MS
@@ -89,7 +92,7 @@ class NetworkDiagnosticsTest {
             }
         }
 
-        // Layer 6: the production path — JNI bridge → reqwest → komiic. The
+        // Layer 6: the production path — JNI bridge → reqwest → content service. The
         // exception message carries the core context plus reqwest's source
         // chain, which is the evidence for timeout vs connect vs TLS vs proxy.
         val ready = Native.initialize(testContext)
@@ -122,12 +125,13 @@ class NetworkDiagnosticsTest {
         }
     }
 
-    private fun connectFirstLine(host: String, port: Int): String =
+    private fun connectFirstLine(host: String, port: Int, target: URL): String =
         Socket().use { socket ->
             socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
             socket.soTimeout = READ_TIMEOUT_MS
             socket.getOutputStream().apply {
-                write("CONNECT komiic.com:443 HTTP/1.1\r\nHost: komiic.com:443\r\n\r\n".toByteArray())
+                val authority = "${target.host}:${if (target.port > 0) target.port else 443}"
+                write("CONNECT $authority HTTP/1.1\r\nHost: $authority\r\n\r\n".toByteArray())
                 flush()
             }
             val line = BufferedReader(InputStreamReader(socket.getInputStream())).readLine()

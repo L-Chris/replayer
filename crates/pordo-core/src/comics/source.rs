@@ -1,16 +1,18 @@
+//! Versioned content-service client. Source accounts and scraping live on the server.
 use super::*;
 use anyhow::{Context, Result, anyhow, ensure};
 use futures_util::{StreamExt, future::BoxFuture};
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
-mod dm5;
-mod komiic;
-mod sources;
-pub use komiic::{AccountSettings as KomiicAccount, AuthStatus as KomiicAuthStatus, Komiic};
-pub use sources::Sources;
+#[cfg(test)]
+mod tests;
 
-/// UI and storage use normalized records, never provider-specific JSON.
+/// UI and persisted records retain their original provider/site/URL identities.
 pub trait ComicSource: Send + Sync {
     fn image_policy(&self, _book: &Book) -> ImagePolicy {
         ImagePolicy::default()
@@ -24,16 +26,11 @@ pub trait ComicSource: Send + Sync {
         chapter: &'a Chapter,
         refresh: bool,
     ) -> BoxFuture<'a, Result<Vec<String>>>;
-    fn image_url(&self, site: &str, url: &str) -> Result<reqwest::Url>;
-    fn image_request(&self, site: &str, url: &str) -> Result<ImageRequest> {
-        Ok(self.image_url(site, url)?.into())
-    }
-    fn book_image_request(&self, book: &Book, url: &str) -> Result<ImageRequest> {
-        self.image_request(&book.site, url)
-    }
+    fn book_image_request(&self, book: &Book, url: &str) -> Result<ImageRequest>;
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct ImagePolicy {
     pub concurrency: usize,
     pub ahead: usize,
@@ -51,149 +48,318 @@ impl Default for ImagePolicy {
     }
 }
 
+#[derive(Clone)]
 pub struct ImageRequest {
     pub url: reqwest::Url,
-    pub fallback: Option<reqwest::Url>,
-    pub referer: Option<reqwest::Url>,
     pub headers: reqwest::header::HeaderMap,
-    pub refresh: Option<BoxFuture<'static, Result<ImageRequest>>>,
-    pub on_status: Option<Arc<dyn Fn(reqwest::StatusCode) -> Result<()> + Send + Sync>>,
-    resolver: Option<BoxFuture<'static, Result<ImageRequest>>>,
+    resolver: Option<Arc<dyn Fn() -> BoxFuture<'static, Result<ImageRequest>> + Send + Sync>>,
 }
 impl From<reqwest::Url> for ImageRequest {
     fn from(url: reqwest::Url) -> Self {
         Self {
             url,
-            fallback: None,
-            referer: None,
-            headers: reqwest::header::HeaderMap::new(),
-            refresh: None,
-            on_status: None,
+            headers: Default::default(),
             resolver: None,
         }
     }
 }
 impl ImageRequest {
-    pub fn with_fallback(mut self, url: reqwest::Url) -> Self {
-        self.fallback = Some(url);
-        self
-    }
-    fn deferred(url: reqwest::Url, resolver: BoxFuture<'static, Result<Self>>) -> Self {
+    fn deferred(
+        url: reqwest::Url,
+        resolver: impl Fn() -> BoxFuture<'static, Result<Self>> + Send + Sync + 'static,
+    ) -> Self {
         Self {
-            resolver: Some(resolver),
+            resolver: Some(Arc::new(resolver)),
             ..url.into()
         }
     }
-    /// Resolve only after checking the image cache, inside the cancellable page job.
-    pub async fn resolve(mut self) -> Result<Self> {
-        if let Some(resolve) = self.resolver.take() {
-            let request = resolve.await?;
-            ensure!(
-                request.resolver.is_none(),
-                "无效图片解析结果 / Invalid image resolution"
-            );
-            Ok(request)
+    /// Local cache hits never require a network roundtrip or an image ticket.
+    pub async fn resolve(&self) -> Result<Self> {
+        if let Some(resolve) = &self.resolver {
+            resolve().await
         } else {
-            Ok(self)
+            Ok(self.clone())
         }
     }
+    pub fn can_refresh(&self) -> bool {
+        self.resolver.is_some()
+    }
+}
+
+/// Only the address is serialized. The per-device token belongs in the host vault.
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ServiceSettings {
+    pub url: String,
+    #[serde(skip)]
+    pub token: String,
+}
+impl ServiceSettings {
+    pub fn validate(&self) -> Result<()> {
+        if self.url.trim().is_empty() {
+            ensure!(
+                self.token.is_empty(),
+                "请填写内容服务地址 / Enter the content service URL"
+            );
+            return Ok(());
+        }
+        let url = http_url(self.url.trim())?;
+        ensure!(
+            url.query().is_none() && url.fragment().is_none(),
+            "服务地址不能包含查询参数 / Use a service base URL"
+        );
+        ensure!(
+            self.token.len() <= 8192,
+            "服务 Token 过长 / Service token is too long"
+        );
+        reqwest::header::HeaderValue::from_str(&format!("Bearer {}", self.token))
+            .context("无效服务 Token / Invalid service token")?;
+        Ok(())
+    }
+    pub fn credential_id(&self) -> String {
+        digest(self.url.trim().trim_end_matches('/').as_bytes())
+    }
+}
+
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceView {
+    id: String,
+    display_name: String,
+    kind: String,
+    #[serde(default)]
+    capabilities: HashMap<String, bool>,
+    image_policy: Option<ImagePolicy>,
+}
+struct Client {
+    http: reqwest::Client,
+    base: reqwest::Url,
+    authorization: reqwest::header::HeaderValue,
+    sources: RwLock<Vec<SourceView>>,
+    policies: RwLock<HashMap<String, ImagePolicy>>,
 }
 #[derive(Clone)]
-pub struct MangaYun {
-    base: String,
-    client: reqwest::Client,
+pub struct Sources {
+    client: Arc<Client>,
+    scope: Option<String>,
 }
-impl MangaYun {
-    pub fn connect() -> Result<Arc<dyn ComicSource>> {
-        Ok(Arc::new(Self::at("https://mangayun.com")?))
-    }
-    pub(super) fn at(base: &str) -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(12))
-            .timeout(Duration::from_secs(65))
-            .redirect(reqwest::redirect::Policy::none())
-            .user_agent(concat!(
-                "pordo/",
-                env!("CARGO_PKG_VERSION"),
-                " comic-reader"
-            ))
-            .build()?;
-        Ok(Self {
-            base: base.trim_end_matches('/').into(),
-            client,
-        })
-    }
-    async fn request(&self, path: &str, body: Option<Value>) -> Result<Value> {
-        let body = body.map(|b| b.to_string()).unwrap_or_default();
-        let ts = (now() * 1000).to_string();
-        let nonce = uuid::Uuid::new_v4().simple().to_string();
-        // Public web-client protocol; isolate it here when the website changes.
-        let sign = digest(
-            format!("{path}|{body}|{ts}|{nonce}|ym-salt-883a0f7e-29f1-4b72-9ad2").as_bytes(),
+impl Sources {
+    pub fn connect(settings: &ServiceSettings) -> Result<Arc<Self>> {
+        settings.validate()?;
+        ensure!(
+            !settings.url.trim().is_empty(),
+            "请在设置中配置内容服务 / Configure a content service in Settings"
         );
-        let url = format!("{}{path}", self.base);
-        let request = if body.is_empty() {
-            self.client.get(url)
-        } else {
-            self.client.post(url).body(body)
-        };
+        ensure!(
+            !settings.token.is_empty(),
+            "请填写设备 Token / Enter a device token"
+        );
+        let base = http_url(&format!("{}/", settings.url.trim().trim_end_matches('/')))?;
+        let mut authorization =
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", settings.token))?;
+        authorization.set_sensitive(true);
+        Ok(Arc::new(Self {
+            client: Arc::new(Client {
+                http: reqwest::Client::builder()
+                    .connect_timeout(Duration::from_secs(12))
+                    .timeout(Duration::from_secs(65))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .user_agent(concat!("pordo/", env!("CARGO_PKG_VERSION")))
+                    .build()?,
+                base,
+                authorization,
+                sources: RwLock::new(vec![]),
+                policies: RwLock::new(HashMap::new()),
+            }),
+            scope: None,
+        }))
+    }
+    pub fn providers(&self) -> Vec<(Site, Arc<dyn ComicSource>)> {
+        let sources = self.client.sources.read().unwrap();
+        if sources.is_empty() {
+            return vec![(
+                Site {
+                    id: "service".into(),
+                    name: "Content service".into(),
+                },
+                Arc::new(self.clone()),
+            )];
+        }
+        sources
+            .iter()
+            .filter(|s| s.kind == "comic" && s.capabilities.get("search") == Some(&true))
+            .map(|s| {
+                (
+                    Site {
+                        id: s.id.clone(),
+                        name: s.display_name.clone(),
+                    },
+                    Arc::new(Self {
+                        client: self.client.clone(),
+                        scope: Some(s.id.clone()),
+                    }) as Arc<dyn ComicSource>,
+                )
+            })
+            .collect()
+    }
+    pub fn qualify(provider: &str, groups: &mut [SearchGroup]) {
+        for group in groups {
+            group.site.id = format!("{provider}:{}", group.site.id);
+        }
+    }
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        query: &[(&str, &str)],
+        body: Option<Value>,
+    ) -> Result<Value> {
+        let url = self.client.base.join(path)?;
+        ensure!(
+            url.origin() == self.client.base.origin(),
+            "内容服务请求越界 / Service origin mismatch"
+        );
+        let mut request = self.client.http.request(method, url).query(query).header(
+            reqwest::header::AUTHORIZATION,
+            self.client.authorization.clone(),
+        );
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
         let response = request
-            .header("Content-Type", "application/json")
-            .header("x-ym-ts", ts)
-            .header("x-ym-nonce", nonce)
-            .header("x-ym-sign", sign)
             .send()
             .await
-            .context("漫画源连接失败 / Comic source request failed")?;
+            .context("无法连接内容服务 / Cannot connect to content service")?;
         let status = response.status();
-        ensure!(
-            status.is_success(),
-            "漫画源 HTTP {} / Comic source unavailable",
-            status.as_u16()
-        );
         let bytes = limited_body(response, 8 * 1024 * 1024).await?;
         let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| anyhow!("漫画源数据格式已变化 / Invalid comic response"))?;
+            .context("内容服务响应无效 / Invalid content service response")?;
+        if !status.is_success() {
+            return Err(service_error(status, &value));
+        }
         ensure!(
             value.get("data").is_some(),
-            "漫画源未返回数据 / Missing comic data"
+            "内容服务缺少数据 / Missing service data"
         );
         Ok(value["data"].clone())
     }
-}
-pub async fn limited_body(response: reqwest::Response, max: usize) -> Result<Vec<u8>> {
-    ensure!(
-        response.content_length().is_none_or(|n| n <= max as u64),
-        "响应超过大小限制 / Response too large"
-    );
-    let mut bytes = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| anyhow!("响应中断或超时 / Response interrupted"))?;
-        ensure!(
-            bytes.len() + chunk.len() <= max,
-            "响应超过大小限制 / Response too large"
-        );
-        bytes.extend_from_slice(&chunk);
+    async fn resolve(&self, book: &Book) -> Result<()> {
+        // Empty legacy providers historically selected MangaYun. Keep the original
+        // record untouched; the server has explicit support for its old identity.
+        self.request(
+            reqwest::Method::POST,
+            "api/v1/comics/resolve",
+            &[],
+            Some(json!({"comics":[book]})),
+        )
+        .await?;
+        Ok(())
     }
-    Ok(bytes)
+    fn decode_book(&self, value: &Value) -> Result<Book> {
+        let book: Book = serde_json::from_value(value.clone())?;
+        ensure!(
+            value["comicId"].as_str() == Some(book.key().as_str()),
+            "内容服务漫画标识不匹配 / Comic identity mismatch"
+        );
+        Ok(book)
+    }
+    async fn image_access(&self, book: &Book, original: &str) -> Result<ImageRequest> {
+        let data = self
+            .request(
+                reqwest::Method::POST,
+                "api/v1/images/resolve",
+                &[],
+                Some(json!({"provider":book.provider,"siteId":book.site,"url":original})),
+            )
+            .await?;
+        let url = http_url(data["url"].as_str().context("Missing image URL")?)?;
+        let mut request: ImageRequest = url.into();
+        let headers = data["headers"]
+            .as_object()
+            .context("Missing image headers")?;
+        ensure!(headers.len() <= 8, "Too many image headers");
+        for (name, value) in headers {
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())?;
+            ensure!(
+                matches!(
+                    name.as_str(),
+                    "referer" | "origin" | "user-agent" | "x-image-ticket"
+                ),
+                "Unsupported image header"
+            );
+            let mut value = reqwest::header::HeaderValue::from_str(
+                value.as_str().context("Invalid image header")?,
+            )?;
+            if name.as_str() == "x-image-ticket" {
+                value.set_sensitive(true);
+            }
+            request.headers.insert(name, value);
+        }
+        // Device Authorization is only used by request(), never copied to the CDN.
+        Ok(request)
+    }
 }
-pub fn http_url(url: &str) -> Result<reqwest::Url> {
-    let url = reqwest::Url::parse(url).map_err(|_| anyhow!("无效图片地址 / Invalid image URL"))?;
-    ensure!(
-        matches!(url.scheme(), "https" | "http")
-            && url.username().is_empty()
-            && url.password().is_none(),
-        "不支持的图片地址 / Unsupported URL"
-    );
-    Ok(url)
-}
-impl ComicSource for MangaYun {
+impl ComicSource for Sources {
+    fn image_policy(&self, book: &Book) -> ImagePolicy {
+        self.client
+            .policies
+            .read()
+            .unwrap()
+            .get(if book.provider.is_empty() {
+                "mangayun"
+            } else {
+                &book.provider
+            })
+            .copied()
+            .unwrap_or_default()
+    }
     fn sites(&self) -> BoxFuture<'_, Result<Vec<Site>>> {
-        Box::pin(async {
-            Ok(serde_json::from_value(
-                self.request("/api/sites?v=3", None).await?,
-            )?)
+        Box::pin(async move {
+            let data = self
+                .request(reqwest::Method::GET, "api/v1/sources", &[], None)
+                .await?;
+            let sources: Vec<SourceView> = serde_json::from_value(data["sources"].clone())?;
+            for source in &sources {
+                if let Some(policy) = source.image_policy {
+                    self.client
+                        .policies
+                        .write()
+                        .unwrap()
+                        .insert(source.id.clone(), policy);
+                }
+            }
+            *self.client.sources.write().unwrap() = sources.clone();
+            let results =
+                futures_util::future::join_all(sources.iter().filter(|s| s.kind == "comic").map(
+                    |source| async move {
+                        let mut url = self.client.base.join("api/v1/sources/")?;
+                        url.path_segments_mut()
+                            .map_err(|()| anyhow!("Invalid service URL"))?
+                            .pop_if_empty()
+                            .push(&source.id)
+                            .push("sites");
+                        let data = self
+                            .request(reqwest::Method::GET, url.as_str(), &[], None)
+                            .await?;
+                        let children: Vec<Site> = serde_json::from_value(data["sites"].clone())?;
+                        Ok::<_, anyhow::Error>(
+                            children
+                                .into_iter()
+                                .map(|s| Site {
+                                    id: format!("{}:{}", source.id, s.id),
+                                    name: s.name,
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    },
+                ))
+                .await;
+            let sites = results
+                .into_iter()
+                .filter_map(Result::ok)
+                .flatten()
+                .collect();
+            Ok(sites)
         })
     }
     fn search<'a>(&'a self, keyword: &'a str) -> BoxFuture<'a, Result<Vec<SearchGroup>>> {
@@ -202,63 +368,78 @@ impl ComicSource for MangaYun {
                 !keyword.trim().is_empty() && keyword.len() <= 512,
                 "请输入漫画名称 / Enter a title"
             );
-            let data = self
-                .request("/api/search", Some(json!({"keyword":keyword.trim()})))
-                .await?;
-            let groups = data
-                .as_array()
-                .ok_or_else(|| anyhow!("无效搜索结果 / Invalid search response"))?;
-            let mut result = Vec::new();
-            for group in groups.iter().take(40) {
-                let site: Site = serde_json::from_value(group.clone())?;
-                let mut books = Vec::new();
-                if let Some(list) = group["results"].as_array() {
-                    for item in list.iter().take(100) {
-                        let mut book: Book = serde_json::from_value(item.clone())?;
-                        book.provider = "mangayun".into();
-                        book.site = site.id.clone();
-                        book.site_name = site.name.clone();
-                        if !book.title.is_empty() && !book.url.is_empty() {
-                            books.push(book);
-                        }
-                    }
-                }
-                result.push(SearchGroup {
-                    site,
-                    books,
-                    error: group["error"]
-                        .as_str()
-                        .filter(|e| !e.is_empty())
-                        .map(|_| "来源暂时不可用 / Source unavailable".into()),
-                });
+            let mut query = vec![("q", keyword.trim())];
+            if let Some(scope) = &self.scope {
+                query.push(("sourceId", scope));
             }
-            Ok(result)
+            let data = self
+                .request(reqwest::Method::GET, "api/v1/comics/search", &query, None)
+                .await?;
+            data["groups"]
+                .as_array()
+                .context("Invalid search groups")?
+                .iter()
+                .map(|group| {
+                    Ok(SearchGroup {
+                        site: serde_json::from_value(group["site"].clone())?,
+                        books: group["books"]
+                            .as_array()
+                            .context("Invalid search books")?
+                            .iter()
+                            .map(|b| self.decode_book(b))
+                            .collect::<Result<_>>()?,
+                        error: group["error"].as_str().map(str::to_owned),
+                    })
+                })
+                .collect()
         })
     }
     fn detail<'a>(&'a self, book: &'a Book) -> BoxFuture<'a, Result<Detail>> {
         Box::pin(async move {
+            self.resolve(book).await?;
             let data = self
                 .request(
-                    "/api/details",
-                    Some(json!({"siteId":book.site,"detailUrl":book.url})),
+                    reqwest::Method::GET,
+                    &format!("api/v1/comics/{}", book.key()),
+                    &[],
+                    None,
                 )
                 .await?;
-            let mut details: Book = serde_json::from_value(data.clone())?;
-            details.provider = book.provider.clone();
-            details.site = book.site.clone();
-            details.site_name = book.site_name.clone();
-            details.url = book.url.clone();
-            if details.cover.is_empty() {
-                details.cover = book.cover.clone();
-            }
-            let mut chapters: Vec<Chapter> = serde_json::from_value(data["chapters"].clone())?;
-            chapters.retain(|c| !c.url.is_empty());
-            chapters.sort_by_key(|c| c.order);
-            let mut seen = std::collections::HashSet::new();
-            chapters.retain(|c| seen.insert(c.key().to_owned()));
-            ensure!(!chapters.is_empty(), "没有可读章节 / No chapters available");
+            let detail_book = self.decode_book(&data["comic"])?;
+            ensure!(
+                detail_book.key() == book.key(),
+                "内容服务改变了漫画标识 / Comic identity changed"
+            );
+            let chapters = data["chapters"]
+                .as_array()
+                .context("Invalid chapter list")?
+                .iter()
+                .map(|v| {
+                    let kind = if v["kind"] == "volume" {
+                        ChapterKind::Volume
+                    } else {
+                        ChapterKind::Chapter
+                    };
+                    let chapter = Chapter {
+                        id: v["id"].as_str().unwrap_or_default().into(),
+                        url: v["url"]
+                            .as_str()
+                            .or_else(|| v["key"].as_str())
+                            .unwrap_or_default()
+                            .into(),
+                        name: v["name"].as_str().unwrap_or_default().into(),
+                        order: v["order"].as_i64().unwrap_or_default(),
+                        kind,
+                    };
+                    ensure!(
+                        v["key"].as_str() == Some(chapter.key()),
+                        "章节标识不匹配 / Chapter identity mismatch"
+                    );
+                    Ok(chapter)
+                })
+                .collect::<Result<Vec<_>>>()?;
             Ok(Detail {
-                book: details,
+                book: detail_book,
                 chapters,
             })
         })
@@ -270,84 +451,111 @@ impl ComicSource for MangaYun {
         refresh: bool,
     ) -> BoxFuture<'a, Result<Vec<String>>> {
         Box::pin(async move {
-            ensure!(
-                book.site != "comicbox",
-                "暂不支持此来源的阅读，请选择其他来源 / Reading this source is not supported yet"
-            );
-            let result = self
+            self.resolve(book).await?;
+            let mut url = self
+                .client
+                .base
+                .join(&format!("api/v1/comics/{}/chapters/", book.key()))?;
+            url.path_segments_mut()
+                .map_err(|()| anyhow!("Invalid service URL"))?
+                .pop_if_empty()
+                .push(chapter.key())
+                .push("pages");
+            let data = self
                 .request(
-                    "/api/chapter-images",
-                    Some(json!({"siteId":book.site,"chapterUrl":chapter.url,"refresh":refresh})),
+                    reqwest::Method::GET,
+                    url.as_str(),
+                    &[("refresh", if refresh { "1" } else { "0" })],
+                    None,
                 )
-                .await;
-            let pages = result.and_then(|data| {
-                let images: Vec<String> = serde_json::from_value(data["images"].clone())?;
-                ensure!(
-                    !images.is_empty() && images.len() <= 2000,
-                    "来源未返回章节图片 / Source returned no chapter images"
+                .await?;
+            if let Some(policy) = data.get("imagePolicy") {
+                let mut policy: ImagePolicy = serde_json::from_value(policy.clone())?;
+                policy.concurrency = policy.concurrency.clamp(1, 16);
+                policy.ahead = policy.ahead.min(10);
+                policy.behind = policy.behind.min(10);
+                self.client.policies.write().unwrap().insert(
+                    if book.provider.is_empty() {
+                        "mangayun".into()
+                    } else {
+                        book.provider.clone()
+                    },
+                    policy,
                 );
-                Ok(images)
-            });
-            if book.site == "dm5" && pages.is_err() {
-                let chapter_url = http_url(&chapter.url)?;
-                ensure!(
-                    dm5::is_chapter(&chapter_url),
-                    "无效动漫屋章节地址 / Invalid DM5 chapter URL"
-                );
-                return dm5::pages(&self.client, chapter_url).await;
             }
+            let pages = data["pages"].as_array().context("Invalid page list")?;
+            ensure!(
+                !pages.is_empty() && pages.len() <= 2000,
+                "无有效漫画页面 / No valid comic pages"
+            );
             pages
+                .iter()
+                .enumerate()
+                .map(|(index, p)| {
+                    ensure!(
+                        p["index"].as_u64() == Some(index as u64),
+                        "Invalid page order"
+                    );
+                    let url = p["url"].as_str().context("Missing page URL")?;
+                    http_url(url)?;
+                    Ok(url.to_owned())
+                })
+                .collect()
         })
     }
-    fn image_url(&self, site: &str, url: &str) -> Result<reqwest::Url> {
-        Ok(self.image_request(site, url)?.url)
+    fn book_image_request(&self, book: &Book, url: &str) -> Result<ImageRequest> {
+        let original = http_url(url)?;
+        let book = book.clone();
+        let url = url.to_owned();
+        let source = self.clone();
+        Ok(ImageRequest::deferred(original, move || {
+            let source = source.clone();
+            let book = book.clone();
+            let url = url.clone();
+            Box::pin(async move { source.image_access(&book, &url).await })
+        }))
     }
-    fn image_request(&self, site: &str, url: &str) -> Result<ImageRequest> {
-        let absolute = reqwest::Url::parse(&self.base)?
-            .join(url)
-            .map_err(|_| anyhow!("无效图片地址 / Invalid image URL"))?;
-        http_url(absolute.as_str())?;
-        if site == "dm5" && dm5::is_page(&absolute) {
-            let source = self.clone();
-            return Ok(ImageRequest::deferred(
-                absolute.clone(),
-                Box::pin(async move {
-                    let (image, referer) = dm5::resolve(&source.client, absolute).await?;
-                    let relay = source.image_request("dm5", image.as_str())?.url;
-                    let mut request = ImageRequest::from(image).with_fallback(relay);
-                    request.referer = Some(referer);
-                    Ok(request)
-                }),
-            ));
-        }
-        if absolute.origin() == reqwest::Url::parse(&self.base)?.origin()
-            && absolute.path() == "/api/image"
-        {
-            return Ok(absolute.into());
-        }
-        let mut proxy = reqwest::Url::parse(&format!("{}/api/image", self.base))?;
-        proxy
-            .query_pairs_mut()
-            .append_pair("url", absolute.as_str())
-            .append_pair("siteId", site);
-        // Match the public web client: only hotlink-protected sources need
-        // the relay initially. Other CDNs are faster directly, with a relay
-        // fallback if the CDN rejects this client or is unavailable locally.
-        let host = absolute.host_str().unwrap_or_default();
-        let protected = [
-            "hamreus.com",
-            "cdndm5.com",
-            "ccavbox.com",
-            "bgm.tv",
-            "tuku.cc",
-        ]
-        .iter()
-        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
-            || matches!(site, "manhuagui" | "comicbox" | "manben" | "dm5" | "tuku");
-        Ok(if protected {
-            proxy.into()
-        } else {
-            ImageRequest::from(absolute).with_fallback(proxy)
-        })
+}
+
+pub fn service_error(status: reqwest::StatusCode, value: &Value) -> anyhow::Error {
+    let code = value["error"]["code"].as_str().unwrap_or("SERVICE_ERROR");
+    let message = match status.as_u16() {
+        401 => "设备 Token 无效或已撤销，请检查内容服务设置 / Device token is invalid or revoked",
+        403 => "设备 Token 无权访问此资源 / Device token cannot access this resource",
+        _ => value["error"]["message"]
+            .as_str()
+            .unwrap_or("内容服务请求失败 / Content service request failed"),
+    };
+    let retry = value["error"]["retryAfter"]
+        .as_u64()
+        .map(|v| format!("; retry after {v}s"))
+        .unwrap_or_default();
+    anyhow!("{code}: {message}{retry}")
+}
+pub async fn limited_body(response: reqwest::Response, max: usize) -> Result<Vec<u8>> {
+    ensure!(
+        response.content_length().is_none_or(|n| n <= max as u64),
+        "响应超过大小限制 / Response too large"
+    );
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("响应中断或超时 / Response interrupted")?;
+        ensure!(
+            bytes.len() + chunk.len() <= max,
+            "响应超过大小限制 / Response too large"
+        );
+        bytes.extend_from_slice(&chunk);
     }
+    Ok(bytes)
+}
+pub fn http_url(url: &str) -> Result<reqwest::Url> {
+    let url = reqwest::Url::parse(url).context("无效服务或资源地址 / Invalid URL")?;
+    ensure!(
+        matches!(url.scheme(), "https" | "http")
+            && url.username().is_empty()
+            && url.password().is_none(),
+        "不支持的地址 / Unsupported URL"
+    );
+    Ok(url)
 }

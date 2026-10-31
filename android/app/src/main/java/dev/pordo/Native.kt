@@ -58,7 +58,7 @@ object Native {
             // (MediaCodec/MediaExtractor, content URIs) need the app context.
             dev.remdia.RemdiaBootstrap.initialize(app)
             nativeInit(app.filesDir.absolutePath, app)
-            dev.pordo.comic.KomiicAccount.initialize(app)
+            dev.pordo.comic.ContentService.initialize(app)
             ready = true
         } catch (error: Throwable) {
             initError =
@@ -89,10 +89,8 @@ object Native {
 
     external fun nativeComicFetchCover(book: String, width: Int): ByteArray
 
-    external fun nativeKomiicConfigure(config: String): String
-    external fun nativeKomiicStatus(): String
-    external fun nativeKomiicLogin(): String
-    external fun nativeKomiicLogout(): String
+    external fun nativeComicServiceConfigure(config: String): String
+    external fun nativeComicServiceTest(): String
 
     // ---- bookshelf library ----
     external fun nativeLibraryEntries(): String

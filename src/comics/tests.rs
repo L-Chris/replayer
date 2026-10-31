@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(test)]
 use crate::pixels::test_support::TestImageOutput;
+use source::ComicSource;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -334,7 +335,8 @@ fn tall_images_are_tiled_and_translation_preserves_canvas_dimensions() {
 #[ignore = "Uses IMAGE_MODEL and uploads one public manga page to the configured image editing service"]
 fn live_comic_image_translation() {
     runtime().block_on(async {
-        let source = source::MangaYun::connect().unwrap();
+        let configured = crate::test_config::settings().unwrap();
+        let source = source::Sources::connect(&configured.comics.service).unwrap();
         let book = Book {
             provider: "mangayun".into(),
             site: "manhuazhijia".into(),
@@ -350,7 +352,7 @@ fn live_comic_image_translation() {
         let image = cache::fetch(
             &root().join("cache/pages"),
             &format!("{}:{}:2", book.key(), detail.chapters[0].key()),
-            source.image_url(&book.site, &pages[2]).unwrap(),
+            source.book_image_request(&book, &pages[2]).unwrap(),
             1800,
         )
         .await

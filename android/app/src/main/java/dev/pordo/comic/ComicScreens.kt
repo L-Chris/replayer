@@ -335,7 +335,7 @@ private fun ComicSearchTab(onOpenDetail: () -> Unit) {
                 value = keyword,
                 onValueChange = { keyword = it },
                 modifier = Modifier.weight(1f).testTag("comic-search-field"),
-                placeholder = { Text("搜索漫画（Komiic）") },
+                placeholder = { Text("搜索漫画") },
                 singleLine = true,
             )
             IconButton(

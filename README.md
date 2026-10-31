@@ -5,7 +5,7 @@ A media app for watching videos, listening to music and reading comics, with opt
 ## Features
 
 - **Video and music in one place.** Open local files, manage queues and favorites, and return to recent media. Music shows cover art, track details and available lyrics.
-- **A comfortable comic reader.** Search MangaYun and Komiic, build a bookshelf, check for new chapters and resume where you stopped. Choose scrolling or page-by-page reading in either direction.
+- **A comfortable comic reader.** Connect to [pordo-service](https://github.com/PordoTech/pordo-service), search its enabled sources and build a bookshelf, check for new chapters and resume where you stopped. Choose scrolling or page-by-page reading in either direction.
 - **AI subtitles.** Generate Chinese or English subtitles while watching, optionally show both languages, and export the results as SRT.
 - **Comic translation.** Translate a page or chapter with a compatible image-editing service, then switch between the original, translation and side-by-side views.
 - **Online music.** Search supported music sources, choose a quality, and listen while downloading or save tracks for later.

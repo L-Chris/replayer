@@ -22,13 +22,13 @@ class NavigationUiTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun komiicAccountSettingsAreReachable() {
+    fun contentServiceSettingsAreReachable() {
         compose.onNodeWithTag("nav-comics").performClick()
         compose.onNodeWithTag("nav-comic-source").performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithTag("komiic-login").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithTag("komiic-email").assertIsDisplayed()
-        compose.onNodeWithTag("komiic-password").assertIsDisplayed()
-        compose.onNodeWithTag("komiic-status").assertExists()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("service-save").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("service-url").assertIsDisplayed()
+        compose.onNodeWithTag("service-token").assertIsDisplayed()
+        compose.onNodeWithTag("service-status").assertExists()
     }
 
     @Test

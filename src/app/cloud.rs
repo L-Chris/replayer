@@ -722,14 +722,13 @@ mod tests {
         app.settings.sync.password = "private-webdav-password".into();
         app.settings.sync.passphrase = "private-sync-passphrase".into();
         app.settings.music.api_key = "private-music-key".into();
-        app.settings.comics.komiic = crate::comics::source::KomiicAccount {
-            email: "private-reader@example.test".into(),
-            password: "private-komiic-password".into(),
-            auto_login: true,
+        app.settings.comics.service = crate::comics::source::ServiceSettings {
+            url: "https://private.example.test".into(),
+            token: "private-service-token".into(),
         };
         let keys = serde_json::to_string(&secrets(&app.settings)).unwrap();
-        assert!(!keys.contains("komiic"));
-        assert!(!keys.contains("private-reader"));
+        assert!(!keys.contains("service"));
+        assert!(!keys.contains("private.example"));
         app.library.records.push(library::Record {
             path: "F:/private/local.flac".into(),
             title: "LocalOnlyUnique".into(),
@@ -757,7 +756,7 @@ mod tests {
             "private-sync-passphrase",
             "private-music-key",
             "private-reader@example.test",
-            "private-komiic-password",
+            "private-service-token",
             "not-a-real-key",
         ] {
             assert!(!text.contains(excluded), "{excluded} leaked into sync data");

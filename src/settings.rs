@@ -248,12 +248,12 @@ impl Settings {
         self.music.api_key = vault
             .get(&Self::secret_target(path, "music/chksz"))?
             .unwrap_or_default();
-        self.comics.komiic.password = vault
+        self.comics.service.token = vault
             .get(&Self::secret_target(
                 path,
                 &format!(
-                    "comic/komiic/{}/password",
-                    self.comics.komiic.credential_id()
+                    "comic/service/{}/token",
+                    self.comics.service.credential_id()
                 ),
             ))?
             .unwrap_or_default();
@@ -282,7 +282,7 @@ impl Settings {
             "无法读取密钥，请重新加载后保存 / Reload credentials before saving"
         );
         self.ai.validate()?;
-        self.comics.komiic.validate()?;
+        self.comics.service.validate()?;
         if self.sync.enabled {
             self.sync.validate()?;
         }
@@ -294,11 +294,11 @@ impl Settings {
             Self::secret_target(
                 path,
                 &format!(
-                    "comic/komiic/{}/password",
-                    self.comics.komiic.credential_id()
+                    "comic/service/{}/token",
+                    self.comics.service.credential_id()
                 ),
             ),
-            self.comics.komiic.password.clone(),
+            self.comics.service.token.clone(),
         ));
         for provider in &self.ai.providers {
             // AI keys remain in the credential vault even when cloud sync is enabled.
@@ -310,14 +310,11 @@ impl Settings {
         if let Ok(bytes) = std::fs::read(path)
             && let Ok(old) = serde_json::from_slice::<Self>(&bytes)
         {
-            if old.comics.komiic.credential_id() != self.comics.komiic.credential_id() {
+            if old.comics.service.credential_id() != self.comics.service.credential_id() {
                 changes.push((
                     Self::secret_target(
                         path,
-                        &format!(
-                            "comic/komiic/{}/password",
-                            old.comics.komiic.credential_id()
-                        ),
+                        &format!("comic/service/{}/token", old.comics.service.credential_id()),
                     ),
                     String::new(),
                 ));
@@ -463,10 +460,9 @@ mod tests {
             api_key: "ai-test-key".into(),
         });
         settings.music.api_key = "music-test-key".into();
-        settings.comics.komiic = crate::comics::source::KomiicAccount {
-            email: "reader@example.test".into(),
-            auto_login: true,
-            password: "komiic-test-key".into(),
+        settings.comics.service = crate::comics::source::ServiceSettings {
+            url: "https://content.example.test".into(),
+            token: "device-test-key".into(),
         };
         settings.sync.password = "webdav-test-key".into();
         settings.sync.passphrase = "passphrase-test-key".into();
@@ -477,23 +473,22 @@ mod tests {
         loaded.load_credentials_from(&vault, &path).unwrap();
         assert!(loaded.ai.providers[0].api_key == "ai-test-key");
         assert!(loaded.music.api_key == "music-test-key");
-        assert!(loaded.comics.komiic.password == "komiic-test-key");
+        assert!(loaded.comics.service.token == "device-test-key");
         assert!(loaded.sync.password == "webdav-test-key");
         assert!(loaded.sync.passphrase == "passphrase-test-key");
         let old_target = Settings::secret_target(
             &path,
             &format!(
-                "comic/komiic/{}/password",
-                loaded.comics.komiic.credential_id()
+                "comic/service/{}/token",
+                loaded.comics.service.credential_id()
             ),
         );
-        loaded.comics.komiic.email = "another-reader@example.test".into();
+        loaded.comics.service.url = "https://another.example.test".into();
         loaded.save_with(&vault, &path).unwrap();
         assert!(!vault.values.borrow().contains_key(&old_target));
         loaded.ai.providers.clear();
         loaded.music.api_key.clear();
-        loaded.comics.komiic.password.clear();
-        loaded.comics.komiic.auto_login = false;
+        loaded.comics.service.token.clear();
         loaded.sync.password.clear();
         loaded.sync.passphrase.clear();
         loaded.save_with(&vault, &path).unwrap();
