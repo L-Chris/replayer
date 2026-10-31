@@ -1,6 +1,6 @@
 # remdia integration
 
-Windows and macOS use the public [remdia SDK](https://github.com/L-Chris/remdia),
+Windows and macOS use the public [remdia SDK](https://github.com/PordoTech/remdia),
 pinned to an exact Git revision in Cargo.toml. Built-in factories are statically
 registered in replayer; optional external extensions retain C ABI v2.2. Neither the executable nor its media plugins links
 FFmpeg. The `remdia-media` feature remains as a compatibility alias; remdia is

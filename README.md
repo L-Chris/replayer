@@ -17,7 +17,9 @@ Online sources and AI features depend on their respective services. AI services 
 
 ## Download and start
 
-Download a package from [Releases](https://github.com/L-Chris/replayer/releases).
+Download a package from [Releases](https://github.com/PordoTech/pordo/releases).
+
+Windows builds through v0.5.1 validate updates against the former repository path. When the first newer version is available, download and install that update manually once from this repository; subsequent updates use the new address.
 
 | Platform | Package |
 | --- | --- |
@@ -36,8 +38,8 @@ See the [user guide](docs/guide.md) for AI setup, music sources, comic reading, 
 
 ## Development
 
-Built with Rust, egui/WGPU and CPAL. Windows and macOS source builds use [remdia](https://github.com/L-Chris/remdia) component graphs for playback and subtitle audio, without FFmpeg. Playback, comic image processing and network work run outside the UI's main rendering path. See the [remdia integration](docs/remdia.md) for build steps and current codec limits; existing published releases may use the earlier backend.
+Built with Rust, egui/WGPU and CPAL. Windows and macOS source builds use [remdia](https://github.com/PordoTech/remdia) component graphs for playback and subtitle audio, without FFmpeg. Playback, comic image processing and network work run outside the UI's main rendering path. See the [remdia integration](docs/remdia.md) for build steps and current codec limits; existing published releases may use the earlier backend.
 
-See [building and testing](https://github.com/L-Chris/replayer/blob/main/docs/development.md), [architecture](https://github.com/L-Chris/replayer/blob/main/docs/architecture.md) and [release instructions](https://github.com/L-Chris/replayer/blob/main/docs/releasing.md). Component credits and licenses are listed in [third-party notices](docs/third-party.md).
+See [building and testing](https://github.com/PordoTech/pordo/blob/main/docs/development.md), [architecture](https://github.com/PordoTech/pordo/blob/main/docs/architecture.md) and [release instructions](https://github.com/PordoTech/pordo/blob/main/docs/releasing.md). Component credits and licenses are listed in [third-party notices](docs/third-party.md).
 
 Originally developed with Qwen3.8 Max.

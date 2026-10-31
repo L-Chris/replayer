@@ -14,7 +14,7 @@ if ($RebuildRuntime -or -not $ready) {
     $source = Join-Path $root '.deps/remdia-source'
     if (-not (Test-Path (Join-Path $source '.git'))) {
         New-Item -ItemType Directory -Force (Split-Path -Parent $source) | Out-Null
-        git clone --no-checkout https://github.com/L-Chris/remdia.git $source
+        git clone --no-checkout https://github.com/PordoTech/remdia.git $source
         if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch remdia source.' }
     }
     git -C $source fetch --depth 1 origin $revision

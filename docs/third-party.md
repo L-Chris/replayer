@@ -59,8 +59,8 @@ compatibility demux does not register or call those decoders. Rubato and libopus
 are no longer included in the SDK. AVC/HEVC parameter parsing uses h264-reader
 and scuffle-h265 (MIT OR Apache-2.0); video decoding uses the system framework.
 
-- https://github.com/L-Chris/remdia
-- https://github.com/L-Chris/remdia/blob/main/THIRD_PARTY.md
+- https://github.com/PordoTech/remdia
+- https://github.com/PordoTech/remdia/blob/main/THIRD_PARTY.md
 - https://github.com/pdeljanov/Symphonia
 - https://lame.sourceforge.io/
 

@@ -6,8 +6,8 @@ use semver::Version;
 use serde::Deserialize;
 use std::{io::Write, path::PathBuf, time::Duration};
 
-pub const REPOSITORY: &str = "https://github.com/L-Chris/replayer";
-const API: &str = "https://api.github.com/repos/L-Chris/replayer/releases/latest";
+pub const REPOSITORY: &str = "https://github.com/PordoTech/pordo";
+const API: &str = "https://api.github.com/repos/PordoTech/pordo/releases/latest";
 const MAX_SIZE: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Deserialize)]
@@ -279,7 +279,7 @@ fn validate(update: &Update) -> Result<()> {
     );
     let url = reqwest::Url::parse(&asset.browser_download_url)?;
     let expected = format!(
-        "/L-Chris/replayer/releases/download/v{}/{}",
+        "/PordoTech/pordo/releases/download/v{}/{}",
         update.version, asset.name
     );
     ensure!(
@@ -492,6 +492,19 @@ mod tests {
         let mut bad = release("0.2.0");
         bad.assets[0].digest = None;
         assert!(select_release(bad, "0.1.0").is_err());
+        for repository in [
+            "AnotherOwner/pordo",
+            "PordoTech/other",
+            "PordoTech/pordo-fork",
+            "L-Chris/replayer",
+        ] {
+            let mut bad = release("0.2.0");
+            bad.assets[0].browser_download_url = format!(
+                "https://github.com/{repository}/releases/download/v0.2.0/{}",
+                bad.assets[0].name,
+            );
+            assert!(select_release(bad, "0.1.0").is_err());
+        }
         let mut bad = release("0.2.0");
         bad.assets[0].browser_download_url = bad.assets[0]
             .browser_download_url

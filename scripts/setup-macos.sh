@@ -26,7 +26,7 @@ if [[ ! -f "$runtime/REVISION" ]] || [[ $(tr -d '\r\n' < "$runtime/REVISION") !=
     # around it; a no-checkout clone also has no populated index to audit yet.
     mkdir -p "$source_dir"
     git -C "$source_dir" init
-    git -C "$source_dir" remote add origin https://github.com/L-Chris/remdia.git
+    git -C "$source_dir" remote add origin https://github.com/PordoTech/remdia.git
   else
     git -C "$source_dir" diff --quiet
     git -C "$source_dir" diff --cached --quiet

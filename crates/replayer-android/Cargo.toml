@@ -27,7 +27,7 @@ log = "0.4"
 rustls-platform-verifier = "0.7"
 # Same pinned revision as the core. builtin-src adds the resampler used by
 # Android audio conversion, matching remdia-sdk's Android feature set.
-remdia = { git = "https://github.com/L-Chris/remdia.git", rev = "6e6444ff7c4e60cff55e0a61172c5ec47d837cc3", features = ["bundled", "builtin-src"] }
-remdia-android-platform = { git = "https://github.com/L-Chris/remdia.git", rev = "6e6444ff7c4e60cff55e0a61172c5ec47d837cc3" }
+remdia = { git = "https://github.com/PordoTech/remdia.git", rev = "6e6444ff7c4e60cff55e0a61172c5ec47d837cc3", features = ["bundled", "builtin-src"] }
+remdia-android-platform = { git = "https://github.com/PordoTech/remdia.git", rev = "6e6444ff7c4e60cff55e0a61172c5ec47d837cc3" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

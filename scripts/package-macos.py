@@ -59,10 +59,10 @@ def main():
             shutil.copy2(prefix / name, sdk_notices / name)
         shutil.copytree(prefix / 'licenses', sdk_notices / 'licenses')
         (sdk_notices / 'BUILD.txt').write_text(
-            f'SDK source: https://github.com/L-Chris/remdia/tree/{revision}\n'
-            f'Source archive: https://github.com/L-Chris/remdia/archive/{revision}.tar.gz\n'
+            f'SDK source: https://github.com/PordoTech/remdia/tree/{revision}\n'
+            f'Source archive: https://github.com/PordoTech/remdia/archive/{revision}.tar.gz\n'
             'Install Rust stable, CMake and Apple command-line tools. On matching macOS 15+ hardware:\n'
-            f'git clone https://github.com/L-Chris/remdia.git\ncd remdia\ngit checkout {revision}\n'
+            f'git clone https://github.com/PordoTech/remdia.git\ncd remdia\ngit checkout {revision}\n'
             f'./scripts/build-macos.sh --release --target {rust_arch}-apple-darwin\n'
             'Built-in remdia system components are linked into the application.\n'
             'Cargo.lock fixes the exact source distributions and checksums, including the separate LAME extension.\n'

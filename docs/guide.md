@@ -2,11 +2,13 @@
 
 ## Install and update
 
-Get the package for your platform from [Releases](https://github.com/L-Chris/replayer/releases). Windows offers an installer and portable ZIP. macOS 15+ offers separate Apple Silicon and Intel DMG/ZIP packages; move `replayer.app` to Applications.
+Get the package for your platform from [Releases](https://github.com/PordoTech/pordo/releases). Windows offers an installer and portable ZIP. macOS 15+ offers separate Apple Silicon and Intel DMG/ZIP packages; move `replayer.app` to Applications.
 
 Windows updates can be checked, downloaded and installed from **Settings → About**. On macOS, use the Releases link. Export generated subtitles before restarting.
 
 Service credentials are saved through Windows Credential Manager or macOS Keychain; Android protects its local credentials with Android KeyStore. Local playback and comic reading do not require an AI account.
+
+The repository moved to `PordoTech/pordo`. Windows clients through v0.5.1 still validate installer URLs against the previous repository. Install the first newer version manually from Releases once it is available; later clients use the new location.
 
 ## Music and video
 
@@ -87,4 +89,4 @@ API keys are excluded by default. To sync them, enable the option and use the sa
 
 Windows data normally lives in `%LOCALAPPDATA%/replayer`. macOS defaults to `~/.config/replayer`; a configured `XDG_CONFIG_HOME` changes that location. Downloads and caches can occupy significant space. Stop a torrent before manually deleting its cache, and retain downloaded-music sidecars when moving files.
 
-The app does not read development `.env` files. Provider keys belong in the app's supported credential settings. See [third-party notices](third-party.md) for bundled components and [Releases](https://github.com/L-Chris/replayer/releases) for changes.
+The app does not read development `.env` files. Provider keys belong in the app's supported credential settings. See [third-party notices](third-party.md) for bundled components and [Releases](https://github.com/PordoTech/pordo/releases) for changes.

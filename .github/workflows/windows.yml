@@ -39,7 +39,7 @@ jobs:
           "revision=$($Matches[1])" >> $env:GITHUB_OUTPUT
       - uses: actions/checkout@v4
         with:
-          repository: L-Chris/remdia
+          repository: PordoTech/remdia
           ref: ${{ steps.sdk.outputs.revision }}
           path: .deps/remdia-source
       - uses: dtolnay/rust-toolchain@stable
@@ -302,7 +302,7 @@ jobs:
           PY
       - uses: actions/checkout@v4
         with:
-          repository: L-Chris/remdia
+          repository: PordoTech/remdia
           ref: ${{ steps.sdk.outputs.revision }}
           path: target/android-release/remdia
       - uses: actions/setup-java@v4
